@@ -193,6 +193,13 @@ String soapPost(const String& url, const String& action, const String& xml,
                 shortAction(action).c_str(), code, (unsigned)response.length(),
                 isFault ? "  <-- FAULT" : "");
 
+  // Negative codes never reach a server at all (TCP/DNS/timeout-level
+  // failure) - HTTPClient::errorToString turns e.g. -1 into "connection
+  // refused" instead of leaving you to look up the number.
+  if (code < 0) {
+    Serial.printf("       ^ %s\n", HTTPClient::errorToString(code).c_str());
+  }
+
   if (VERBOSE_SOAP_LOG || isFault) {
     Serial.println("---- RESPONSE ----");
     Serial.println(response);

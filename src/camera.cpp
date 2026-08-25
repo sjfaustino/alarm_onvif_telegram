@@ -1,6 +1,7 @@
 #include "camera.h"
 #include "onvif_soap.h"
 #include "telegram.h"
+#include <WiFi.h>
 #include <vector>
 
 // Builds the envelope and posts it, honoring cfg.useWSSecurity: when true,
@@ -322,4 +323,72 @@ bool cameraSetupSequence(const CameraConfig& cfg, CameraState& st) {
   if (!cameraGetEventProperties(cfg, st)) return false;
   if (!cameraCreatePullPoint(cfg, st)) return false;
   return true;
+}
+
+// ============================================================
+// Per-camera FreeRTOS task
+//
+// Replaces main.cpp's old round-robin loop() slot for this camera. Each
+// enabled camera gets one of these, created once in setup(). Runs forever;
+// never returns (matches the original round-robin's "one camera's worth of
+// work per pass, forever" shape, just without waiting for the other
+// cameras' turns first).
+//
+// Note this chip (ESP32-S2) is single-core, so this isn't true parallel
+// execution - it's cooperative multitasking via vTaskDelay yield points.
+// The win is still real: the old loop() blocked the ENTIRE round-robin on
+// each camera's PullMessages long-poll (up to PT1S) and on every Telegram
+// TLS send. With separate tasks, camera B's poll timer keeps ticking while
+// camera A is inside a slow SOAP call or a photo upload, instead of
+// queuing behind it.
+// ============================================================
+void cameraTaskFn(void* pvParameters) {
+  CameraTaskContext* ctx = static_cast<CameraTaskContext*>(pvParameters);
+  const CameraConfig& cfg = *ctx->cfg;
+  CameraState& st = *ctx->st;
+  delete ctx; // context struct's job is done once we've unpacked it
+
+  Serial.printf("[%s] Task started.\n", cfg.name);
+
+  if (WiFi.status() == WL_CONNECTED) {
+    if (!cameraSetupSequence(cfg, st)) {
+      Serial.printf("[%s] Initial setup FAILED - will keep retrying.\n", cfg.name);
+    }
+  }
+
+  for (;;) {
+    if (WiFi.status() != WL_CONNECTED) {
+      // main.cpp's loop() owns reconnecting; this task just waits and, once
+      // back, treats itself as needing a fresh subscription (the old one
+      // almost certainly timed out server-side during the outage anyway).
+      if (st.subscriptionActive) {
+        st.subscriptionActive = false;
+        st.pullPointUrl = "";
+      }
+      vTaskDelay(pdMS_TO_TICKS(500));
+      continue;
+    }
+
+    if (!st.subscriptionActive) {
+      if (millis() - st.lastRetry >= RETRY_INTERVAL_MS) {
+        st.lastRetry = millis();
+        Serial.printf("[%s] Retrying subscription...\n", cfg.name);
+        if (st.eventServiceUrl.length() == 0) {
+          cameraSetupSequence(cfg, st); // full rediscovery if we never got services
+        } else if (cameraGetEventServiceCapabilities(cfg, st) && cameraCreatePullPoint(cfg, st)) {
+          Serial.printf("[%s] Subscription recovered.\n", cfg.name);
+        }
+      }
+    } else {
+      if (millis() - st.lastPull >= PULL_INTERVAL_MS) {
+        st.lastPull = millis();
+        cameraPullMessages(cfg, st);
+      }
+      if (millis() - st.lastRenew >= (SUBSCRIPTION_LIFETIME_MS - RENEW_MARGIN_MS)) {
+        cameraRenewSubscription(cfg, st);
+      }
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(10));
+  }
 }

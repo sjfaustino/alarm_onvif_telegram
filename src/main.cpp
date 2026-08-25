@@ -5,6 +5,29 @@
 
 static CameraState cameraStates[NUM_CAMERAS];
 
+// Extracts "host[:port]" out of a URL like "http://192.168.1.178:8899/onvif/..."
+// for the startup camera listing - config.h only stores the full service URL,
+// not a separate IP field.
+static String extractHost(const char* url) {
+  String s(url);
+  int schemeEnd = s.indexOf("://");
+  int start = (schemeEnd >= 0) ? schemeEnd + 3 : 0;
+  int pathStart = s.indexOf('/', start);
+  int end = (pathStart >= 0) ? pathStart : (int)s.length();
+  return s.substring(start, end);
+}
+
+static void printCameraList() {
+  Serial.println("\n--- Configured cameras ---");
+  for (size_t i = 0; i < NUM_CAMERAS; i++) {
+    const CameraConfig& cfg = CAMERAS[i];
+    Serial.printf("  [%u] %-20s %-24s %s\n",
+                  (unsigned)i, cfg.name, extractHost(cfg.deviceServiceUrl).c_str(),
+                  cfg.enabled ? "enabled" : "disabled");
+  }
+  Serial.println("--------------------------\n");
+}
+
 static void connectWiFi() {
   Serial.println("\nConnecting to WiFi...");
   WiFi.mode(WIFI_STA);
@@ -49,61 +72,40 @@ void setup() {
   Serial.printf("Cameras configured: %u\n", (unsigned)NUM_CAMERAS);
   Serial.println("========================================");
 
+  printCameraList();
+
   connectWiFi();
   if (WiFi.status() != WL_CONNECTED) return;
   setupTime();
 
+  // One FreeRTOS task per enabled camera - see cameraTaskFn's comment for
+  // why (overlapping each camera's PullMessages long-poll / Telegram send
+  // instead of serializing them behind a shared round-robin slot). Each
+  // task does its own initial cameraSetupSequence before entering its loop,
+  // so setup() just needs to spawn them.
   for (size_t i = 0; i < NUM_CAMERAS; i++) {
-    Serial.printf("\n--- Setting up camera %u/%u: %s ---\n",
-                  (unsigned)(i + 1), (unsigned)NUM_CAMERAS, CAMERAS[i].name);
-    if (!cameraSetupSequence(CAMERAS[i], cameraStates[i])) {
-      Serial.printf("[%s] Initial setup FAILED - loop() will keep retrying.\n", CAMERAS[i].name);
+    if (!CAMERAS[i].enabled) {
+      Serial.printf("[%s] Disabled - no task created.\n", CAMERAS[i].name);
+      continue;
     }
+    CameraTaskContext* ctx = new CameraTaskContext{&CAMERAS[i], &cameraStates[i]};
+    char taskName[16];
+    snprintf(taskName, sizeof(taskName), "cam%u", (unsigned)i);
+    // 10KB stack: covers the SOAP String churn plus a WiFiClientSecure TLS
+    // handshake and the 2KB streaming chunk buffer from telegram.cpp with
+    // headroom. Bump this if you see stack-canary warnings in the log.
+    xTaskCreate(cameraTaskFn, taskName, 10240, ctx, tskIDLE_PRIORITY + 1, nullptr);
   }
 }
 
 void loop() {
+  // loop() (the Arduino "loopTask") is now solely responsible for WiFi
+  // connect/reconnect - camera tasks only ever read WiFi.status(), never
+  // call WiFi.begin(), so there's no race over WiFi state between tasks.
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("\nWiFi disconnected.");
-    for (size_t i = 0; i < NUM_CAMERAS; i++) {
-      cameraStates[i].subscriptionActive = false;
-      cameraStates[i].pullPointUrl = "";
-    }
     connectWiFi();
     if (WiFi.status() == WL_CONNECTED) setupTime();
-    delay(1000);
-    return;
   }
-
-  // Round-robin: one camera gets serviced per loop() pass. With PT2S
-  // PullMessages timeouts and N cameras, each camera's real poll cadence is
-  // roughly N x a few hundred ms to ~2s - fine for a handful of cameras,
-  // but see the note in the reply about parallelizing this with FreeRTOS
-  // tasks if you scale up much further.
-  static size_t currentCamera = 0;
-  const CameraConfig& cfg = CAMERAS[currentCamera];
-  CameraState& st = cameraStates[currentCamera];
-
-  if (!st.subscriptionActive) {
-    if (millis() - st.lastRetry >= RETRY_INTERVAL_MS) {
-      st.lastRetry = millis();
-      Serial.printf("[%s] Retrying subscription...\n", cfg.name);
-      if (st.eventServiceUrl.length() == 0) {
-        cameraSetupSequence(cfg, st); // full rediscovery if we never got services
-      } else if (cameraGetEventServiceCapabilities(cfg, st) && cameraCreatePullPoint(cfg, st)) {
-        Serial.printf("[%s] Subscription recovered.\n", cfg.name);
-      }
-    }
-  } else {
-    if (millis() - st.lastPull >= PULL_INTERVAL_MS) {
-      st.lastPull = millis();
-      cameraPullMessages(cfg, st);
-    }
-    if (millis() - st.lastRenew >= (SUBSCRIPTION_LIFETIME_MS - RENEW_MARGIN_MS)) {
-      cameraRenewSubscription(cfg, st);
-    }
-  }
-
-  currentCamera = (currentCamera + 1) % NUM_CAMERAS;
-  delay(10);
+  delay(1000);
 }
