@@ -163,8 +163,13 @@ src/
   `config.h`) if it drops — this doesn't currently back off, so a camera that's down
   for a long time will be retried at a steady cadence rather than escalating delays.
 - The Telegram heartbeat reports liveness but can't detect a fully frozen board on
-  its own, since a hung `loop()` can't send anything. If you need actual hang
-  recovery, pair it with an ESP32 task watchdog (`esp_task_wdt`) that forces a reboot.
+  its own, since a hung `loop()` can't send anything - that's what the ESP32 task
+  watchdog (`initWatchdog()` in `main.cpp`) covers: a 90s timeout on `loop()`
+  forces a reboot if it stops returning to its top. It only watches `loop()`, not
+  the per-camera tasks in `camera.cpp` - those already bound every SOAP call with
+  `HTTP_TIMEOUT_MS`, and `cameraSetupSequence` chains several such calls back-to-back
+  without a safe point to feed a per-task watchdog without risking a false-positive
+  reboot on a merely slow (not hung) camera.
 - Event parsing works at the whole-SOAP-response level, not per-message — a batch
   containing both a false `MotionAlarm` and a true `TamperDetector` topic would
   currently trigger on the wrong one. See the comment above `parseEvents()` in

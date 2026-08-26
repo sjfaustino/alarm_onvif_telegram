@@ -3,6 +3,7 @@
 #include <ESPmDNS.h>
 #include <esp_heap_caps.h>
 #include <esp_sntp.h>
+#include <esp_task_wdt.h>
 #include "config.h"
 #include "camera.h"
 #include "camera_store.h"
@@ -59,6 +60,15 @@ static String buildCameraListMessage() {
 
 static const unsigned long WIFI_CONNECT_TIMEOUT_MS = 30000UL;
 
+// TWDT timeout for the Arduino loop() task - see initWatchdog()'s comment
+// for why this only watches loop(), not the per-camera tasks. Sized to
+// comfortably outlast the longest legitimate stretch loop() can go without
+// returning to its top: connectWiFi() trying primary then backup, 30s each
+// (tryConnectWiFi also feeds the watchdog every 500ms while it polls, so
+// this margin is belt-and-suspenders, not the only thing standing between
+// a real WiFi outage and a false-positive reboot).
+static const uint32_t WATCHDOG_TIMEOUT_MS = 90000UL;
+
 // Attempts one network, blocking up to timeoutMs. Returns whether it connected.
 static bool tryConnectWiFi(const WifiNetwork& net, unsigned long timeoutMs) {
   if (net.ssid.length() == 0) return false;
@@ -68,10 +78,46 @@ static bool tryConnectWiFi(const WifiNetwork& net, unsigned long timeoutMs) {
   unsigned long start = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - start < timeoutMs) {
     delay(500);
+    esp_task_wdt_reset();
     Serial.print(".");
   }
   Serial.println();
   return WiFi.status() == WL_CONNECTED;
+}
+
+// Arms the ESP32's Task Watchdog Timer against loop() (the Arduino
+// "loopTask", which setup() also runs on) so a genuinely frozen main loop
+// reboots the board instead of sitting there forever - the gap the
+// Telegram heartbeat can't cover on its own, since a hung loop() can't
+// send anything either. Deliberately NOT armed against the per-camera
+// tasks (camera.cpp's cameraTaskFn): every SOAP call they make already has
+// its own HTTP_TIMEOUT_MS bound (see onvif_soap.cpp), and cameraSetupSequence
+// chains several of those calls back-to-back without returning to a point
+// where a per-task watchdog could safely be fed without risking a
+// false-positive reboot on a merely slow (not hung) camera.
+static void initWatchdog() {
+  esp_task_wdt_config_t wdtConfig = {
+    .timeout_ms = WATCHDOG_TIMEOUT_MS,
+    .idle_core_mask = (1 << portNUM_PROCESSORS) - 1, // keep watching both cores' idle tasks too
+    .trigger_panic = true,
+  };
+  // Recent Arduino-ESP32 cores already init the TWDT by default (for the
+  // idle tasks) - esp_task_wdt_init() fails with ESP_ERR_INVALID_STATE in
+  // that case, so fall back to reconfiguring the already-running one
+  // instead of treating that as an error.
+  esp_err_t err = esp_task_wdt_init(&wdtConfig);
+  if (err == ESP_ERR_INVALID_STATE) {
+    err = esp_task_wdt_reconfigure(&wdtConfig);
+  }
+  if (err != ESP_OK) {
+    Serial.printf("WARNING: task watchdog init failed (err=%d) - a hung loop() won't self-recover.\n",
+                  (int)err);
+    return;
+  }
+
+  esp_task_wdt_add(nullptr); // nullptr = subscribe the calling task (loopTask, since setup() runs on it too)
+  Serial.printf("Task watchdog armed on loop(): %lus timeout, reboots the board if it hangs.\n",
+                (unsigned long)(WATCHDOG_TIMEOUT_MS / 1000UL));
 }
 
 // Applies g_wifiCredentials' static IP config, if enabled, via WiFi.config()
@@ -311,6 +357,12 @@ void setup() {
   heap_caps_malloc_extmem_enable(4096);
   Serial.println("PSRAM: allocations >=4KB will be routed here automatically.");
 
+  // Armed after the PSRAM gate, not before - that halt loop above is a
+  // deliberate, permanent refusal to run on unsupported hardware, not a
+  // hang, and arming the watchdog first would just turn it into a pointless
+  // reboot-every-90s loop on a condition that will never resolve itself.
+  initWatchdog();
+
   g_wifiCredentials = loadWifiCredentials();
 
   // Loaded once here and kept alive for the process's lifetime (never
@@ -338,6 +390,8 @@ void setup() {
 }
 
 void loop() {
+  esp_task_wdt_reset(); // feed the watchdog armed in initWatchdog() - see its comment
+
   // loop() (the Arduino "loopTask") is now solely responsible for WiFi
   // connect/reconnect - camera tasks only ever read WiFi.status(), never
   // call WiFi.begin(), so there's no race over WiFi state between tasks.
