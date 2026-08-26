@@ -38,11 +38,14 @@ bool telegramCAConfigured();
 bool loadAlertEnabledPref(size_t index);
 
 // Polls Telegram's getUpdates for new commands and applies them to
-// states[]/cameras[] (matched by CameraConfig::name):
-//   /on <camera name>   - resume Telegram alerts for that camera
-//   /off <camera name>  - mute Telegram alerts for that camera (polling and
-//                         its ONVIF subscription keep running regardless)
-//   /status             - list every enabled camera's current on/off state
+// states[]/cameras[] (matched by CameraConfig::name, case-insensitive
+// prefix - "/on D01" matches "D01-FDir" without typing the full name;
+// replies with the ambiguity if a prefix matches more than one camera):
+//   /on <camera name/prefix>   - resume Telegram alerts for that camera
+//   /off <camera name/prefix>  - mute Telegram alerts for that camera
+//                                (polling and its ONVIF subscription keep
+//                                running regardless)
+//   /status                    - list every enabled camera's on/off state
 // Each toggle is persisted via NVS so it survives a reboot. The reply goes
 // back to whichever chat sent the command. Commands from a chat ID that
 // doesn't belong to a Telegram user with canCommand enabled (see

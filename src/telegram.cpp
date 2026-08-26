@@ -465,16 +465,42 @@ static void handleTelegramCommand(const String& fromChatId, const String& text, 
   }
 
   cameraName.trim();
+  String needle = cameraName;
+  needle.toLowerCase();
+
+  // Matched by prefix ("D01" matches "D01-FDir"), not just exact name, so
+  // you don't have to type the full camera name - an exact match (name
+  // equals the typed text) still works too, since a string always starts
+  // with itself. If the prefix is ambiguous (matches more than one enabled
+  // camera), nothing is applied and the reply lists what matched, rather
+  // than guessing which camera was meant.
+  std::vector<size_t> matches;
   for (size_t i = 0; i < numCameras; i++) {
     if (!cameras[i].enabled) continue;
-    if (cameraName.equalsIgnoreCase(cameras[i].name)) {
-      states[i].alertsEnabled = turnOn;
-      saveAlertEnabledPref(i, turnOn);
-      Serial.printf("[%s] Alerts turned %s via Telegram.\n", cameras[i].name.c_str(), turnOn ? "ON" : "OFF");
-      sendTelegramMessageTo(fromChatId, String(cameras[i].name) + " alerts: " + (turnOn ? "ON" : "OFF"));
-      return;
-    }
+    String haystack = cameras[i].name;
+    haystack.toLowerCase();
+    if (haystack.startsWith(needle)) matches.push_back(i);
   }
+
+  if (matches.size() == 1) {
+    size_t i = matches[0];
+    states[i].alertsEnabled = turnOn;
+    saveAlertEnabledPref(i, turnOn);
+    Serial.printf("[%s] Alerts turned %s via Telegram.\n", cameras[i].name.c_str(), turnOn ? "ON" : "OFF");
+    sendTelegramMessageTo(fromChatId, String(cameras[i].name) + " alerts: " + (turnOn ? "ON" : "OFF"));
+    return;
+  }
+
+  if (matches.size() > 1) {
+    String list;
+    for (size_t idx : matches) { if (list.length() > 0) list += ", "; list += cameras[idx].name; }
+    Serial.printf("[Telegram] /%s target \"%s\" is ambiguous: %s\n",
+                  turnOn ? "on" : "off", cameraName.c_str(), list.c_str());
+    sendTelegramMessageTo(fromChatId, "\"" + cameraName + "\" matches more than one camera: " + list +
+                                       " - be more specific.");
+    return;
+  }
+
   Serial.printf("[Telegram] /%s target not found or disabled: \"%s\"\n", turnOn ? "on" : "off", cameraName.c_str());
   sendTelegramMessageTo(fromChatId, "Unknown or disabled camera: " + cameraName);
 }
