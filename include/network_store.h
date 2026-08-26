@@ -26,6 +26,19 @@ struct WifiCredentials {
   // instead of the board's IP. Set once at boot via MDNS.begin() in
   // main.cpp; renaming it here only takes effect after a reboot too.
   String hostname;
+
+  // Static IP config - applied via WiFi.config() before WiFi.begin() in
+  // main.cpp's connectWiFi(), regardless of whether primary or backup ends
+  // up connecting (a static setup is typically two APs sharing one
+  // LAN/subnet). useStaticIP=false (default) means normal DHCP. The four
+  // String fields are dotted-quad text, parsed into IPAddress at connect
+  // time - staticDNS may be left empty, in which case connectWiFi() falls
+  // back to using the gateway as the DNS server.
+  bool useStaticIP = false;
+  String staticIP;
+  String staticSubnet;
+  String staticGateway;
+  String staticDNS;
 };
 
 // Loads WiFi credentials + hostname from NVS. On the very first boot after

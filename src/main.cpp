@@ -69,6 +69,34 @@ static bool tryConnectWiFi(const WifiNetwork& net, unsigned long timeoutMs) {
   return WiFi.status() == WL_CONNECTED;
 }
 
+// Applies g_wifiCredentials' static IP config, if enabled, via WiFi.config()
+// - must happen after WiFi.mode(WIFI_STA) but before WiFi.begin() to take
+// effect. Same static config is used regardless of which network (primary
+// or backup) ends up connecting - a static setup is typically two APs
+// sharing one LAN/subnet, not two independent networks. Falls back to DHCP
+// (by simply not calling WiFi.config()) if the stored values don't parse as
+// IP addresses, rather than failing to connect at all over a config typo.
+static void applyStaticIpConfig() {
+  if (!g_wifiCredentials.useStaticIP) return;
+
+  IPAddress ip, subnet, gateway, dns;
+  bool ok = ip.fromString(g_wifiCredentials.staticIP) &&
+            subnet.fromString(g_wifiCredentials.staticSubnet) &&
+            gateway.fromString(g_wifiCredentials.staticGateway);
+  if (!ok) {
+    Serial.println("WARNING: static IP config incomplete/invalid - falling back to DHCP.");
+    return;
+  }
+  if (g_wifiCredentials.staticDNS.length() == 0 || !dns.fromString(g_wifiCredentials.staticDNS)) {
+    dns = gateway; // no DNS configured (or it doesn't parse) - the gateway usually doubles as one on a home LAN
+  }
+
+  WiFi.config(ip, gateway, subnet, dns);
+  Serial.printf("Static IP: %s  gateway: %s  subnet: %s  DNS: %s\n",
+                ip.toString().c_str(), gateway.toString().c_str(),
+                subnet.toString().c_str(), dns.toString().c_str());
+}
+
 // Tries the primary network first; if it doesn't connect within
 // WIFI_CONNECT_TIMEOUT_MS and a backup is configured, tries that instead.
 // If the backup is what actually worked, it's promoted to primary (and the
@@ -80,6 +108,7 @@ static void connectWiFi() {
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
   WiFi.persistent(false);
+  applyStaticIpConfig();
 
   if (tryConnectWiFi(g_wifiCredentials.primary, WIFI_CONNECT_TIMEOUT_MS)) {
     Serial.print("ESP32 IP: ");

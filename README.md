@@ -91,8 +91,11 @@ practice; a single-core PSRAM chip is untested.
      `cameramonitor.local`). The backup network (optional) is tried if primary
      doesn't connect within 30s; if backup connects, it's promoted to primary (and
      primary demoted to backup) automatically, so future boots try whichever network
-     actually works first. Saving writes to NVS immediately but only takes effect
-     after the next reboot - a live change could drop the board off the network with
+     actually works first. Also a DHCP/Static IP toggle - Static shows editable IP
+     address/subnet mask/gateway/DNS fields (applies to whichever of primary/backup
+     ends up connecting); DHCP shows the board's current live-obtained settings,
+     grayed out. Saving writes to NVS immediately but only takes effect after the
+     next reboot - a live change could drop the board off the network with
      no way back to this page if the new credentials are wrong.
    - **Cameras** — add/delete/view. Fill in the device service URL, credentials,
      alert cooldown (minimum seconds between Telegram alerts for that camera, default
