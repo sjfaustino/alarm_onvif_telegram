@@ -16,6 +16,10 @@ static WifiCredentials g_wifiCredentials;
 static unsigned long lastHeartbeatMs = 0;
 static unsigned long lastCommandPollMs = 0;
 
+// True once startMonitoring() has actually run - see its comment for why
+// this can happen later than setup() if WiFi wasn't up yet at boot.
+static bool g_monitoringStarted = false;
+
 // Extracts "host[:port]" out of a URL like "http://192.168.1.178:8899/onvif/..."
 // for the startup camera listing.
 static String extractHost(const String& url) {
@@ -190,6 +194,81 @@ static void sendHeartbeat() {
   }
 }
 
+// Everything that needs a working network connection: NTP, mDNS, the web
+// dashboard, and one FreeRTOS task per enabled camera. Normally runs once,
+// right after setup()'s first successful connectWiFi(). If WiFi *isn't* up
+// yet at boot (e.g. the router lost power at the same time and hasn't come
+// back), setup() skips this instead of blocking indefinitely - loop() then
+// calls it the first time connectWiFi() succeeds, so a temporary outage at
+// boot delays monitoring instead of disabling it for the rest of the
+// power cycle (which is what happened before this existed: setup() used to
+// inline all of this after an early `return` on WiFi failure, and loop()
+// only ever retried the WiFi connection itself, never came back to start
+// the cameras or web server).
+static void startMonitoring() {
+  setupTime();
+
+  if (MDNS.begin(g_wifiCredentials.hostname.c_str())) {
+    MDNS.addService("http", "tcp", 80);
+    Serial.printf("mDNS: reachable at http://%s.local/\n", g_wifiCredentials.hostname.c_str());
+  } else {
+    Serial.println("WARNING: mDNS.begin() failed - the .local hostname won't resolve; "
+                    "the IP address still works.");
+  }
+
+  startWebServer(&g_cameras, &g_cameraStates);
+  Serial.printf("Web UI: http://%s/\n", WiFi.localIP().toString().c_str());
+
+  // One FreeRTOS task per enabled camera, pinned to core 1 - see
+  // xTaskCreatePinnedToCore's comment below and cameraTaskFn's comment in
+  // camera.cpp for why (this board turned out to be a genuine dual-core
+  // ESP32, so these run in true parallel, not just time-sliced). Each task
+  // does its own initial cameraSetupSequence before entering its loop, so
+  // this just needs to spawn them.
+  //
+  // The delay() after each spawn staggers those initial GetCapabilities
+  // calls instead of firing all of them within the same handful of
+  // milliseconds. Several of these cameras' embedded HTTP stacks only
+  // accept 1-2 concurrent connections, so hitting all N at once caused a
+  // thundering-herd of "Connection reset by peer" failures at boot even
+  // though the cameras were fine individually.
+  for (size_t i = 0; i < g_cameras.size(); i++) {
+    if (!g_cameras[i].enabled) {
+      Serial.printf("[%s] Disabled - no task created.\n", g_cameras[i].name.c_str());
+      continue;
+    }
+    g_cameraStates[i].alertsEnabled = loadAlertEnabledPref(i); // restore any /on or /off from before a reboot
+    CameraTaskContext* ctx = new CameraTaskContext{&g_cameras[i], &g_cameraStates[i]};
+    char taskName[16];
+    snprintf(taskName, sizeof(taskName), "cam%u", (unsigned)i);
+    // 10KB stack: covers the SOAP String churn plus a WiFiClientSecure TLS
+    // handshake and the 2KB streaming chunk buffer from telegram.cpp with
+    // headroom. Bump this if you see stack-canary warnings in the log.
+    //
+    // Pinned to core 1: this board is a genuine dual-core ESP32 (confirmed
+    // via esptool chip-id - see platformio.ini), not the single-core S2
+    // this was first written against. Core 0 runs the WiFi/BT stack tasks
+    // and the Arduino loopTask; pinning camera tasks to core 1 gives them
+    // real parallel execution instead of competing with WiFi internals for
+    // core 0's time slices.
+    xTaskCreatePinnedToCore(cameraTaskFn, taskName, 10240, ctx, tskIDLE_PRIORITY + 1, nullptr, 1);
+    delay(750); // stagger initial GetCapabilities calls - see comment above
+  }
+
+  int enabledCount = 0;
+  for (size_t i = 0; i < g_cameras.size(); i++) if (g_cameras[i].enabled) enabledCount++;
+
+  String bootMsg = "\xF0\x9F\x93\xB7 Camera monitor online\n";
+  bootMsg += String(enabledCount) + "/" + String((int)g_cameras.size()) + " cameras enabled\n";
+  bootMsg += buildCameraListMessage();
+  if (!sendTelegramMessage(bootMsg)) {
+    Serial.println("Boot notice: Telegram send failed (network/token/CA issue?) - continuing anyway.");
+  }
+
+  lastHeartbeatMs = millis(); // first heartbeat fires HEARTBEAT_INTERVAL_MS from now, not immediately
+  g_monitoringStarted = true;
+}
+
 void setup() {
   Serial.begin(115200);
   delay(1000);
@@ -250,67 +329,12 @@ void setup() {
   }
 
   connectWiFi();
-  if (WiFi.status() != WL_CONNECTED) return;
-  setupTime();
-
-  if (MDNS.begin(g_wifiCredentials.hostname.c_str())) {
-    MDNS.addService("http", "tcp", 80);
-    Serial.printf("mDNS: reachable at http://%s.local/\n", g_wifiCredentials.hostname.c_str());
+  if (WiFi.status() == WL_CONNECTED) {
+    startMonitoring();
   } else {
-    Serial.println("WARNING: mDNS.begin() failed - the .local hostname won't resolve; "
-                    "the IP address still works.");
+    Serial.println("WARNING: WiFi not connected at boot - cameras and the web UI will start "
+                    "automatically once loop() reconnects; no reboot needed once the network is back.");
   }
-
-  startWebServer(&g_cameras, &g_cameraStates);
-  Serial.printf("Web UI: http://%s/\n", WiFi.localIP().toString().c_str());
-
-  // One FreeRTOS task per enabled camera, pinned to core 1 - see
-  // xTaskCreatePinnedToCore's comment below and cameraTaskFn's comment in
-  // camera.cpp for why (this board turned out to be a genuine dual-core
-  // ESP32, so these run in true parallel, not just time-sliced). Each task
-  // does its own initial cameraSetupSequence before entering its loop, so
-  // setup() just needs to spawn them.
-  //
-  // The delay() after each spawn staggers those initial GetCapabilities
-  // calls instead of firing all of them within the same handful of
-  // milliseconds. Several of these cameras' embedded HTTP stacks only
-  // accept 1-2 concurrent connections, so hitting all N at once caused a
-  // thundering-herd of "Connection reset by peer" failures at boot even
-  // though the cameras were fine individually.
-  for (size_t i = 0; i < g_cameras.size(); i++) {
-    if (!g_cameras[i].enabled) {
-      Serial.printf("[%s] Disabled - no task created.\n", g_cameras[i].name.c_str());
-      continue;
-    }
-    g_cameraStates[i].alertsEnabled = loadAlertEnabledPref(i); // restore any /on or /off from before a reboot
-    CameraTaskContext* ctx = new CameraTaskContext{&g_cameras[i], &g_cameraStates[i]};
-    char taskName[16];
-    snprintf(taskName, sizeof(taskName), "cam%u", (unsigned)i);
-    // 10KB stack: covers the SOAP String churn plus a WiFiClientSecure TLS
-    // handshake and the 2KB streaming chunk buffer from telegram.cpp with
-    // headroom. Bump this if you see stack-canary warnings in the log.
-    //
-    // Pinned to core 1: this board is a genuine dual-core ESP32 (confirmed
-    // via esptool chip-id - see platformio.ini), not the single-core S2
-    // this was first written against. Core 0 runs the WiFi/BT stack tasks
-    // and the Arduino loopTask; pinning camera tasks to core 1 gives them
-    // real parallel execution instead of competing with WiFi internals for
-    // core 0's time slices.
-    xTaskCreatePinnedToCore(cameraTaskFn, taskName, 10240, ctx, tskIDLE_PRIORITY + 1, nullptr, 1);
-    delay(750); // stagger initial GetCapabilities calls - see comment above
-  }
-
-  int enabledCount = 0;
-  for (size_t i = 0; i < g_cameras.size(); i++) if (g_cameras[i].enabled) enabledCount++;
-
-  String bootMsg = "\xF0\x9F\x93\xB7 Camera monitor online\n";
-  bootMsg += String(enabledCount) + "/" + String((int)g_cameras.size()) + " cameras enabled\n";
-  bootMsg += buildCameraListMessage();
-  if (!sendTelegramMessage(bootMsg)) {
-    Serial.println("Boot notice: Telegram send failed (network/token/CA issue?) - continuing anyway.");
-  }
-
-  lastHeartbeatMs = millis(); // first heartbeat fires HEARTBEAT_INTERVAL_MS from now, not immediately
 }
 
 void loop() {
@@ -320,7 +344,12 @@ void loop() {
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("\nWiFi disconnected.");
     connectWiFi();
-    if (WiFi.status() == WL_CONNECTED) setupTime();
+    if (WiFi.status() == WL_CONNECTED) {
+      // First successful connection ever (WiFi wasn't up yet at boot) -
+      // run the full deferred startup instead of just resyncing the clock.
+      if (!g_monitoringStarted) startMonitoring();
+      else setupTime();
+    }
   }
 
   if (WiFi.status() == WL_CONNECTED && millis() - lastHeartbeatMs >= HEARTBEAT_INTERVAL_MS) {
