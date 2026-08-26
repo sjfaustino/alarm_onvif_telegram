@@ -154,3 +154,19 @@ bool deleteCamera(const String& name) {
   }
   return false;
 }
+
+bool updateCamera(const String& originalName, const CameraConfig& cam) {
+  std::vector<CameraConfig> cams = loadCameras();
+  int idx = -1;
+  for (size_t i = 0; i < cams.size(); i++) {
+    if (cams[i].name.equalsIgnoreCase(originalName)) { idx = (int)i; break; }
+  }
+  if (idx < 0) return false;
+
+  for (size_t i = 0; i < cams.size(); i++) {
+    if ((int)i != idx && cams[i].name.equalsIgnoreCase(cam.name)) return false;
+  }
+
+  cams[idx] = cam;
+  return saveCameras(cams);
+}

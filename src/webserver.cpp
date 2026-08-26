@@ -4,6 +4,9 @@
 #include <PsychicHttp.h>
 #include <WiFi.h>
 #include <cctype>
+#include <cstdio>
+#include <Update.h>
+#include <esp_ota_ops.h>
 
 static PsychicHttpServer server;
 static std::vector<CameraConfig>* g_liveCameras = nullptr;
@@ -36,6 +39,33 @@ static String htmlEscape(const String& s) {
   return out;
 }
 
+// Percent-encodes anything outside the URL-safe set - used for putting a
+// camera name (mostly unrestricted free text) into a query string, e.g.
+// /cameras/edit?name=...
+static String urlEncode(const String& s) {
+  String out;
+  char buf[4];
+  for (size_t i = 0; i < s.length(); i++) {
+    unsigned char c = (unsigned char)s[i];
+    if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
+      out += (char)c;
+    } else {
+      snprintf(buf, sizeof(buf), "%%%02X", c);
+      out += buf;
+    }
+  }
+  return out;
+}
+
+// "Xh Ym ago" (reusing formatUptime's formatting) for a millis() timestamp,
+// or "just now" for anything under a minute - formatUptime alone would
+// print "0h 0m ago" for a fresh alert, which reads like stale data.
+static String formatElapsedSince(unsigned long ms) {
+  unsigned long elapsed = millis() - ms;
+  if (elapsed < 60000UL) return "just now";
+  return formatUptime(elapsed) + " ago";
+}
+
 // ============================================================
 // Dashboard shell - sidebar (Network / Cameras / Telegram Users) + content
 // panel. All three sections are separate server-rendered pages under plain
@@ -46,7 +76,7 @@ static String htmlEscape(const String& s) {
 // justify.
 // ============================================================
 
-enum class Tab { None, Network, Cameras, Users };
+enum class Tab { None, Network, Cameras, Users, Firmware };
 
 static String renderShell(Tab active, const String& banner, const String& contentHtml) {
   String html;
@@ -87,6 +117,9 @@ static String renderShell(Tab active, const String& banner, const String& conten
   html += "<a href=\"/users\" class=\"";
   html += (active == Tab::Users) ? "active" : "";
   html += "\">Telegram Users</a>";
+  html += "<a href=\"/firmware\" class=\"";
+  html += (active == Tab::Firmware) ? "active" : "";
+  html += "\">Firmware</a>";
   html += "</nav>";
 
   html += "<main class=\"content\">";
@@ -284,20 +317,78 @@ static void handleSaveNetwork(PsychicRequest* request, String& banner) {
 // Cameras panel
 // ============================================================
 
-static String renderCamerasPanel() {
+// Shared by the "Add camera" form (v = a fresh, default-valued CameraConfig),
+// "Edit camera" (v = the stored record, password blanked by the caller), and
+// a post-Test-Connection redisplay (v = whatever was just submitted, so a
+// test doesn't throw away what you typed). isEdit controls the legend/button
+// text and whether a hidden originalName field is emitted - see
+// saveCameraSubmission for what that's used for.
+static String renderCameraForm(const CameraConfig& v, bool isEdit) {
+  String html;
+  String legend = isEdit ? ("Edit camera: " + htmlEscape(v.name)) : "Add camera";
+  html += "<fieldset><legend>" + legend + "</legend><form method=\"POST\" action=\"/cameras/save\">";
+  if (isEdit) {
+    html += "<input type=\"hidden\" name=\"originalName\" value=\"" + htmlEscape(v.name) + "\">";
+  }
+  html += "<label>Name (unique)<input type=\"text\" name=\"name\" value=\"" + htmlEscape(v.name) +
+          "\" required></label>";
+  html += "<label>Device service URL, e.g. http://192.168.1.50/onvif/device_service"
+          "<input type=\"text\" name=\"deviceServiceUrl\" value=\"" + htmlEscape(v.deviceServiceUrl) +
+          "\" required></label>";
+  html += "<label>Username<input type=\"text\" name=\"user\" value=\"" + htmlEscape(v.user) + "\"></label>";
+  html += "<label>Password" + String(isEdit ? " (leave blank to keep the current password)" : "") +
+          "<input type=\"password\" name=\"pass\"" +
+          String(isEdit ? " placeholder=\"(unchanged)\"" : "") + "></label>";
+  html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"enabled\"" +
+          String(v.enabled ? " checked" : "") + "> Enabled</label>";
+  html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"useWSSecurity\"" +
+          String(v.useWSSecurity ? " checked" : "") +
+          "> Use WS-Security (uncheck for HTTP Basic Auth)</label>";
+  html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"includeInitialTerminationTime\"" +
+          String(v.includeInitialTerminationTime ? " checked" : "") + "> Include InitialTerminationTime</label>";
+  html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"includeReplyToAnonymous\"" +
+          String(v.includeReplyToAnonymous ? " checked" : "") + "> Include ReplyTo anonymous</label>";
+  html += "<label>Snapshot URI override (optional; {USER}/{PASS} substituted at runtime)"
+          "<input type=\"text\" name=\"snapshotUriOverride\" value=\"" +
+          htmlEscape(v.snapshotUriOverride) + "\"></label>";
+  html += "<label>Preferred profile keyword (optional, e.g. \"sub\")"
+          "<input type=\"text\" name=\"preferredProfileKeyword\" value=\"" +
+          htmlEscape(v.preferredProfileKeyword) + "\"></label>";
+  html += "<label>Alert cooldown, seconds (minimum time between Telegram alerts for this camera)"
+          "<input type=\"text\" name=\"alertCooldownSec\" value=\"" + String(v.alertCooldownMs / 1000) +
+          "\"></label>";
+  html += "<label>Offline threshold, minutes (no response for this long -> OFFLINE alert)"
+          "<input type=\"text\" name=\"offlineThresholdMin\" value=\"" + String(v.offlineThresholdMs / 60000UL) +
+          "\"></label>";
+  html += "<label>Notes<input type=\"text\" name=\"notes\" value=\"" + htmlEscape(v.notes) + "\"></label>";
+  html += "<p><button type=\"submit\" formaction=\"/cameras/save\">" +
+          String(isEdit ? "Save changes" : "Add camera") + "</button> ";
+  html += "<button type=\"submit\" formaction=\"/cameras/test\">Test Connection</button>";
+  if (isEdit) html += " <a href=\"/cameras\">Cancel</a>";
+  html += "</p></form></fieldset>";
+  return html;
+}
+
+// prefill/isEdit repopulate the Add/Edit form after an edit-link click, a
+// failed save, or a Test Connection round trip - null prefill is the normal
+// blank "Add camera" state.
+static String renderCamerasPanel(const CameraConfig* prefill, bool isEdit) {
   std::vector<CameraConfig> cams = loadCameras();
 
   String html = "<h1>Cameras</h1>";
   html += "<table><tr><th>Name</th><th>Device Service URL</th><th>Enabled</th>"
-          "<th>Cooldown</th><th>Offline After</th><th>Live Status</th><th>Notes</th><th></th></tr>";
+          "<th>Cooldown</th><th>Offline After</th><th>Live Status</th><th>Last Alert</th>"
+          "<th>Notes</th><th></th></tr>";
   for (auto& c : cams) {
     int idx = findLiveCameraIndex(c.name);
     String liveStatus;
+    String lastAlertStr = "never";
     if (idx >= 0 && g_liveStates && idx < (int)g_liveStates->size()) {
       CameraState& st = (*g_liveStates)[idx];
       liveStatus = st.subscriptionActive ? "subscribed" : "not subscribed";
       if (st.isOffline) liveStatus += " - OFFLINE";
       if (!st.alertsEnabled) liveStatus += " (alerts OFF)";
+      if (st.hasAlerted) lastAlertStr = formatElapsedSince(st.lastAlert);
     } else if (!c.enabled) {
       liveStatus = "disabled";
     } else {
@@ -308,7 +399,9 @@ static String renderCamerasPanel() {
             "</td><td>" + (c.enabled ? "yes" : "no") + "</td><td>" +
             String(c.alertCooldownMs / 1000) + "s</td><td>" +
             String(c.offlineThresholdMs / 60000UL) + "m</td><td>" + liveStatus + "</td><td>" +
+            lastAlertStr + "</td><td>" +
             htmlEscape(c.notes) + "</td><td>";
+    html += "<a href=\"/cameras/edit?name=" + urlEncode(c.name) + "\">Edit</a> ";
     html += "<form class=\"inline\" method=\"POST\" action=\"/delete\" "
             "onsubmit=\"return confirm('Delete " + htmlEscape(c.name) + "?');\">";
     html += "<input type=\"hidden\" name=\"name\" value=\"" + htmlEscape(c.name) + "\">";
@@ -316,36 +409,19 @@ static String renderCamerasPanel() {
   }
   html += "</table>";
 
-  html += "<fieldset><legend>Add camera</legend><form method=\"POST\" action=\"/add\">";
-  html += "<label>Name (unique)<input type=\"text\" name=\"name\" required></label>";
-  html += "<label>Device service URL, e.g. http://192.168.1.50/onvif/device_service"
-          "<input type=\"text\" name=\"deviceServiceUrl\" required></label>";
-  html += "<label>Username<input type=\"text\" name=\"user\"></label>";
-  html += "<label>Password<input type=\"text\" name=\"pass\"></label>";
-  html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"enabled\" checked> Enabled</label>";
-  html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"useWSSecurity\" checked> "
-          "Use WS-Security (uncheck for HTTP Basic Auth)</label>";
-  html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"includeInitialTerminationTime\"> "
-          "Include InitialTerminationTime</label>";
-  html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"includeReplyToAnonymous\"> "
-          "Include ReplyTo anonymous</label>";
-  html += "<label>Snapshot URI override (optional; {USER}/{PASS} substituted at runtime)"
-          "<input type=\"text\" name=\"snapshotUriOverride\"></label>";
-  html += "<label>Preferred profile keyword (optional, e.g. \"sub\")"
-          "<input type=\"text\" name=\"preferredProfileKeyword\"></label>";
-  html += "<label>Alert cooldown, seconds (minimum time between Telegram alerts for this camera)"
-          "<input type=\"text\" name=\"alertCooldownSec\" value=\"30\"></label>";
-  html += "<label>Offline threshold, minutes (no response for this long -> OFFLINE alert)"
-          "<input type=\"text\" name=\"offlineThresholdMin\" value=\"5\"></label>";
-  html += "<label>Notes<input type=\"text\" name=\"notes\"></label>";
-  html += "<p><button type=\"submit\">Add camera</button></p></form></fieldset>";
+  html += renderCameraForm(prefill ? *prefill : CameraConfig(), isEdit);
 
-  html += "<p class=\"hint\">Adding or deleting a camera updates storage immediately, "
-          "but only takes effect after the board reboots.</p>";
+  html += "<p class=\"hint\">Adding, editing, or deleting a camera updates storage immediately, "
+          "but only takes effect after the board reboots. Test Connection doesn't save anything - "
+          "it just runs GetCapabilities/GetEventProperties/GetSnapshotUri against whatever is "
+          "currently typed in, so you can catch a wrong URL or credential before rebooting.</p>";
   return html;
 }
 
-static void handleAddCamera(PsychicRequest* request, String& banner) {
+// Reads the Add/Edit camera form's fields into a CameraConfig - used both to
+// actually save (saveCameraSubmission) and to test a connection without
+// saving (testCameraConnection).
+static CameraConfig parseCameraForm(PsychicRequest* request) {
   CameraConfig c;
   c.name                          = request->getParam("name", "");
   c.deviceServiceUrl              = request->getParam("deviceServiceUrl", "");
@@ -361,21 +437,89 @@ static void handleAddCamera(PsychicRequest* request, String& banner) {
   c.name.trim();
 
   long cooldownSec = request->getParam("alertCooldownSec", "30").toInt();
-  if (cooldownSec > 0) c.alertCooldownMs = (unsigned long)cooldownSec * 1000UL;
-  // else keep CameraConfig's 30000 default - a blank/zero/negative field
-  // shouldn't produce a 0ms cooldown (alerts on every single poll).
+  // A blank/zero/negative field shouldn't produce a 0ms cooldown (alerts on
+  // every single poll) - fall back to CameraConfig's own default instead.
+  c.alertCooldownMs = cooldownSec > 0 ? (unsigned long)cooldownSec * 1000UL : CameraConfig().alertCooldownMs;
 
   long offlineMin = request->getParam("offlineThresholdMin", "5").toInt();
-  if (offlineMin > 0) c.offlineThresholdMs = (unsigned long)offlineMin * 60000UL;
-  // else keep CameraConfig's default - same reasoning as cooldown above.
+  c.offlineThresholdMs = offlineMin > 0 ? (unsigned long)offlineMin * 60000UL : CameraConfig().offlineThresholdMs;
 
-  if (c.name.length() == 0 || c.deviceServiceUrl.length() == 0) {
-    banner = "Name and device service URL are required - camera not added.";
-    return;
+  return c;
+}
+
+// originalName is "" for a brand-new camera (add), non-empty for an edit
+// (the name the camera had before this submission - cam.name may differ,
+// which is a rename). A blank password on an edit means "keep the current
+// one", same convention as the Network panel's WiFi password field.
+static bool saveCameraSubmission(CameraConfig cam, const String& originalName, String& banner) {
+  if (cam.name.length() == 0 || cam.deviceServiceUrl.length() == 0) {
+    banner = "Name and device service URL are required - camera not saved.";
+    return false;
   }
-  if (!addCamera(c)) {
-    banner = "A camera named \"" + htmlEscape(c.name) + "\" already exists - camera not added.";
+
+  if (originalName.length() == 0) {
+    if (!addCamera(cam)) {
+      banner = "A camera named \"" + htmlEscape(cam.name) + "\" already exists - camera not added.";
+      return false;
+    }
+    return true;
   }
+
+  if (cam.pass.length() == 0) {
+    for (auto& existing : loadCameras()) {
+      if (existing.name.equalsIgnoreCase(originalName)) { cam.pass = existing.pass; break; }
+    }
+  }
+  if (!updateCamera(originalName, cam)) {
+    banner = "Could not save \"" + htmlEscape(cam.name) +
+             "\" - a different camera already uses that name.";
+    return false;
+  }
+  return true;
+}
+
+// Runs a live GetCapabilities -> GetServiceCapabilities/GetEventProperties
+// -> GetProfiles/GetSnapshotUri sequence against cfg without touching NVS or
+// any running camera task, and summarizes what worked. Reuses the exact
+// same calls cameraSetupSequence (camera.cpp) makes at boot, so a pass here
+// is a strong signal the real thing will work too.
+static String testCameraConnection(CameraConfig cfg) {
+  if (cfg.deviceServiceUrl.length() == 0) {
+    return "Enter a device service URL first, then Test Connection.";
+  }
+
+  CameraState st;
+  if (!resolveCameraCredentials(cfg, st)) {
+    return "Enter a username and password first, then Test Connection.";
+  }
+
+  if (!cameraDiscoverServices(cfg, st)) {
+    return "Test FAILED for \"" + cfg.name + "\": could not reach " + cfg.deviceServiceUrl +
+           ", or no ONVIF event service was found there. Check the URL/credentials and see the "
+           "Serial log for details.";
+  }
+
+  String result = "Test result for \"" + cfg.name + "\": device service reachable, event service found.";
+
+  if (cameraGetEventServiceCapabilities(cfg, st) && cameraGetEventProperties(cfg, st)) {
+    result += " Event service responds normally.";
+  } else {
+    result += " WARNING: the event service didn't respond to GetServiceCapabilities/GetEventProperties - "
+              "this camera may not support ONVIF eventing at all.";
+  }
+
+  if (cfg.snapshotUriOverride.length() > 0 || st.mediaServiceUrl.length() > 0) {
+    if (cameraFetchProfileAndSnapshotUri(cfg, st) && st.snapshotUri.length() > 0) {
+      result += " Snapshot URI resolved.";
+    } else {
+      result += " WARNING: snapshot URI could not be resolved - motion would still be detected, "
+                "but photo alerts won't work until this is fixed.";
+    }
+  } else {
+    result += " WARNING: no media service found and no snapshot override set - photo alerts won't work.";
+  }
+
+  return result;
 }
 
 // ============================================================
@@ -471,6 +615,53 @@ static void handleAddUser(PsychicRequest* request, String& banner) {
   }
 }
 
+// ============================================================
+// Firmware panel - upload a .bin over the dashboard instead of a USB
+// reflash. Backed by ESP32's Update library, which writes into the
+// currently-inactive OTA app partition (this board's partition table has
+// two, app0/app1 - see platformio.ini) and only marks it bootable once the
+// image is fully received and its checksum verifies, so a failed/aborted
+// upload leaves the running firmware untouched.
+// ============================================================
+
+static bool   g_otaError = false;
+static String g_otaErrorMsg;
+
+// esp_restart() from inside the request handler that's still sending the
+// response would tear down the connection before the client sees it -
+// reboot from a short-lived separate task instead, after send() has
+// returned, so the browser gets a chance to show the result first.
+static void otaRebootTask(void*) {
+  vTaskDelay(pdMS_TO_TICKS(1000));
+  ESP.restart();
+}
+
+static String renderFirmwarePanel() {
+  const esp_partition_t* running = esp_ota_get_running_partition();
+
+  String html = "<h1>Firmware</h1>";
+  html += "<table>";
+  html += "<tr><th>Build</th><td>" + String(__DATE__) + " " + String(__TIME__) + "</td></tr>";
+  html += "<tr><th>Running partition</th><td>" + String(running ? running->label : "?") + "</td></tr>";
+  html += "<tr><th>Sketch size</th><td>" + String(ESP.getSketchSize() / 1024) + " KB</td></tr>";
+  html += "<tr><th>Free space for update</th><td>" + String(ESP.getFreeSketchSpace() / 1024) + " KB</td></tr>";
+  html += "</table>";
+
+  html += "<fieldset><legend>Upload new firmware</legend>";
+  html += "<form method=\"POST\" action=\"/firmware/update\" enctype=\"multipart/form-data\" "
+          "onsubmit=\"return confirm('Flash this firmware and reboot the board? "
+          "Do not power it off while this runs.');\">";
+  html += "<label>Firmware .bin (e.g. .pio/build/esp32s3/firmware.bin from `pio run -e esp32s3`)"
+          "<input type=\"file\" name=\"firmware\" accept=\".bin\" required></label>";
+  html += "<p><button type=\"submit\">Upload &amp; Flash</button></p>";
+  html += "</form></fieldset>";
+
+  html += "<p class=\"hint\">The board reboots automatically once the upload finishes and the new "
+          "image's checksum verifies. If verification fails, nothing is applied and the board keeps "
+          "running the current firmware.</p>";
+  return html;
+}
+
 void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraState>* liveStates) {
   g_liveCameras = liveCameras;
   g_liveStates = liveStates;
@@ -491,16 +682,54 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
   });
 
   server.on("/cameras", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
-    return response->send(200, "text/html", renderShell(Tab::Cameras, "", renderCamerasPanel()).c_str());
+    return response->send(200, "text/html", renderShell(Tab::Cameras, "", renderCamerasPanel(nullptr, false)).c_str());
   });
 
-  server.on("/add", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
-    String banner;
-    handleAddCamera(request, banner);
-    if (banner.length() > 0) {
-      return response->send(200, "text/html", renderShell(Tab::Cameras, banner, renderCamerasPanel()).c_str());
+  server.on("/cameras/edit", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
+    String name = request->getParam("name", "");
+    for (auto& c : loadCameras()) {
+      if (c.name.equalsIgnoreCase(name)) {
+        CameraConfig prefill = c;
+        prefill.pass = ""; // never populate a password field with the real value
+        return response->send(200, "text/html",
+                               renderShell(Tab::Cameras, "", renderCamerasPanel(&prefill, true)).c_str());
+      }
     }
     return response->redirect("/cameras");
+  });
+
+  server.on("/cameras/save", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
+    CameraConfig submitted = parseCameraForm(request);
+    String originalName = request->getParam("originalName", "");
+    originalName.trim();
+
+    String banner;
+    if (!saveCameraSubmission(submitted, originalName, banner)) {
+      submitted.pass = "";
+      return response->send(200, "text/html",
+                             renderShell(Tab::Cameras, banner,
+                                         renderCamerasPanel(&submitted, originalName.length() > 0)).c_str());
+    }
+    return response->redirect("/cameras");
+  });
+
+  server.on("/cameras/test", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
+    CameraConfig submitted = parseCameraForm(request);
+    String originalName = request->getParam("originalName", "");
+    originalName.trim();
+    bool isEdit = originalName.length() > 0;
+
+    CameraConfig testCfg = submitted;
+    if (isEdit && testCfg.pass.length() == 0) {
+      for (auto& existing : loadCameras()) {
+        if (existing.name.equalsIgnoreCase(originalName)) { testCfg.pass = existing.pass; break; }
+      }
+    }
+    String banner = testCameraConnection(testCfg);
+
+    submitted.pass = "";
+    return response->send(200, "text/html",
+                           renderShell(Tab::Cameras, banner, renderCamerasPanel(&submitted, isEdit)).c_str());
   });
 
   server.on("/delete", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
@@ -527,6 +756,52 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
     deleteTelegramUser(name);
     return response->redirect("/users");
   });
+
+  server.on("/firmware", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
+    return response->send(200, "text/html", renderShell(Tab::Firmware, "", renderFirmwarePanel()).c_str());
+  });
+
+  static PsychicUploadHandler* otaHandler = new PsychicUploadHandler();
+  otaHandler->onUpload([](PsychicRequest* request, const String& filename, uint64_t index, uint8_t* data,
+                           size_t len, bool last) -> esp_err_t {
+    if (index == 0) {
+      g_otaError = false;
+      g_otaErrorMsg = "";
+      Serial.printf("[Firmware] Upload started: %s\n", filename.c_str());
+      if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
+        g_otaError = true;
+        g_otaErrorMsg = Update.errorString();
+        Serial.printf("[Firmware] Update.begin failed: %s\n", g_otaErrorMsg.c_str());
+      }
+    }
+    if (!g_otaError && len > 0 && Update.write(data, len) != len) {
+      g_otaError = true;
+      g_otaErrorMsg = Update.errorString();
+      Serial.printf("[Firmware] Update.write failed: %s\n", g_otaErrorMsg.c_str());
+    }
+    if (last) {
+      if (!g_otaError && !Update.end(true)) {
+        g_otaError = true;
+        g_otaErrorMsg = Update.errorString();
+      }
+      Serial.printf("[Firmware] Upload finished (%s).\n", g_otaError ? "FAILED" : "OK - rebooting");
+    }
+    return ESP_OK; // keep accepting bytes even after a failure, so the upload doesn't just hang client-side
+  });
+  otaHandler->onRequest([](PsychicRequest* request, PsychicResponse* response) -> esp_err_t {
+    if (g_otaError) {
+      String banner = "Firmware update FAILED: " + g_otaErrorMsg + " - current firmware keeps running.";
+      return response->send(200, "text/html", renderShell(Tab::Firmware, banner, renderFirmwarePanel()).c_str());
+    }
+    esp_err_t result = response->send(
+        200, "text/html",
+        renderShell(Tab::Firmware, "Firmware accepted - rebooting now, this page will stop responding.",
+                    "<p class=\"hint\">Reconnect in about 15 seconds.</p>")
+            .c_str());
+    xTaskCreate(otaRebootTask, "otaReboot", 2048, nullptr, 1, nullptr);
+    return result;
+  });
+  server.on("/firmware/update", HTTP_POST, otaHandler);
 
   server.begin();
   Serial.println("[WebServer] Camera management UI listening on port 80.");

@@ -30,8 +30,16 @@ Arduino-ESP32/IDF releases.
 - Cameras and Telegram recipients are managed at runtime through a built-in
   sidebar dashboard ([hoeken/PsychicHttp](https://github.com/hoeken/PsychicHttp))
   and persisted in NVS - no more editing and reflashing `config.h`/`secrets.h` to
-  change either. Camera changes take effect after a reboot; Telegram user changes
-  apply immediately.
+  change either. Cameras can be added, edited, and deleted (edits can rename a
+  camera too); a Test Connection button runs a live GetCapabilities/
+  GetEventProperties/GetSnapshotUri check against whatever's currently typed in
+  the form, before you save or reboot. Camera changes take effect after a
+  reboot; Telegram user changes apply immediately.
+- Firmware updates over the dashboard: upload a `.bin` built with
+  `pio run -e esp32s3` on the Firmware page instead of reflashing over USB. Uses
+  the board's dual OTA app partitions - a failed or aborted upload leaves the
+  running firmware untouched, and the board only reboots into the new image
+  once it's fully received and its checksum verifies.
 - Any number of Telegram users, each independently configured for which cameras
   they hear from (specific list or "all, including future ones"), whether they get
   the heartbeat/boot messages, and whether they're allowed to send `/on`, `/off`,
@@ -85,7 +93,7 @@ practice; a single-core PSRAM chip is untested.
    `default_envs` in `platformio.ini` already picks `esp32s3` if you omit `-e`.
 
 5. **Open the dashboard** at `http://<board's IP>/` (printed in the boot log and the
-   Telegram boot message). The sidebar has three sections:
+   Telegram boot message). The sidebar has four sections:
    - **Network** — connection status (SSID, IP, MAC, signal, uptime, mDNS address)
      and editable primary/backup WiFi credentials plus hostname. The hostname makes
      the dashboard reachable at `http://<hostname>.local/` instead of the IP (default
@@ -101,19 +109,30 @@ practice; a single-core PSRAM chip is untested.
      but only takes effect after the
      next reboot - a live change could drop the board off the network with
      no way back to this page if the new credentials are wrong.
-   - **Cameras** — add/delete/view. Fill in the device service URL, credentials,
-     alert cooldown (minimum seconds between Telegram alerts for that camera, default
-     30s), offline threshold (minutes without a response before it's flagged OFFLINE,
-     default 5), and any per-camera quirk flags (the form documents what each one
-     does). Adding or deleting writes to NVS immediately but only takes effect after the
-     next reboot.
+   - **Cameras** — add/edit/delete/view, each row showing live subscription status
+     (with an OFFLINE flag - see below) and how long ago it last alerted ("never" if
+     it hasn't yet). Fill in the device service URL, credentials, alert cooldown
+     (minimum seconds between Telegram alerts for that camera, default 30s), offline
+     threshold (minutes without a response before it's flagged OFFLINE, default 5),
+     and any per-camera quirk flags (the form documents what each one does). A Test
+     Connection button runs a live check against whatever's currently in the form
+     (GetCapabilities, event service, snapshot URI) without saving anything, so a
+     wrong URL/credential shows up before you commit to a reboot. Editing an existing
+     camera leaves its password unchanged if you leave that field blank, same as the
+     Network page's WiFi password. Adding, editing, or deleting writes to NVS
+     immediately but only takes effect after the next reboot.
    - **Telegram Users** — add/delete/view recipients. Each one picks specific
      cameras or "all cameras", and independently toggles heartbeat/boot messages and
      command permission. Takes effect immediately, no reboot needed.
+   - **Firmware** — upload a `.bin` (built with `pio run -e esp32s3`) to reflash
+     over the network instead of USB. Writes into the currently-inactive OTA app
+     partition and only reboots into it once the upload is complete and its
+     checksum verifies; a failed or aborted upload leaves the running firmware
+     untouched.
 
    No login is required — anyone on your LAN who can reach the board's IP can view
-   and change this, including camera and WiFi credentials. Don't forward port 80 to
-   the internet.
+   and change this, including camera and WiFi credentials, and can flash arbitrary
+   firmware via the Firmware page. Don't forward port 80 to the internet.
 
 ## Project layout
 

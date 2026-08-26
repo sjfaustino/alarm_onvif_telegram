@@ -82,3 +82,9 @@ bool saveCameras(const std::vector<CameraConfig>& cameras);
 // by). deleteCamera fails if no camera with that name exists.
 bool addCamera(const CameraConfig& cam);
 bool deleteCamera(const String& name);
+
+// Replaces the camera currently named originalName with cam - cam.name
+// doesn't have to match originalName, so this also handles a rename. Fails
+// (returns false, nothing saved) if originalName isn't found, or if
+// cam.name collides with a *different* existing camera's name.
+bool updateCamera(const String& originalName, const CameraConfig& cam);
