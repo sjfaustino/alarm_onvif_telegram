@@ -52,26 +52,57 @@ static String buildCameraListMessage() {
   return s;
 }
 
-static void connectWiFi() {
-  Serial.println("\nConnecting to WiFi...");
-  WiFi.mode(WIFI_STA);
-  WiFi.setAutoReconnect(true);
-  WiFi.persistent(false);
-  WiFi.begin(g_wifiCredentials.ssid.c_str(), g_wifiCredentials.password.c_str());
+static const unsigned long WIFI_CONNECT_TIMEOUT_MS = 30000UL;
+
+// Attempts one network, blocking up to timeoutMs. Returns whether it connected.
+static bool tryConnectWiFi(const WifiNetwork& net, unsigned long timeoutMs) {
+  if (net.ssid.length() == 0) return false;
+  Serial.printf("\nConnecting to WiFi \"%s\"...\n", net.ssid.c_str());
+  WiFi.begin(net.ssid.c_str(), net.password.c_str());
 
   unsigned long start = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - start < 30000UL) {
+  while (WiFi.status() != WL_CONNECTED && millis() - start < timeoutMs) {
     delay(500);
     Serial.print(".");
   }
   Serial.println();
+  return WiFi.status() == WL_CONNECTED;
+}
 
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("ERROR: WiFi connection failed.");
+// Tries the primary network first; if it doesn't connect within
+// WIFI_CONNECT_TIMEOUT_MS and a backup is configured, tries that instead.
+// If the backup is what actually worked, it's promoted to primary (and the
+// old primary demoted to backup) and persisted to NVS, so the next boot -
+// and every reconnect attempt from loop() until then - tries the network
+// that's actually reachable first instead of wasting 30s on the one that
+// isn't.
+static void connectWiFi() {
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  WiFi.persistent(false);
+
+  if (tryConnectWiFi(g_wifiCredentials.primary, WIFI_CONNECT_TIMEOUT_MS)) {
+    Serial.print("ESP32 IP: ");
+    Serial.println(WiFi.localIP());
     return;
   }
-  Serial.print("ESP32 IP: ");
-  Serial.println(WiFi.localIP());
+
+  if (g_wifiCredentials.backup.ssid.length() > 0) {
+    Serial.println("Primary WiFi not reachable - trying backup...");
+    if (tryConnectWiFi(g_wifiCredentials.backup, WIFI_CONNECT_TIMEOUT_MS)) {
+      Serial.print("ESP32 IP: ");
+      Serial.println(WiFi.localIP());
+      Serial.println("Backup WiFi connected - promoting it to primary for future boots.");
+      WifiNetwork oldPrimary = g_wifiCredentials.primary;
+      g_wifiCredentials.primary = g_wifiCredentials.backup;
+      g_wifiCredentials.backup = oldPrimary;
+      saveWifiCredentials(g_wifiCredentials);
+      return;
+    }
+  }
+
+  Serial.println("ERROR: WiFi connection failed (primary" +
+                  String(g_wifiCredentials.backup.ssid.length() > 0 ? " and backup" : "") + ").");
 }
 
 static void setupTime() {

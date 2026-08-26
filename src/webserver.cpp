@@ -114,9 +114,13 @@ static int findLiveCameraIndex(const String& name) {
 static String renderNetworkPanel() {
   WifiCredentials creds = loadWifiCredentials();
 
+  String connectedRole;
+  if (WiFi.SSID() == creds.primary.ssid) connectedRole = " (primary)";
+  else if (creds.backup.ssid.length() > 0 && WiFi.SSID() == creds.backup.ssid) connectedRole = " (backup)";
+
   String html = "<h1>Network</h1>";
   html += "<table>";
-  html += "<tr><th>Connected SSID</th><td>" + htmlEscape(WiFi.SSID()) + "</td></tr>";
+  html += "<tr><th>Connected SSID</th><td>" + htmlEscape(WiFi.SSID()) + connectedRole + "</td></tr>";
   html += "<tr><th>IP address</th><td>" + WiFi.localIP().toString() + "</td></tr>";
   html += "<tr><th>MAC address</th><td>" + WiFi.macAddress() + "</td></tr>";
   html += "<tr><th>Signal (RSSI)</th><td>" + String(WiFi.RSSI()) + " dBm</td></tr>";
@@ -124,11 +128,21 @@ static String renderNetworkPanel() {
   html += "<tr><th>Uptime</th><td>" + formatUptime(millis()) + "</td></tr>";
   html += "</table>";
 
-  html += "<fieldset><legend>WiFi credentials</legend><form method=\"POST\" action=\"/network/save\">";
-  html += "<label>SSID<input type=\"text\" name=\"ssid\" value=\"" + htmlEscape(creds.ssid) + "\" required></label>";
+  html += "<fieldset><legend>Primary WiFi</legend><form method=\"POST\" action=\"/network/save\">";
+  html += "<label>SSID<input type=\"text\" name=\"ssid\" value=\"" + htmlEscape(creds.primary.ssid) + "\" required></label>";
   html += "<label>Password (leave blank to keep the current password)"
           "<input type=\"password\" name=\"password\" placeholder=\"(unchanged)\"></label>";
-  html += "<label>Hostname - letters, digits, hyphens only, no spaces or dots "
+
+  html += "<label style=\"margin-top:20px;\">Backup SSID (optional - tried if primary doesn't connect "
+          "within 30s; leave blank to disable)<input type=\"text\" name=\"backupSsid\" value=\"" +
+          htmlEscape(creds.backup.ssid) + "\"></label>";
+  html += "<label>Backup password (leave blank to keep the current one, if backup SSID is unchanged)"
+          "<input type=\"password\" name=\"backupPassword\" placeholder=\"(unchanged)\"></label>";
+  html += "<p class=\"hint\">If the backup connects when primary doesn't, it's promoted to primary "
+          "(and primary demoted to backup) automatically, so future boots try whichever network "
+          "actually works first.</p>";
+
+  html += "<label style=\"margin-top:20px;\">Hostname - letters, digits, hyphens only, no spaces or dots "
           "(reachable at http://&lt;hostname&gt;.local/)"
           "<input type=\"text\" name=\"hostname\" value=\"" + htmlEscape(creds.hostname) + "\" required></label>";
   html += "<p><button type=\"submit\">Save</button></p></form></fieldset>";
@@ -157,16 +171,31 @@ static void handleSaveNetwork(PsychicRequest* request, String& banner) {
 
   String ssid = request->getParam("ssid", "");
   ssid.trim();
-  if (ssid.length() > 0) creds.ssid = ssid;
+  if (ssid.length() > 0) creds.primary.ssid = ssid;
 
   String password = request->getParam("password", "");
-  if (password.length() > 0) creds.password = password;
+  if (password.length() > 0) creds.primary.password = password;
+
+  // Backup SSID isn't "blank keeps current" like the passwords - clearing
+  // it is the only way to disable a configured backup, so an empty
+  // submission directly clears both backup fields instead of preserving
+  // whatever was there before.
+  String backupSsid = request->getParam("backupSsid", "");
+  backupSsid.trim();
+  if (backupSsid.length() == 0) {
+    creds.backup.ssid = "";
+    creds.backup.password = "";
+  } else {
+    creds.backup.ssid = backupSsid;
+    String backupPassword = request->getParam("backupPassword", "");
+    if (backupPassword.length() > 0) creds.backup.password = backupPassword;
+  }
 
   String hostname = sanitizeHostname(request->getParam("hostname", ""));
   if (hostname.length() > 0) creds.hostname = hostname;
 
-  if (creds.ssid.length() == 0) {
-    banner = "SSID is required - not saved.";
+  if (creds.primary.ssid.length() == 0) {
+    banner = "Primary SSID is required - not saved.";
     return;
   }
   saveWifiCredentials(creds);
