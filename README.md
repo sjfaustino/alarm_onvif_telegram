@@ -22,10 +22,11 @@ Arduino-ESP32/IDF releases.
   stacks), snapshot URI override, and preferred video profile.
 - Periodic Telegram heartbeat (uptime, free heap, per-camera subscription status)
   so a silently hung or endlessly-retrying board doesn't go unnoticed.
-- Offline camera detection: if a camera goes 2 minutes (`OFFLINE_THRESHOLD_MS`)
-  without answering *any* SOAP request, it's flagged OFFLINE and an immediate
-  Telegram alert goes out (and another when it recovers) - independent of the
-  6-hour heartbeat, and shown live on the Cameras dashboard page.
+- Offline camera detection: if a camera goes without answering *any* SOAP request
+  for longer than its own offline threshold (per-camera, default 5 minutes), it's
+  flagged OFFLINE and an immediate Telegram alert goes out (and another when it
+  recovers) - independent of the 6-hour heartbeat, and shown live on the Cameras
+  dashboard page.
 - Cameras and Telegram recipients are managed at runtime through a built-in
   sidebar dashboard ([hoeken/PsychicHttp](https://github.com/hoeken/PsychicHttp))
   and persisted in NVS - no more editing and reflashing `config.h`/`secrets.h` to
@@ -102,8 +103,9 @@ practice; a single-core PSRAM chip is untested.
      no way back to this page if the new credentials are wrong.
    - **Cameras** — add/delete/view. Fill in the device service URL, credentials,
      alert cooldown (minimum seconds between Telegram alerts for that camera, default
-     30s), and any per-camera quirk flags (the form documents what each one does).
-     Adding or deleting writes to NVS immediately but only takes effect after the
+     30s), offline threshold (minutes without a response before it's flagged OFFLINE,
+     default 5), and any per-camera quirk flags (the form documents what each one
+     does). Adding or deleting writes to NVS immediately but only takes effect after the
      next reboot.
    - **Telegram Users** — add/delete/view recipients. Each one picks specific
      cameras or "all cameras", and independently toggles heartbeat/boot messages and

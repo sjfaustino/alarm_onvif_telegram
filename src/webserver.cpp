@@ -289,7 +289,7 @@ static String renderCamerasPanel() {
 
   String html = "<h1>Cameras</h1>";
   html += "<table><tr><th>Name</th><th>Device Service URL</th><th>Enabled</th>"
-          "<th>Cooldown</th><th>Live Status</th><th>Notes</th><th></th></tr>";
+          "<th>Cooldown</th><th>Offline After</th><th>Live Status</th><th>Notes</th><th></th></tr>";
   for (auto& c : cams) {
     int idx = findLiveCameraIndex(c.name);
     String liveStatus;
@@ -306,7 +306,8 @@ static String renderCamerasPanel() {
 
     html += "<tr><td>" + htmlEscape(c.name) + "</td><td>" + htmlEscape(c.deviceServiceUrl) +
             "</td><td>" + (c.enabled ? "yes" : "no") + "</td><td>" +
-            String(c.alertCooldownMs / 1000) + "s</td><td>" + liveStatus + "</td><td>" +
+            String(c.alertCooldownMs / 1000) + "s</td><td>" +
+            String(c.offlineThresholdMs / 60000UL) + "m</td><td>" + liveStatus + "</td><td>" +
             htmlEscape(c.notes) + "</td><td>";
     html += "<form class=\"inline\" method=\"POST\" action=\"/delete\" "
             "onsubmit=\"return confirm('Delete " + htmlEscape(c.name) + "?');\">";
@@ -334,6 +335,8 @@ static String renderCamerasPanel() {
           "<input type=\"text\" name=\"preferredProfileKeyword\"></label>";
   html += "<label>Alert cooldown, seconds (minimum time between Telegram alerts for this camera)"
           "<input type=\"text\" name=\"alertCooldownSec\" value=\"30\"></label>";
+  html += "<label>Offline threshold, minutes (no response for this long -> OFFLINE alert)"
+          "<input type=\"text\" name=\"offlineThresholdMin\" value=\"5\"></label>";
   html += "<label>Notes<input type=\"text\" name=\"notes\"></label>";
   html += "<p><button type=\"submit\">Add camera</button></p></form></fieldset>";
 
@@ -361,6 +364,10 @@ static void handleAddCamera(PsychicRequest* request, String& banner) {
   if (cooldownSec > 0) c.alertCooldownMs = (unsigned long)cooldownSec * 1000UL;
   // else keep CameraConfig's 30000 default - a blank/zero/negative field
   // shouldn't produce a 0ms cooldown (alerts on every single poll).
+
+  long offlineMin = request->getParam("offlineThresholdMin", "5").toInt();
+  if (offlineMin > 0) c.offlineThresholdMs = (unsigned long)offlineMin * 60000UL;
+  // else keep CameraConfig's default - same reasoning as cooldown above.
 
   if (c.name.length() == 0 || c.deviceServiceUrl.length() == 0) {
     banner = "Name and device service URL are required - camera not added.";

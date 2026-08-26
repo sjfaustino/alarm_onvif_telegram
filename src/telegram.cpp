@@ -368,14 +368,14 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st) {
 }
 
 void checkCameraOnlineStatus(const CameraConfig& cfg, CameraState& st) {
-  bool offlineNow = (millis() - st.lastContactMs) >= OFFLINE_THRESHOLD_MS;
+  bool offlineNow = (millis() - st.lastContactMs) >= cfg.offlineThresholdMs;
   if (offlineNow == st.isOffline) return; // no state change - most calls hit this
 
   st.isOffline = offlineNow;
   if (offlineNow) {
-    Serial.printf("[%s] OFFLINE - no response for over %lus.\n", cfg.name.c_str(), OFFLINE_THRESHOLD_MS / 1000UL);
+    Serial.printf("[%s] OFFLINE - no response for over %lus.\n", cfg.name.c_str(), cfg.offlineThresholdMs / 1000UL);
     sendTelegramMessage("\xE2\x9A\xA0\xEF\xB8\x8F " + cfg.name + " is OFFLINE - no response for over " +
-                         String(OFFLINE_THRESHOLD_MS / 60000UL) + " minute(s).");
+                         String(cfg.offlineThresholdMs / 60000UL) + " minute(s).");
   } else {
     Serial.printf("[%s] Back ONLINE.\n", cfg.name.c_str());
     sendTelegramMessage("\xE2\x9C\x85 " + cfg.name + " is back ONLINE.");

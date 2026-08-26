@@ -10,7 +10,7 @@
 void triggerMotionAlert(const CameraConfig& cfg, CameraState& st);
 
 // Compares st.lastContactMs (updated on every SOAP response this camera
-// sends back - see cameraSoapCall in camera.cpp) against OFFLINE_THRESHOLD_MS
+// sends back - see cameraSoapCall in camera.cpp) against cfg.offlineThresholdMs
 // and, only on a state transition, broadcasts an OFFLINE or back-ONLINE
 // notice via sendTelegramMessage. Cheap enough to call on every iteration
 // of cameraTaskFn's loop - it only does anything (and only logs/sends) when

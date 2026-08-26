@@ -53,6 +53,13 @@ struct CameraConfig {
   // back gate. See triggerMotionAlert in telegram.cpp.
   unsigned long alertCooldownMs = 30000;
 
+  // How long this camera can go without answering any SOAP request before
+  // it's flagged OFFLINE (and alerted on) - see checkCameraOnlineStatus in
+  // telegram.cpp. Per-camera because a camera on a flaky/slow link
+  // shouldn't be held to the same threshold as one on solid Ethernet-backed
+  // WiFi right next to the AP.
+  unsigned long offlineThresholdMs = 5UL * 60UL * 1000UL;
+
   // notes: free-text context for future-you - why a quirk flag is set the
   // way it is, what was tried. Shown in the web UI, never sent anywhere.
   String notes;
