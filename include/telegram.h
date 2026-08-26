@@ -4,11 +4,13 @@
 #include "camera.h"
 
 // Fetches cfg.snapshotBurstCount snapshot(s) from st.snapshotUri (default
-// 1; re-fetched fresh per shot, spaced apart - see BURST_SHOT_SPACING_MS in
-// telegram.cpp) and sends each, captioned "<camera name> - <UTC timestamp>"
-// (plus "(n/N)" once there's more than one), to every Telegram user (see
-// telegram_users.h) subscribed to this camera - subject to cfg's per-camera
-// alert cooldown. Safe to call on every motion event; it self-throttles.
+// 1; each shot is its own fresh fetch, back to back with no artificial
+// delay - the fetch and the Telegram upload each already take a real
+// amount of time) and sends each, captioned "<camera name> - <UTC
+// timestamp>" (plus "(n/N)" once there's more than one), to every Telegram
+// user (see telegram_users.h) subscribed to this camera - subject to
+// cfg's per-camera alert cooldown. Safe to call on every motion event; it
+// self-throttles.
 void triggerMotionAlert(const CameraConfig& cfg, CameraState& st);
 
 // Compares st.lastContactMs (updated on every SOAP response this camera

@@ -65,11 +65,12 @@ struct CameraConfig {
   String notes;
 
   // How many consecutive snapshots to fetch and send when motion fires -
-  // each one captioned with its own timestamp, plus a "(n/N)" suffix once
-  // there's more than one. Default 1 (today's single-snapshot behavior);
-  // raise it per-camera when you want enough context after the fact to see
-  // *why* an alert fired, at the cost of a slower, chattier alert (see
-  // BURST_SHOT_SPACING_MS in telegram.cpp for the delay between shots).
+  // each one its own fresh fetch (back to back, no artificial delay - the
+  // fetch and the Telegram upload already take real time), captioned with
+  // its own timestamp plus a "(n/N)" suffix once there's more than one.
+  // Default 1 (today's single-snapshot behavior); raise it per-camera when
+  // you want enough context after the fact to see *why* an alert fired, at
+  // the cost of a slower, chattier alert.
   unsigned int snapshotBurstCount = 1;
 };
 

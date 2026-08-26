@@ -382,7 +382,7 @@ static String renderCameraForm(const CameraConfig& v, bool isEdit) {
           "<input type=\"text\" name=\"offlineThresholdMin\" value=\"" + String(v.offlineThresholdMs / 60000UL) +
           "\"></label>";
   html += "<label>Snapshots per alert (1-10) - how many consecutive photos to send when motion "
-          "fires, half a second apart; raise it to see more of what led up to the alert"
+          "fires, each a fresh fetch from the camera; raise it to see more of what led up to the alert"
           "<input type=\"text\" name=\"snapshotBurstCount\" value=\"" + String(v.snapshotBurstCount) +
           "\"></label>";
   html += "<label>Notes<input type=\"text\" name=\"notes\" value=\"" + htmlEscape(v.notes) + "\"></label>";

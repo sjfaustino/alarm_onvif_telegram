@@ -16,8 +16,8 @@ Arduino-ESP32/IDF releases.
 - Sends a Telegram photo alert on motion/tamper events, per-camera cooldown to avoid
   spam, JPEG buffered once in PSRAM and resent to every Telegram user subscribed to
   that camera. Per-camera snapshot burst count (default 1, up to 10) sends that many
-  consecutive photos half a second apart instead of just one, for when a single frame
-  isn't enough to tell why an alert fired.
+  consecutive fresh-fetched photos instead of just one, for when a single frame isn't
+  enough to tell why an alert fired.
 - TLS to Telegram is certificate-pinned (not `setInsecure()`).
 - Per-camera quirks handled via config flags: WS-Security vs. HTTP Basic Auth,
   optional `InitialTerminationTime`/`ReplyTo` (needed by some Xiongmai-derived

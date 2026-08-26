@@ -339,12 +339,6 @@ static uint8_t* fetchOneSnapshot(const CameraConfig& cfg, CameraState& st, size_
   return jpg;
 }
 
-// Spacing between shots in a multi-shot burst (CameraConfig::snapshotBurstCount)
-// - long enough for the scene to visibly change between frames, short enough
-// that the whole burst still reflects "what was happening when the alarm
-// fired" rather than drifting into an unrelated later moment.
-static const unsigned long BURST_SHOT_SPACING_MS = 500;
-
 void triggerMotionAlert(const CameraConfig& cfg, CameraState& st) {
   if (!st.alertsEnabled) return; // muted via Telegram - see pollTelegramCommands
 
@@ -385,7 +379,9 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st) {
   // and its own fan-out to every recipient, same as the single-shot path
   // always did - re-fetching per recipient instead would hammer cameras
   // whose embedded HTTP stacks only tolerate 1-2 connections (see the
-  // boot-stagger comment in main.cpp).
+  // boot-stagger comment in main.cpp). No artificial delay between shots -
+  // the camera fetch and the Telegram upload each take a real amount of
+  // time on their own, which is already enough spacing between frames.
   for (unsigned int i = 0; i < shots; i++) {
     size_t jpgLen = 0;
     uint8_t* jpg = fetchOneSnapshot(cfg, st, jpgLen);
@@ -400,8 +396,6 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st) {
       }
     }
     free(jpg);
-
-    if (i + 1 < shots) delay(BURST_SHOT_SPACING_MS);
   }
 }
 
