@@ -38,3 +38,19 @@ jobs:
 
       - name: Build (${{ matrix.env }})
         run: pio run -e ${{ matrix.env }}
+
+      - name: Upload firmware artifact
+        # firmware.bin is the plain app image - upload it via the running
+        # board's own Firmware dashboard page (OTA, no USB needed).
+        # firmware.factory.bin is the merged bootloader+partitions+app
+        # image for a from-scratch flash (`esptool write_flash`) onto a
+        # blank board. if-no-files-found:error catches a future PlatformIO/
+        # path change that would otherwise silently upload an empty artifact.
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{ matrix.env }}
+          path: |
+            .pio/build/${{ matrix.env }}/firmware.bin
+            .pio/build/${{ matrix.env }}/firmware.factory.bin
+          if-no-files-found: error
+          retention-days: 30

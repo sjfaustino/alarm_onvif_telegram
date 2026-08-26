@@ -97,7 +97,12 @@ practice; a single-core PSRAM chip is untested.
    pio run -e esp32s3 -t upload
    pio device monitor -b 115200
    ```
-   `default_envs` in `platformio.ini` already picks `esp32s3` if you omit `-e`.
+   `default_envs` in `platformio.ini` already picks `esp32s3` if you omit `-e`. Every
+   push/PR also builds in CI ([.github/workflows/build.yml](.github/workflows/build.yml))
+   and uploads the result as a `firmware-esp32s3` artifact - `firmware.bin` for the
+   dashboard's Firmware/OTA page, `firmware.factory.bin` (bootloader+partitions+app
+   merged) for a from-scratch `esptool write_flash` onto a blank board - so a ready-to-
+   flash build is available from any green run without a local toolchain.
 
 5. **Open the dashboard** at `http://<board's IP>/` (printed in the boot log and the
    Telegram boot message). The sidebar has five sections:
