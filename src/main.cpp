@@ -60,6 +60,21 @@ static String buildCameraListMessage() {
 
 static const unsigned long WIFI_CONNECT_TIMEOUT_MS = 30000UL;
 
+// Extra idle time between reconnect attempts once WiFi has been down for a
+// while - on top of connectWiFi()'s own up to ~60s (30s primary + 30s
+// backup) per attempt, not a replacement for it. Doubles on each
+// consecutive failure up to WIFI_RETRY_BACKOFF_MAX_MS, and resets to 0 the
+// moment a reconnect succeeds. Without this, loop() retried both networks
+// back-to-back forever at a fixed ~61s cadence for the entire length of an
+// outage - harmless for a few minutes, but needlessly persistent (and, on
+// some networks, the kind of steady repeated-auth-attempt pattern that can
+// trigger a router's own lockout) over an outage lasting hours.
+static const unsigned long WIFI_RETRY_BACKOFF_START_MS = 10000UL;  // extra wait after the 1st consecutive failure
+static const unsigned long WIFI_RETRY_BACKOFF_MAX_MS   = 300000UL; // cap: 5 minutes between attempts
+static uint8_t g_wifiFailureStreak = 0;
+static unsigned long g_wifiRetryDelayMs = 0;
+static unsigned long g_wifiRetryDueMs = 0; // millis() timestamp; next connectWiFi() attempt is due once reached
+
 // TWDT timeout for the Arduino loop() task - see initWatchdog()'s comment
 // for why this only watches loop(), not the per-camera tasks. Sized to
 // comfortably outlast the longest legitimate stretch loop() can go without
@@ -395,14 +410,27 @@ void loop() {
   // loop() (the Arduino "loopTask") is now solely responsible for WiFi
   // connect/reconnect - camera tasks only ever read WiFi.status(), never
   // call WiFi.begin(), so there's no race over WiFi state between tasks.
-  if (WiFi.status() != WL_CONNECTED) {
+  // See WIFI_RETRY_BACKOFF_START_MS's comment for why this waits for
+  // g_wifiRetryDueMs instead of retrying every single iteration.
+  if (WiFi.status() != WL_CONNECTED && (long)(millis() - g_wifiRetryDueMs) >= 0) {
     Serial.println("\nWiFi disconnected.");
     connectWiFi();
     if (WiFi.status() == WL_CONNECTED) {
+      g_wifiFailureStreak = 0;
+      g_wifiRetryDelayMs = 0;
       // First successful connection ever (WiFi wasn't up yet at boot) -
       // run the full deferred startup instead of just resyncing the clock.
       if (!g_monitoringStarted) startMonitoring();
       else setupTime();
+    } else {
+      g_wifiRetryDelayMs = (g_wifiFailureStreak == 0)
+          ? WIFI_RETRY_BACKOFF_START_MS
+          : (g_wifiRetryDelayMs * 2UL < WIFI_RETRY_BACKOFF_MAX_MS ? g_wifiRetryDelayMs * 2UL
+                                                                    : WIFI_RETRY_BACKOFF_MAX_MS);
+      g_wifiFailureStreak++;
+      g_wifiRetryDueMs = millis() + g_wifiRetryDelayMs;
+      Serial.printf("WiFi still down after %u consecutive attempt(s) - next attempt in %lus.\n",
+                    (unsigned)g_wifiFailureStreak, g_wifiRetryDelayMs / 1000UL);
     }
   }
 
