@@ -22,13 +22,22 @@ bool resolveCameraCredentials(const CameraConfig& cfg, CameraState& st) {
 // Auth instead, for cameras/stacks that expect that. Credentials come from
 // st.user/st.pass (resolved by name via resolveCameraCredentials at task
 // startup), not from CameraConfig.
-static String cameraSoapCall(const CameraConfig& cfg, const CameraState& st, const String& url,
+//
+// Every SOAP call this camera ever makes funnels through here, so this is
+// also where st.lastContactMs gets updated - a non-empty response (even a
+// SOAP fault) means the camera's HTTP/ONVIF stack answered the network
+// request, which is the signal checkCameraOnlineStatus (telegram.cpp) uses
+// to tell a genuinely offline camera from one that's just failing a
+// specific call.
+static String cameraSoapCall(const CameraConfig& cfg, CameraState& st, const String& url,
                               const String& to, const String& action, const String& body) {
   String xml = soapEnvelope(action, body, to, st.user, st.pass,
                              cfg.includeReplyToAnonymous, cfg.useWSSecurity);
   const char* basicUser = cfg.useWSSecurity ? nullptr : st.user;
   const char* basicPass = cfg.useWSSecurity ? nullptr : st.pass;
-  return soapPost(cfg.name.c_str(), url, action, xml, basicUser, basicPass);
+  String response = soapPost(cfg.name.c_str(), url, action, xml, basicUser, basicPass);
+  if (response.length() > 0) st.lastContactMs = millis();
+  return response;
 }
 
 bool cameraDiscoverServices(const CameraConfig& cfg, CameraState& st) {
@@ -443,6 +452,8 @@ void cameraTaskFn(void* pvParameters) {
         cameraRenewSubscription(cfg, st);
       }
     }
+
+    checkCameraOnlineStatus(cfg, st);
 
     vTaskDelay(pdMS_TO_TICKS(10));
   }

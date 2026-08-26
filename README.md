@@ -22,6 +22,10 @@ Arduino-ESP32/IDF releases.
   stacks), snapshot URI override, and preferred video profile.
 - Periodic Telegram heartbeat (uptime, free heap, per-camera subscription status)
   so a silently hung or endlessly-retrying board doesn't go unnoticed.
+- Offline camera detection: if a camera goes 2 minutes (`OFFLINE_THRESHOLD_MS`)
+  without answering *any* SOAP request, it's flagged OFFLINE and an immediate
+  Telegram alert goes out (and another when it recovers) - independent of the
+  6-hour heartbeat, and shown live on the Cameras dashboard page.
 - Cameras and Telegram recipients are managed at runtime through a built-in
   sidebar dashboard ([hoeken/PsychicHttp](https://github.com/hoeken/PsychicHttp))
   and persisted in NVS - no more editing and reflashing `config.h`/`secrets.h` to

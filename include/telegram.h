@@ -9,6 +9,14 @@
 // alert cooldown. Safe to call on every motion event; it self-throttles.
 void triggerMotionAlert(const CameraConfig& cfg, CameraState& st);
 
+// Compares st.lastContactMs (updated on every SOAP response this camera
+// sends back - see cameraSoapCall in camera.cpp) against OFFLINE_THRESHOLD_MS
+// and, only on a state transition, broadcasts an OFFLINE or back-ONLINE
+// notice via sendTelegramMessage. Cheap enough to call on every iteration
+// of cameraTaskFn's loop - it only does anything (and only logs/sends) when
+// st.isOffline actually flips.
+void checkCameraOnlineStatus(const CameraConfig& cfg, CameraState& st);
+
 // Sends a plain text message (no photo attached) to every Telegram user
 // with systemMessages enabled - used for the boot-time "camera monitor is
 // online" notice and the periodic heartbeat, but generic enough for any

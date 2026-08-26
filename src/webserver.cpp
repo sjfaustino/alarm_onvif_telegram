@@ -218,6 +218,7 @@ static String renderCamerasPanel() {
     if (idx >= 0 && g_liveStates && idx < (int)g_liveStates->size()) {
       CameraState& st = (*g_liveStates)[idx];
       liveStatus = st.subscriptionActive ? "subscribed" : "not subscribed";
+      if (st.isOffline) liveStatus += " - OFFLINE";
       if (!st.alertsEnabled) liveStatus += " (alerts OFF)";
     } else if (!c.enabled) {
       liveStatus = "disabled";

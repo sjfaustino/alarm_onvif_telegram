@@ -146,6 +146,7 @@ static void sendHeartbeat() {
     if (!g_cameras[i].enabled) continue;
     msg += g_cameras[i].name + ": " +
            (g_cameraStates[i].subscriptionActive ? "subscribed" : "NOT subscribed") +
+           (g_cameraStates[i].isOffline ? " (OFFLINE)" : "") +
            (g_cameraStates[i].alertsEnabled ? "" : " (alerts OFF)") + "\n";
   }
   if (!sendTelegramMessage(msg)) {

@@ -25,6 +25,17 @@ struct CameraState {
   // triggerMotionAlert's Telegram send is suppressed.
   bool     alertsEnabled = true;
 
+  // Updated on every non-empty SOAP response this camera sends back (see
+  // cameraSoapCall in camera.cpp) - the "is this camera actually there"
+  // signal for checkCameraOnlineStatus (telegram.cpp), independent of
+  // whether a specific ONVIF call happens to be failing/faulting.
+  unsigned long lastContactMs = 0;
+
+  // Current known online/offline state, so checkCameraOnlineStatus only
+  // alerts on a transition (going offline, or recovering) rather than
+  // every time it checks.
+  bool     isOffline = false;
+
   // Copied once from cfg.user/cfg.pass by resolveCameraCredentials() at
   // task startup. Kept as const char* (rather than reading cfg.user/pass
   // directly everywhere) so every SOAP/snapshot call in camera.cpp and
