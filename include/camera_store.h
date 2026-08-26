@@ -46,6 +46,13 @@ struct CameraConfig {
   String user;
   String pass;
 
+  // Minimum time between Telegram alerts for this camera - a motion event
+  // that fires again before this elapses since the last alert is still
+  // detected/logged, just not re-sent. Per-camera because a camera pointed
+  // at a busy driveway wants a different cadence than one watching a quiet
+  // back gate. See triggerMotionAlert in telegram.cpp.
+  unsigned long alertCooldownMs = 30000;
+
   // notes: free-text context for future-you - why a quirk flag is set the
   // way it is, what was tried. Shown in the web UI, never sent anywhere.
   String notes;

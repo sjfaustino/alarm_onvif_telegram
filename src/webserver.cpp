@@ -3,6 +3,7 @@
 #include "network_store.h"
 #include <PsychicHttp.h>
 #include <WiFi.h>
+#include <cctype>
 
 static PsychicHttpServer server;
 static std::vector<CameraConfig>* g_liveCameras = nullptr;
@@ -119,6 +120,7 @@ static String renderNetworkPanel() {
   html += "<tr><th>IP address</th><td>" + WiFi.localIP().toString() + "</td></tr>";
   html += "<tr><th>MAC address</th><td>" + WiFi.macAddress() + "</td></tr>";
   html += "<tr><th>Signal (RSSI)</th><td>" + String(WiFi.RSSI()) + " dBm</td></tr>";
+  html += "<tr><th>mDNS address</th><td>http://" + htmlEscape(creds.hostname) + ".local/</td></tr>";
   html += "<tr><th>Uptime</th><td>" + formatUptime(millis()) + "</td></tr>";
   html += "</table>";
 
@@ -126,12 +128,28 @@ static String renderNetworkPanel() {
   html += "<label>SSID<input type=\"text\" name=\"ssid\" value=\"" + htmlEscape(creds.ssid) + "\" required></label>";
   html += "<label>Password (leave blank to keep the current password)"
           "<input type=\"password\" name=\"password\" placeholder=\"(unchanged)\"></label>";
+  html += "<label>Hostname - letters, digits, hyphens only, no spaces or dots "
+          "(reachable at http://&lt;hostname&gt;.local/)"
+          "<input type=\"text\" name=\"hostname\" value=\"" + htmlEscape(creds.hostname) + "\" required></label>";
   html += "<p><button type=\"submit\">Save</button></p></form></fieldset>";
 
   html += "<p class=\"hint\">Saving updates storage immediately, but only takes effect after "
           "the board reboots - a live change could drop it off the network with no way back to "
           "this page if the new credentials are wrong.</p>";
   return html;
+}
+
+// mDNS hostnames only support letters, digits, and hyphens - strip anything
+// else rather than rejecting the whole save, so a stray pasted space or dot
+// doesn't produce a hostname that silently fails to resolve.
+static String sanitizeHostname(const String& raw) {
+  String out;
+  out.reserve(raw.length());
+  for (size_t i = 0; i < raw.length(); i++) {
+    char c = raw[i];
+    if (isalnum((unsigned char)c) || c == '-') out += c;
+  }
+  return out;
 }
 
 static void handleSaveNetwork(PsychicRequest* request, String& banner) {
@@ -144,12 +162,15 @@ static void handleSaveNetwork(PsychicRequest* request, String& banner) {
   String password = request->getParam("password", "");
   if (password.length() > 0) creds.password = password;
 
+  String hostname = sanitizeHostname(request->getParam("hostname", ""));
+  if (hostname.length() > 0) creds.hostname = hostname;
+
   if (creds.ssid.length() == 0) {
     banner = "SSID is required - not saved.";
     return;
   }
   saveWifiCredentials(creds);
-  banner = "Saved - reboot the board to connect with the new WiFi credentials.";
+  banner = "Saved - reboot the board to apply the new WiFi credentials and/or hostname.";
 }
 
 // ============================================================
@@ -161,7 +182,7 @@ static String renderCamerasPanel() {
 
   String html = "<h1>Cameras</h1>";
   html += "<table><tr><th>Name</th><th>Device Service URL</th><th>Enabled</th>"
-          "<th>Live Status</th><th>Notes</th><th></th></tr>";
+          "<th>Cooldown</th><th>Live Status</th><th>Notes</th><th></th></tr>";
   for (auto& c : cams) {
     int idx = findLiveCameraIndex(c.name);
     String liveStatus;
@@ -176,7 +197,8 @@ static String renderCamerasPanel() {
     }
 
     html += "<tr><td>" + htmlEscape(c.name) + "</td><td>" + htmlEscape(c.deviceServiceUrl) +
-            "</td><td>" + (c.enabled ? "yes" : "no") + "</td><td>" + liveStatus + "</td><td>" +
+            "</td><td>" + (c.enabled ? "yes" : "no") + "</td><td>" +
+            String(c.alertCooldownMs / 1000) + "s</td><td>" + liveStatus + "</td><td>" +
             htmlEscape(c.notes) + "</td><td>";
     html += "<form class=\"inline\" method=\"POST\" action=\"/delete\" "
             "onsubmit=\"return confirm('Delete " + htmlEscape(c.name) + "?');\">";
@@ -202,6 +224,8 @@ static String renderCamerasPanel() {
           "<input type=\"text\" name=\"snapshotUriOverride\"></label>";
   html += "<label>Preferred profile keyword (optional, e.g. \"sub\")"
           "<input type=\"text\" name=\"preferredProfileKeyword\"></label>";
+  html += "<label>Alert cooldown, seconds (minimum time between Telegram alerts for this camera)"
+          "<input type=\"text\" name=\"alertCooldownSec\" value=\"30\"></label>";
   html += "<label>Notes<input type=\"text\" name=\"notes\"></label>";
   html += "<p><button type=\"submit\">Add camera</button></p></form></fieldset>";
 
@@ -224,6 +248,11 @@ static void handleAddCamera(PsychicRequest* request, String& banner) {
   c.pass                          = request->getParam("pass", "");
   c.notes                         = request->getParam("notes", "");
   c.name.trim();
+
+  long cooldownSec = request->getParam("alertCooldownSec", "30").toInt();
+  if (cooldownSec > 0) c.alertCooldownMs = (unsigned long)cooldownSec * 1000UL;
+  // else keep CameraConfig's 30000 default - a blank/zero/negative field
+  // shouldn't produce a 0ms cooldown (alerts on every single poll).
 
   if (c.name.length() == 0 || c.deviceServiceUrl.length() == 0) {
     banner = "Name and device service URL are required - camera not added.";

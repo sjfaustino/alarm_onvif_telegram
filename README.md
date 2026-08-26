@@ -81,13 +81,17 @@ practice; a single-core PSRAM chip is untested.
 
 5. **Open the dashboard** at `http://<board's IP>/` (printed in the boot log and the
    Telegram boot message). The sidebar has three sections:
-   - **Network** — connection status (SSID, IP, MAC, signal, uptime) and an editable
-     WiFi SSID/password. Saving writes to NVS immediately but only takes effect after
-     the next reboot - a live change could drop the board off the network with no way
-     back to this page if the new credentials are wrong.
-   - **Cameras** — add/delete/view. Fill in the device service URL, credentials, and
-     any per-camera quirk flags (the form documents what each one does). Adding or
-     deleting writes to NVS immediately but only takes effect after the next reboot.
+   - **Network** — connection status (SSID, IP, MAC, signal, uptime, mDNS address)
+     and an editable WiFi SSID/password/hostname. The hostname makes the dashboard
+     reachable at `http://<hostname>.local/` instead of the IP (default
+     `cameramonitor.local`). Saving writes to NVS immediately but only takes effect
+     after the next reboot - a live change could drop the board off the network with
+     no way back to this page if the new credentials are wrong.
+   - **Cameras** — add/delete/view. Fill in the device service URL, credentials,
+     alert cooldown (minimum seconds between Telegram alerts for that camera, default
+     30s), and any per-camera quirk flags (the form documents what each one does).
+     Adding or deleting writes to NVS immediately but only takes effect after the
+     next reboot.
    - **Telegram Users** — add/delete/view recipients. Each one picks specific
      cameras or "all cameras", and independently toggles heartbeat/boot messages and
      command permission. Takes effect immediately, no reboot needed.

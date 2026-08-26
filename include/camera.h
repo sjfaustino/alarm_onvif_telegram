@@ -16,7 +16,7 @@ struct CameraState {
   uint32_t lastAlert      = 0;
   bool     hasAlerted     = false; // lastAlert==0 is indistinguishable from "alerted at boot" - this
                                     // disambiguates so the cooldown doesn't swallow an alert that fires
-                                    // within the first ALERT_COOLDOWN_MS of boot (see triggerMotionAlert)
+                                    // within the first alertCooldownMs of boot (see triggerMotionAlert)
 
   // Runtime mute, toggled via Telegram (/on, /off <camera name>) and persisted
   // across reboots in NVS - see loadAlertEnabledPref/pollTelegramCommands in

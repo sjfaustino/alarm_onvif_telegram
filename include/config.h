@@ -20,7 +20,6 @@ static const unsigned long PULL_INTERVAL_MS         = 2000UL;        // per-came
 static const unsigned long SUBSCRIPTION_LIFETIME_MS = 4UL * 60UL * 1000UL;
 static const unsigned long RENEW_MARGIN_MS          = 60UL * 1000UL;
 static const unsigned long RETRY_INTERVAL_MS        = 10000UL;
-static const uint32_t      ALERT_COOLDOWN_MS        = 15000UL;       // per-camera cooldown
 static const uint16_t      HTTP_TIMEOUT_MS          = 10000;
 static const unsigned long HEARTBEAT_INTERVAL_MS    = 6UL * 60UL * 60UL * 1000UL; // liveness ping cadence
 static const unsigned long TELEGRAM_COMMAND_POLL_MS = 5000UL;        // /on, /off, /status polling cadence

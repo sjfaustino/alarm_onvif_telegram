@@ -304,7 +304,7 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st) {
   if (!st.alertsEnabled) return; // muted via Telegram - see pollTelegramCommands
 
   uint32_t nowMs = millis();
-  if (st.hasAlerted && nowMs - st.lastAlert < ALERT_COOLDOWN_MS) return; // cooling down
+  if (st.hasAlerted && nowMs - st.lastAlert < cfg.alertCooldownMs) return; // cooling down
   st.lastAlert = nowMs;
   st.hasAlerted = true;
 

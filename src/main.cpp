@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <WiFi.h>
+#include <ESPmDNS.h>
 #include <esp_heap_caps.h>
 #include "config.h"
 #include "camera.h"
@@ -183,6 +184,14 @@ void setup() {
   connectWiFi();
   if (WiFi.status() != WL_CONNECTED) return;
   setupTime();
+
+  if (MDNS.begin(g_wifiCredentials.hostname.c_str())) {
+    MDNS.addService("http", "tcp", 80);
+    Serial.printf("mDNS: reachable at http://%s.local/\n", g_wifiCredentials.hostname.c_str());
+  } else {
+    Serial.println("WARNING: mDNS.begin() failed - the .local hostname won't resolve; "
+                    "the IP address still works.");
+  }
 
   startWebServer(&g_cameras, &g_cameraStates);
   Serial.printf("Web UI: http://%s/\n", WiFi.localIP().toString().c_str());
