@@ -2,6 +2,7 @@
 #include <WiFi.h>
 #include <ESPmDNS.h>
 #include <esp_heap_caps.h>
+#include <esp_sntp.h>
 #include "config.h"
 #include "camera.h"
 #include "camera_store.h"
@@ -135,8 +136,14 @@ static void connectWiFi() {
 }
 
 static void setupTime() {
-  Serial.println("Synchronizing UTC time...");
-  configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+  Serial.printf("Synchronizing UTC time from %s...\n", g_wifiCredentials.ntpServer.c_str());
+  configTime(0, 0, g_wifiCredentials.ntpServer.c_str());
+  // Must come after configTime() (which does the actual esp_sntp_init())
+  // rather than before - adjusts the interval used for every resync after
+  // this first one. No port setting exists here on purpose - ESP32's SNTP
+  // client hardcodes the standard NTP UDP port 123.
+  esp_sntp_set_sync_interval(g_wifiCredentials.ntpSyncIntervalMs);
+
   struct tm timeinfo;
   for (int i = 0; i < 20; i++) {
     if (getLocalTime(&timeinfo, 1000)) {

@@ -94,7 +94,10 @@ practice; a single-core PSRAM chip is untested.
      actually works first. Also a DHCP/Static IP toggle - Static shows editable IP
      address/subnet mask/gateway/DNS fields (applies to whichever of primary/backup
      ends up connecting); DHCP shows the board's current live-obtained settings,
-     grayed out. Saving writes to NVS immediately but only takes effect after the
+     grayed out. Also an editable NTP server + resync interval (default `pool.ntp.org`,
+     1 hour) - no port field, since ESP32's SNTP client hardcodes the standard UDP
+     port 123 and can't be pointed at a custom one. Saving writes to NVS immediately
+     but only takes effect after the
      next reboot - a live change could drop the board off the network with
      no way back to this page if the new credentials are wrong.
    - **Cameras** — add/delete/view. Fill in the device service URL, credentials,

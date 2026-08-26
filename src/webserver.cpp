@@ -181,6 +181,12 @@ static String renderNetworkPanel() {
           "applyIpMode();";
   html += "</script>";
 
+  html += "<label style=\"margin-top:20px;\">NTP server (always uses UDP port 123 - not configurable "
+          "on this platform)<input type=\"text\" name=\"ntpServer\" value=\"" +
+          htmlEscape(creds.ntpServer) + "\" required></label>";
+  html += "<label>Resync interval, minutes<input type=\"text\" name=\"ntpSyncMinutes\" value=\"" +
+          String(creds.ntpSyncIntervalMs / 60000UL) + "\"></label>";
+
   html += "<p><button type=\"submit\">Save</button></p></form></fieldset>";
 
   html += "<p class=\"hint\">Saving updates storage immediately, but only takes effect after "
@@ -260,6 +266,15 @@ static void handleSaveNetwork(PsychicRequest* request, String& banner) {
     creds.staticGateway = gateway;
     creds.staticDNS = dns;
   }
+
+  String ntpServer = request->getParam("ntpServer", "");
+  ntpServer.trim();
+  if (ntpServer.length() > 0) creds.ntpServer = ntpServer;
+
+  long ntpMinutes = request->getParam("ntpSyncMinutes", "60").toInt();
+  if (ntpMinutes > 0) creds.ntpSyncIntervalMs = (unsigned long)ntpMinutes * 60000UL;
+  // else keep whatever was already stored - a blank/zero/negative field
+  // shouldn't produce a 0ms (hammer-the-server) resync interval.
 
   saveWifiCredentials(creds);
   banner = "Saved - reboot the board to apply the new network configuration.";

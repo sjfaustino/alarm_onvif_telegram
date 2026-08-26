@@ -39,13 +39,22 @@ struct WifiCredentials {
   String staticSubnet;
   String staticGateway;
   String staticDNS;
+
+  // NTP server + resync interval, applied in main.cpp's setupTime() via
+  // configTime()/esp_sntp_set_sync_interval(). No port field - ESP32's
+  // SNTP client (Arduino's configTime() and the underlying lwIP SNTP
+  // implementation) hardcodes the standard NTP UDP port 123; there's no
+  // supported way to point it at a different port.
+  String ntpServer;
+  unsigned long ntpSyncIntervalMs = 3600000UL; // 1 hour, matches ESP-IDF's own default
 };
 
-// Loads WiFi credentials + hostname from NVS. On the very first boot after
-// upgrading to this (nothing in NVS yet), seeds primary ssid/password from
-// secrets.h's WIFI_SSID/WIFI_PASSWORD so the board keeps connecting exactly
-// as before until changed via the web UI, leaves backup unconfigured, and
-// defaults hostname to "cameramonitor".
+// Loads WiFi credentials + hostname + NTP config from NVS. On the very
+// first boot after upgrading to this (nothing in NVS yet), seeds primary
+// ssid/password from secrets.h's WIFI_SSID/WIFI_PASSWORD so the board keeps
+// connecting exactly as before until changed via the web UI, leaves backup
+// unconfigured, defaults hostname to "cameramonitor", and defaults
+// ntpServer to "pool.ntp.org" with a 1-hour resync interval.
 WifiCredentials loadWifiCredentials();
 
 // Overwrites the persisted WiFi credentials + hostname. Pass the existing
