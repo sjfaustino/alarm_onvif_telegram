@@ -126,9 +126,9 @@ practice; a single-core PSRAM chip is untested.
      it hasn't yet). Fill in the device service URL, credentials, alert cooldown
      (minimum seconds between Telegram alerts for that camera, default 30s), offline
      threshold (minutes without a response before it's flagged OFFLINE, default 5),
-     snapshots per alert (1-10, default 1 - that many consecutive photos sent half a
-     second apart instead of just one, for extra context on why an alert fired), and
-     any per-camera quirk flags (the form documents what each one does). A Test
+     snapshots per alert (1-10, default 1 - that many consecutive fresh-fetched photos
+     instead of just one, for extra context on why an alert fired), and any per-camera
+     quirk flags (the form documents what each one does). A Test
      Connection button runs a live check against whatever's currently in the form
      (GetCapabilities, event service, snapshot URI) without saving anything, so a
      wrong URL/credential shows up before you commit to a reboot. Editing an existing
