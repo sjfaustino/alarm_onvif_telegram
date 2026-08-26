@@ -200,10 +200,15 @@ static const CameraConfig CAMERAS[] = {
                              // already-expired subscription, which is what the empty-reason fault actually was.
                              // Requesting PT5M explicitly (see cameraCreatePullPoint in camera.cpp) should fix it.
 
-    // Confirmed working direct snapshot URL (Reolink's own api.cgi, not the
-    // ONVIF GetSnapshotUri flow) - used in preference to untested ONVIF
-    // snapshot resolution for this camera. No credentials needed in the URL.
-    "http://192.168.8.104:80/cgi-bin/api.cgi?cmd=onvifSnapPic&channel=0",
+    // cmd=onvifSnapPic (no credentials) challenges with HTTP Digest, which
+    // this camera then rejects our computed response for - unresolved. cmd=Snap
+    // instead takes credentials as plain query params and is confirmed working
+    // (tested in an incognito window, so not relying on a cached browser
+    // login). {USER}/{PASS} substituted from st.user/st.pass (secrets.h) at
+    // runtime - see D04-Pavilhao's comment above for why. width/height cap the
+    // resolution - full-res was close to 2000x1920, unnecessarily large for a
+    // Telegram alert photo.
+    "http://192.168.8.104:80/cgi-bin/api.cgi?cmd=Snap&channel=0&user={USER}&password={PASS}&width=800&height=600",
     nullptr                 // untested - set once GetProfiles shows what profiles this camera exposes
   },
   {

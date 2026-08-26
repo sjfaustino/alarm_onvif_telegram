@@ -370,11 +370,17 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st) {
 
   if (psramAvailable) {
     // Plenty of headroom on this board - buffer the whole snapshot in
-    // PSRAM (regardless of whether Content-Length was even reported) and
-    // send it in one shot. No fragmentation concern at this pool size, so
-    // the chunked-streaming path below isn't needed here.
+    // PSRAM and send it in one shot. No fragmentation concern at this pool
+    // size, so the chunked-streaming path below isn't needed here.
+    // Read exactly `len` bytes when the camera reports Content-Length, so
+    // readSomeBytes stops as soon as the file is fully read instead of
+    // reading toward the full SNAPSHOT_MAX_BYTES_PSRAM cap and then eating
+    // its 5s stall-timeout on a keep-alive connection that has no more data
+    // to send - that stall was slow enough to make the following Telegram
+    // send fail outright on at least one camera (Reolink cgi-bin).
+    size_t cap = (len > 0) ? (size_t)len : SNAPSHOT_MAX_BYTES_PSRAM;
     size_t jpgLen = 0;
-    uint8_t* jpg = fetchSnapshotBuffered(http, jpgLen, SNAPSHOT_MAX_BYTES_PSRAM);
+    uint8_t* jpg = fetchSnapshotBuffered(http, jpgLen, cap);
     if (jpg) {
       ok = sendTelegramPhotoBuffered(jpg, jpgLen, caption);
       free(jpg);
