@@ -1,6 +1,7 @@
 #include "webserver.h"
 #include "telegram_users.h"
 #include "network_store.h"
+#include "auth_store.h"
 #include <PsychicHttp.h>
 #include <WiFi.h>
 #include <cctype>
@@ -11,6 +12,16 @@
 static PsychicHttpServer server;
 static std::vector<CameraConfig>* g_liveCameras = nullptr;
 static std::vector<CameraState>*  g_liveStates  = nullptr;
+
+// Global middleware, applied to every request in startWebServer() below -
+// AuthenticationMiddleware::run() only actually requires a login once both
+// setUsername() and setPassword() have been given non-empty values (see
+// PsychicHttp's PsychicMiddlewares.cpp), so leaving it unconfigured is what
+// makes the board boot with no login required. renderSecurityPanel's save
+// handler updates it live via setUsername()/setPassword() the moment a
+// password is set or changed, so that takes effect on the very next
+// request - no reboot needed.
+static AuthenticationMiddleware g_authMiddleware;
 
 static String formatUptime(unsigned long ms) {
   unsigned long totalSec = ms / 1000UL;
@@ -76,7 +87,7 @@ static String formatElapsedSince(unsigned long ms) {
 // justify.
 // ============================================================
 
-enum class Tab { None, Network, Cameras, Users, Firmware };
+enum class Tab { None, Network, Cameras, Users, Firmware, Security };
 
 static String renderShell(Tab active, const String& banner, const String& contentHtml) {
   String html;
@@ -104,6 +115,7 @@ static String renderShell(Tab active, const String& banner, const String& conten
   html += ".camera-list{border:1px solid #ddd;padding:8px;max-height:180px;overflow-y:auto;margin-top:2px;}";
   html += ".camera-list label{margin-top:2px;}";
   html += ".banner{background:#fffae0;border:1px solid #e0d080;padding:8px 12px;margin-bottom:16px;}";
+  html += ".banner-warn{background:#fde2e1;border:1px solid #e08080;padding:8px 12px;margin-bottom:16px;}";
   html += ".hint{color:#666;font-size:13px;}";
   html += "</style></head><body>";
 
@@ -120,9 +132,18 @@ static String renderShell(Tab active, const String& banner, const String& conten
   html += "<a href=\"/firmware\" class=\"";
   html += (active == Tab::Firmware) ? "active" : "";
   html += "\">Firmware</a>";
+  html += "<a href=\"/security\" class=\"";
+  html += (active == Tab::Security) ? "active" : "";
+  html += "\">Security</a>";
   html += "</nav>";
 
   html += "<main class=\"content\">";
+  DashboardAuth currentAuth = loadDashboardAuth();
+  if (currentAuth.username.length() == 0 || currentAuth.password.length() == 0) {
+    html += "<div class=\"banner-warn\">No dashboard password is set - anyone on your LAN can view "
+            "and change everything here, including WiFi/camera credentials and the Firmware page. "
+            "<a href=\"/security\">Set one now</a>.</div>";
+  }
   if (banner.length() > 0) html += "<div class=\"banner\">" + banner + "</div>";
   html += contentHtml;
   html += "</main></body></html>";
@@ -707,9 +728,56 @@ static String renderFirmwarePanel() {
   return html;
 }
 
+// ============================================================
+// Security panel - dashboard login (HTTP Basic Auth). See auth_store.h and
+// g_authMiddleware's comment: empty username/password (the default) means
+// no login is required at all, which is how the board boots. Setting one
+// here takes effect on the very next request, no reboot needed.
+// ============================================================
+
+static String renderSecurityPanel() {
+  DashboardAuth auth = loadDashboardAuth();
+  bool configured = auth.username.length() > 0 && auth.password.length() > 0;
+
+  String html = "<h1>Security</h1>";
+  if (configured) {
+    html += "<p class=\"hint\">A dashboard login is set (username: " + htmlEscape(auth.username) +
+            "). Every page here, including this one and the Firmware upload, now requires it. "
+            "Changing it below takes effect on your very next request.</p>";
+  } else {
+    html += "<p class=\"hint\">No login is set - this dashboard, including the Firmware upload page, "
+            "is reachable by anyone on your LAN with no password. Set one below to require it on "
+            "every page from now on.</p>";
+  }
+
+  html += "<fieldset><legend>" + String(configured ? "Change" : "Set") + " dashboard login</legend>";
+  html += "<form method=\"POST\" action=\"/security/save\">";
+  html += "<label>Username<input type=\"text\" name=\"username\" value=\"" + htmlEscape(auth.username) +
+          "\" required></label>";
+  html += "<label>Password<input type=\"password\" name=\"password\" required></label>";
+  html += "<label>Confirm password<input type=\"password\" name=\"confirmPassword\" required></label>";
+  html += "<p><button type=\"submit\">Save</button></p></form></fieldset>";
+
+  html += "<p class=\"hint\">There's no recovery flow if this is lost - forgetting it means erasing "
+          "the board's NVS entirely (wiping cameras, WiFi, and Telegram users too, not just this) "
+          "to get back in. Keep it somewhere safe.</p>";
+  return html;
+}
+
 void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraState>* liveStates) {
   g_liveCameras = liveCameras;
   g_liveStates = liveStates;
+
+  DashboardAuth auth = loadDashboardAuth();
+  g_authMiddleware.setUsername(auth.username.c_str())
+      .setPassword(auth.password.c_str())
+      .setRealm("Camera Monitor")
+      .setAuthMethod(BASIC_AUTH);
+  // Applies to every route registered below, including the Firmware
+  // upload - AuthenticationMiddleware::run() is a no-op until both fields
+  // above are non-empty, which is what lets the board boot with no login
+  // required (see g_authMiddleware's declaration comment).
+  server.addMiddleware(&g_authMiddleware);
 
   server.on("/", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
     String landing = "<h1>Camera Monitor</h1><p class=\"hint\">Select a section from the left.</p>";
@@ -864,6 +932,32 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
     return result;
   });
   server.on("/firmware/update", HTTP_POST, otaHandler);
+
+  server.on("/security", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
+    return response->send(200, "text/html", renderShell(Tab::Security, "", renderSecurityPanel()).c_str());
+  });
+
+  server.on("/security/save", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
+    String username = request->getParam("username", "");
+    String password = request->getParam("password", "");
+    String confirmPassword = request->getParam("confirmPassword", "");
+    username.trim();
+
+    String banner;
+    if (username.length() == 0 || password.length() == 0) {
+      banner = "Username and password are both required.";
+    } else if (password != confirmPassword) {
+      banner = "Password and confirmation don't match - not saved.";
+    } else {
+      DashboardAuth newAuth;
+      newAuth.username = username;
+      newAuth.password = password;
+      saveDashboardAuth(newAuth);
+      g_authMiddleware.setUsername(newAuth.username.c_str()).setPassword(newAuth.password.c_str());
+      banner = "Saved - a login is now required on every page, starting now.";
+    }
+    return response->send(200, "text/html", renderShell(Tab::Security, banner, renderSecurityPanel()).c_str());
+  });
 
   server.begin();
   Serial.println("[WebServer] Camera management UI listening on port 80.");

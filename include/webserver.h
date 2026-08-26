@@ -4,17 +4,19 @@
 #include <vector>
 
 // Starts the dashboard web UI (Network / Cameras / Telegram Users /
-// Firmware) on port 80 (PsychicHttp, github.com/hoeken/PsychicHttp). Pass
-// pointers to main.cpp's live camera config/state vectors so the Cameras
+// Firmware / Security) on port 80 (PsychicHttp, github.com/hoeken/PsychicHttp).
+// Pass pointers to main.cpp's live camera config/state vectors so the Cameras
 // page can show current subscription/alert/last-alert status alongside the
 // persisted NVS config, and offer a Test Connection check (a live
 // GetCapabilities/GetEventProperties/GetSnapshotUri probe against whatever
 // is currently typed into the form) before anything is saved.
 //
-// No authentication - trusts the LAN, same as most consumer camera web UIs
-// left open on a home network. Don't forward this board's port 80 out to
-// the internet - that would also expose the Firmware page's unauthenticated
-// .bin upload.
+// No authentication until you set one on the Security page - the board
+// boots wide open (trusts the LAN, same as most consumer camera web UIs)
+// and nags about it with a banner on every page until a login is set, at
+// which point every route (including the Firmware page's .bin upload)
+// requires it - see auth_store.h and g_authMiddleware in webserver.cpp.
+// Don't forward this board's port 80 out to the internet regardless.
 //
 // Adding, editing, or deleting a camera writes to NVS immediately, but only
 // takes effect after a reboot - the live vectors passed in are read-only

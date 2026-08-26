@@ -44,6 +44,11 @@ Arduino-ESP32/IDF releases.
   they hear from (specific list or "all, including future ones"), whether they get
   the heartbeat/boot messages, and whether they're allowed to send `/on`, `/off`,
   `/status` commands (which apply per-camera and reply to whoever sent them).
+- Dashboard login is opt-in but boots disabled: the board comes up with no password
+  and a standing banner nagging you to set one, on every page, until you do. Once
+  set (Security page), HTTP Basic Auth is required on every dashboard route,
+  including the Firmware upload, and takes effect on your very next request - no
+  reboot needed.
 
 ## Hardware
 
@@ -93,7 +98,7 @@ practice; a single-core PSRAM chip is untested.
    `default_envs` in `platformio.ini` already picks `esp32s3` if you omit `-e`.
 
 5. **Open the dashboard** at `http://<board's IP>/` (printed in the boot log and the
-   Telegram boot message). The sidebar has four sections:
+   Telegram boot message). The sidebar has five sections:
    - **Network** — connection status (SSID, IP, MAC, signal, uptime, mDNS address)
      and editable primary/backup WiFi credentials plus hostname. The hostname makes
      the dashboard reachable at `http://<hostname>.local/` instead of the IP (default
@@ -129,10 +134,16 @@ practice; a single-core PSRAM chip is untested.
      partition and only reboots into it once the upload is complete and its
      checksum verifies; a failed or aborted upload leaves the running firmware
      untouched.
+   - **Security** — set or change the dashboard's HTTP Basic Auth username/
+     password. Empty (the default until you set one) means no login is required
+     at all - a red banner saying so shows on every page as a reminder. There's no
+     recovery flow if you forget it: getting back in means erasing the board's NVS
+     entirely, which also wipes cameras, WiFi, and Telegram users.
 
-   No login is required — anyone on your LAN who can reach the board's IP can view
-   and change this, including camera and WiFi credentials, and can flash arbitrary
-   firmware via the Firmware page. Don't forward port 80 to the internet.
+   No login is required until you set one on the Security page - until then, anyone
+   on your LAN who can reach the board's IP can view and change everything here,
+   including camera and WiFi credentials, and can flash arbitrary firmware via the
+   Firmware page. Don't forward port 80 to the internet either way.
 
 ## Project layout
 
@@ -142,7 +153,8 @@ include/
   camera_store.h    # CameraConfig struct + NVS load/save (add/delete/view backing)
   telegram_users.h  # TelegramUser struct + NVS load/save (recipients, per-user permissions)
   network_store.h    # WiFi credentials, NVS load/save (editable from the dashboard)
-  webserver.h       # sidebar dashboard - Network + Cameras + Telegram Users (PsychicHttp)
+  auth_store.h       # dashboard Basic Auth username/password, NVS load/save
+  webserver.h       # sidebar dashboard - Network/Cameras/Users/Firmware/Security (PsychicHttp)
   secrets.h.example # template for secrets.h (copy, fill in, gitignored)
   telegram_ca.h      # Telegram's root CA for TLS pinning (committed, not secret)
   camera.h, telegram.h, onvif_soap.h
@@ -152,6 +164,7 @@ src/
   camera_store.cpp   # NVS-backed camera list (load/save/add/delete, one-time seed)
   telegram_users.cpp # NVS-backed Telegram user list (load/save/add/delete, one-time seed)
   network_store.cpp  # NVS-backed WiFi credentials (load/save, one-time seed)
+  auth_store.cpp      # NVS-backed dashboard login (load/save)
   webserver.cpp      # dashboard HTML pages and form handlers
   telegram.cpp       # photo/message send paths, multi-recipient fan-out, remote commands
   onvif_soap.cpp     # SOAP envelope building, WS-Security digest, XML helpers
