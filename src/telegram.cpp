@@ -305,8 +305,6 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st) {
 
   uint32_t nowMs = millis();
   if (st.hasAlerted && nowMs - st.lastAlert < cfg.alertCooldownMs) return; // cooling down
-  st.lastAlert = nowMs;
-  st.hasAlerted = true;
 
   std::vector<String> recipients;
   for (auto& u : loadTelegramUsers()) {
@@ -321,6 +319,19 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st) {
     Serial.printf("[%s] No snapshot URI available - skipping Telegram send.\n", cfg.name.c_str());
     return;
   }
+
+  // Only past this point is a send actually attempted, so only past this
+  // point is the cooldown worth spending - marking it any earlier meant a
+  // camera with no subscribers, or one whose snapshot URI never resolved,
+  // silently "used up" every motion event's cooldown window doing nothing:
+  // the dashboard's Last Alert column would show a recent timestamp despite
+  // nothing ever being sent, and fixing the underlying config issue could
+  // still take a while to produce the next real alert. A failure past this
+  // point (HTTP GET, buffer fetch, Telegram send) still spends the
+  // cooldown, on purpose - that's what stops sustained motion from
+  // retry-storming a misbehaving camera every PULL_INTERVAL_MS.
+  st.lastAlert = nowMs;
+  st.hasAlerted = true;
 
   HTTPClient http;
   http.begin(st.snapshotUri);
