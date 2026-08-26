@@ -37,7 +37,7 @@ static String cameraSoapCall(const CameraConfig& cfg, const CameraState& st, con
                              cfg.includeReplyToAnonymous, cfg.useWSSecurity);
   const char* basicUser = cfg.useWSSecurity ? nullptr : st.user;
   const char* basicPass = cfg.useWSSecurity ? nullptr : st.pass;
-  return soapPost(url, action, xml, basicUser, basicPass);
+  return soapPost(cfg.name, url, action, xml, basicUser, basicPass);
 }
 
 bool cameraDiscoverServices(const CameraConfig& cfg, CameraState& st) {
@@ -150,7 +150,16 @@ bool cameraFetchProfileAndSnapshotUri(const CameraConfig& cfg, CameraState& st) 
 
   if (cfg.snapshotUriOverride != nullptr) {
     st.snapshotUri = cfg.snapshotUriOverride;
-    Serial.printf("[%s] Using configured snapshot override: %s\n", cfg.name, st.snapshotUri.c_str());
+    // {USER}/{PASS} let an override embed query-string auth (some Vstarcam
+    // firmwares want ?loginuse=...&loginpas=... instead of HTTP Basic Auth)
+    // without putting the actual credential in config.h, which is committed -
+    // st.user/st.pass come from secrets.h (gitignored) via
+    // resolveCameraCredentials, already resolved by the time this runs.
+    st.snapshotUri.replace("{USER}", st.user);
+    st.snapshotUri.replace("{PASS}", st.pass);
+    String logUri = cfg.snapshotUriOverride; // log the un-substituted form - avoids echoing st.pass to serial
+    logUri.replace("{PASS}", "***");
+    Serial.printf("[%s] Using configured snapshot override: %s\n", cfg.name, logUri.c_str());
     return true;
   }
 
@@ -245,13 +254,28 @@ bool cameraCreatePullPoint(const CameraConfig& cfg, CameraState& st) {
   return true;
 }
 
-static void printEventState(const CameraConfig& cfg, const String& xml) {
-  int p = xml.indexOf("Name=\"State\"");
-  if (p < 0) p = xml.indexOf("Name=\"state\"");
-  if (p < 0) return;
+// Scoped to the NotificationMessage block containing topicKeyword (from the
+// keyword's own position up to that block's closing tag, or end of string)
+// instead of searching the whole response from position 0 - otherwise, in a
+// batch with several topics, this would report whichever topic's
+// State/IsMotion happened to appear first in the XML, regardless of which
+// one this log line is actually about. Recognizes both Name="State" (e.g.
+// VideoSource/MotionAlarm) and Name="IsMotion" (CellMotionDetector/Motion) -
+// different ONVIF stacks name the boolean differently for the same kind of
+// event.
+static void printEventState(const CameraConfig& cfg, const String& xml, const String& topicKeyword) {
+  int topicPos = xml.indexOf(topicKeyword);
+  if (topicPos < 0) return;
+  int blockEnd = xml.indexOf("</wsnt:NotificationMessage>", topicPos);
+  if (blockEnd < 0) blockEnd = xml.length();
+
+  int p = xml.indexOf("Name=\"State\"", topicPos);
+  if (p < 0 || p >= blockEnd) p = xml.indexOf("Name=\"state\"", topicPos);
+  if (p < 0 || p >= blockEnd) p = xml.indexOf("Name=\"IsMotion\"", topicPos);
+  if (p < 0 || p >= blockEnd) return;
 
   int valuePos = xml.indexOf("Value=", p);
-  if (valuePos < 0) return;
+  if (valuePos < 0 || valuePos >= blockEnd) return;
   int start = valuePos + strlen("Value=");
   if (start >= (int)xml.length()) return;
   char quote = xml[start];
@@ -276,10 +300,10 @@ static void parseEvents(const CameraConfig& cfg, CameraState& st, const String& 
 
   if (!motionAlarm && !cellMotion && !signalLoss && !tamper) return;
 
-  if (motionAlarm) { Serial.printf("[%s] MOTION ALARM EVENT\n", cfg.name); printEventState(cfg, xml); }
-  if (cellMotion)  { Serial.printf("[%s] CELL MOTION EVENT\n", cfg.name);  printEventState(cfg, xml); }
-  if (signalLoss)  { Serial.printf("[%s] SIGNAL LOSS EVENT\n", cfg.name);  printEventState(cfg, xml); }
-  if (tamper)      { Serial.printf("[%s] TAMPER EVENT\n", cfg.name);       printEventState(cfg, xml); }
+  if (motionAlarm) { Serial.printf("[%s] MOTION ALARM EVENT\n", cfg.name); printEventState(cfg, xml, "MotionAlarm"); }
+  if (cellMotion)  { Serial.printf("[%s] CELL MOTION EVENT\n", cfg.name);  printEventState(cfg, xml, "CellMotionDetector"); }
+  if (signalLoss)  { Serial.printf("[%s] SIGNAL LOSS EVENT\n", cfg.name);  printEventState(cfg, xml, "SignalLoss"); }
+  if (tamper)      { Serial.printf("[%s] TAMPER EVENT\n", cfg.name);       printEventState(cfg, xml, "TamperDetector"); }
 
   // Same simplification as the original: doesn't distinguish which topic was
   // true if several arrive in the same batch. Fine for a hobby alert bot;

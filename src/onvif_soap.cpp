@@ -161,7 +161,7 @@ static String shortAction(const String& action) {
   return (lastSlash >= 0) ? action.substring(lastSlash + 1) : action;
 }
 
-String soapPost(const String& url, const String& action, const String& xml,
+String soapPost(const char* cameraName, const String& url, const String& action, const String& xml,
                 const char* basicAuthUser, const char* basicAuthPass) {
   if (VERBOSE_SOAP_LOG) {
     Serial.println("\n---- SOAP POST ----");
@@ -189,8 +189,8 @@ String soapPost(const String& url, const String& action, const String& xml,
   String response = (code > 0) ? http.getString() : "";
   bool isFault = responseHasFault(response);
 
-  Serial.printf("[SOAP] %-30s HTTP=%-4d len=%-5u%s\n",
-                shortAction(action).c_str(), code, (unsigned)response.length(),
+  Serial.printf("[%s] [SOAP] %-30s HTTP=%-4d len=%-5u%s\n",
+                cameraName, shortAction(action).c_str(), code, (unsigned)response.length(),
                 isFault ? "  <-- FAULT" : "");
 
   // Negative codes never reach a server at all (TCP/DNS/timeout-level

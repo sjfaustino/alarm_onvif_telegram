@@ -13,6 +13,16 @@ struct CameraState {
   unsigned long lastRenew = 0;
   unsigned long lastRetry = 0;
   uint32_t lastAlert      = 0;
+  bool     hasAlerted     = false; // lastAlert==0 is indistinguishable from "alerted at boot" - this
+                                    // disambiguates so the cooldown doesn't swallow an alert that fires
+                                    // within the first ALERT_COOLDOWN_MS of boot (see triggerMotionAlert)
+
+  // Runtime mute, toggled via Telegram (/on, /off <camera name>) and persisted
+  // across reboots in NVS - see loadAlertEnabledPref/pollTelegramCommands in
+  // telegram.h. Independent of CameraConfig::enabled: this camera keeps
+  // polling ONVIF and its subscription stays alive while muted, only
+  // triggerMotionAlert's Telegram send is suppressed.
+  bool     alertsEnabled = true;
 
   // Resolved once by resolveCameraCredentials() at task startup - looked up
   // by cfg.name against CAMERA_SECRETS in secrets.h, NOT by array position.

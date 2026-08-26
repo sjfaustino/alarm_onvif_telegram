@@ -7,6 +7,7 @@
 
 static CameraState cameraStates[NUM_CAMERAS];
 static unsigned long lastHeartbeatMs = 0;
+static unsigned long lastCommandPollMs = 0;
 
 // Extracts "host[:port]" out of a URL like "http://192.168.1.178:8899/onvif/..."
 // for the startup camera listing - config.h only stores the full service URL,
@@ -109,7 +110,8 @@ static void sendHeartbeat() {
   for (size_t i = 0; i < NUM_CAMERAS; i++) {
     if (!CAMERAS[i].enabled) continue;
     msg += String(CAMERAS[i].name) + ": " +
-           (cameraStates[i].subscriptionActive ? "subscribed" : "NOT subscribed") + "\n";
+           (cameraStates[i].subscriptionActive ? "subscribed" : "NOT subscribed") +
+           (cameraStates[i].alertsEnabled ? "" : " (alerts OFF)") + "\n";
   }
   if (!sendTelegramMessage(msg)) {
     Serial.println("Heartbeat: Telegram send failed.");
@@ -170,6 +172,7 @@ void setup() {
       Serial.printf("[%s] Disabled - no task created.\n", CAMERAS[i].name);
       continue;
     }
+    cameraStates[i].alertsEnabled = loadAlertEnabledPref(i); // restore any /on or /off from before a reboot
     CameraTaskContext* ctx = new CameraTaskContext{&CAMERAS[i], &cameraStates[i]};
     char taskName[16];
     snprintf(taskName, sizeof(taskName), "cam%u", (unsigned)i);
@@ -213,6 +216,11 @@ void loop() {
   if (WiFi.status() == WL_CONNECTED && millis() - lastHeartbeatMs >= HEARTBEAT_INTERVAL_MS) {
     lastHeartbeatMs = millis();
     sendHeartbeat();
+  }
+
+  if (WiFi.status() == WL_CONNECTED && millis() - lastCommandPollMs >= TELEGRAM_COMMAND_POLL_MS) {
+    lastCommandPollMs = millis();
+    pollTelegramCommands(CAMERAS, cameraStates, NUM_CAMERAS);
   }
 
   delay(1000);

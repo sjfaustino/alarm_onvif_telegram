@@ -16,6 +16,7 @@ static const unsigned long RETRY_INTERVAL_MS        = 10000UL;
 static const uint32_t      ALERT_COOLDOWN_MS        = 15000UL;       // per-camera cooldown
 static const uint16_t      HTTP_TIMEOUT_MS          = 10000;
 static const unsigned long HEARTBEAT_INTERVAL_MS    = 6UL * 60UL * 60UL * 1000UL; // liveness ping cadence
+static const unsigned long TELEGRAM_COMMAND_POLL_MS = 5000UL;        // /on, /off, /status polling cadence
 static const size_t        SNAPSHOT_MAX_BYTES       = 100000;        // internal-RAM buffer cap (no-PSRAM boards)
 static const size_t        SNAPSHOT_MAX_BYTES_PSRAM = 2000000UL;     // PSRAM buffer cap - generous; real snapshots are far smaller
 static const bool          VERBOSE_SOAP_LOG         = false;         // flip true to debug one camera at a time
@@ -109,10 +110,15 @@ static const CameraConfig CAMERAS[] = {
   {
     "D01-FDir",
     "http://192.168.8.224/onvif/device_service",
-    true,                    // enabled
+    false,                    // enabled
     true,                    // standards-compliant default - GetProfiles/Capabilities/Properties all work with this
     false, false,            // CreatePullPointSubscription-only NotAuthorized -> same fix as the XM530
-    nullptr,                // no known-broken snapshot URI yet -> try standard GetSnapshotUri first
+    // On the NVR (Smar H265) this camera shows up as NETIP on port 34567,
+    // not ONVIF - its NVR-facing protocol is the proprietary Dahua/Xiongmai
+    // DVRIP stack, separate from the ONVIF service this board talks to
+    // directly on port 80. GetSnapshotUri's ONVIF response wasn't trusted
+    // as a result; confirmed working direct snapshot URL used instead.
+    "http://192.168.8.224/cgi-bin/snapshot.cgi",
     "sub"                   // substream: smaller JPEG -> less heap pressure for the Telegram TLS handshake
   },
   {
@@ -126,26 +132,42 @@ static const CameraConfig CAMERAS[] = {
   },
   {
     "D03-Escritorio",
-    "http://192.168.8.195/onvif/device_service",
-    true,                    // enabled
+    "http://192.168.8.195:10080/onvif/device_service",
+    false,                   // disabled - onvif_support_enable=0 on this camera; CreatePullPointSubscription
+                             // returns ActionNotSupported (Vstarcam doesn't implement ONVIF eventing at all).
+                             // Its motion detector can instead push an HTTP callback (alarm_http/alarm_http_url
+                             // in its own settings, currently off) - that needs a receiver on the ESP32 side
+                             // that doesn't exist yet. Flip back on once that's built.
     true,                    // standards-compliant default - GetProfiles/Capabilities/Properties all work with this
     false, false,            // CreatePullPointSubscription-only NotAuthorized -> same fix as the XM530
-    nullptr,                // no known-broken snapshot URI yet -> try standard GetSnapshotUri first
+    // Vstarcam brand - GetSnapshotUri not trusted; confirmed working direct
+    // snapshot URL used instead. HTTP Basic Auth (st.user/st.pass from
+    // secrets.h) is sent automatically for every snapshot fetch regardless
+    // of override, same as the ONVIF-resolved path.
+    "http://192.168.8.195:28195/snapshot.cgi",
     "sub"                   // substream: smaller JPEG -> less heap pressure for the Telegram TLS handshake
   },
   {
     "D04-Pavilhao",
-    "http://192.168.8.199/onvif/device_service",
-    true,                    // enabled
+    "http://192.168.8.199:10080/onvif/device_service",
+    false,                   // disabled - ActionNotSupported on CreatePullPointSubscription, same as
+                             // D03-Escritorio (see its comment below) - this Vstarcam batch doesn't
+                             // implement ONVIF eventing at all.
     true,                    // standards-compliant default - GetProfiles/Capabilities/Properties all work with this
     false, false,            // CreatePullPointSubscription-only NotAuthorized -> same fix as the XM530
-    nullptr,                // no known-broken snapshot URI yet -> try standard GetSnapshotUri first
+    // Vstarcam brand - GetSnapshotUri not trusted; confirmed working direct
+    // snapshot URL used instead. This one wants query-string auth, not HTTP
+    // Basic Auth - {USER}/{PASS} are substituted from st.user/st.pass
+    // (secrets.h) at runtime, so the real credential never lands in this
+    // committed file. Update secrets.h's CAMERA_SECRETS entry for
+    // "D04-Pavilhao" with the matching admin user/pass.
+    "http://192.168.8.199:28199/snapshot.cgi?loginuse={USER}&loginpas={PASS}",
     "sub"                   // substream: smaller JPEG -> less heap pressure for the Telegram TLS handshake
   },
   {
     "D05-Traseiras",
     "http://192.168.8.148/onvif/device_service",
-    false,                    // enabled
+    true,                    // enabled
     true,                    // standards-compliant default - GetProfiles/Capabilities/Properties all work with this
     false, false,            // CreatePullPointSubscription-only NotAuthorized -> same fix as the XM530
     nullptr,                // no known-broken snapshot URI yet -> try standard GetSnapshotUri first
@@ -153,29 +175,67 @@ static const CameraConfig CAMERAS[] = {
   },
   {
     "D06-Centro",
-    "http://192.168.8.234/onvif/device_service",
-    true,                    // enabled
+    "http://192.168.8.234:10080/onvif/device_service",
+    false,                   // disabled - ActionNotSupported on CreatePullPointSubscription, same as
+                             // D03-Escritorio (see its comment below) - this Vstarcam batch doesn't
+                             // implement ONVIF eventing at all.
     true,                    // standards-compliant default - GetProfiles/Capabilities/Properties all work with this
     false, false,            // CreatePullPointSubscription-only NotAuthorized -> same fix as the XM530
     nullptr,                // no known-broken snapshot URI yet -> try standard GetSnapshotUri first
     "sub"                   // substream: smaller JPEG -> less heap pressure for the Telegram TLS handshake
   },
   {
-    "D08-PortariaDir",
-    "http://192.168.8.222/onvif/device_service",
+    "D07-PortariaEsq",                                              // Reolink RLC-520A
+    "http://192.168.8.104:8000/onvif/device_service",           // Reolink's default ONVIF port
     true,                    // enabled
+    true,                    // required - tried HTTP Basic Auth to rule out a WSSE-specific quirk, but this
+                             // camera rejects Basic Auth outright (401/NotAuthorized on GetServiceCapabilities,
+                             // before even reaching PullMessages) - WS-Security digest is mandatory here.
+    true, false,             // includeInitialTerminationTime ON - root cause of the PullMessages faults found
+                             // via VERBOSE_SOAP_LOG: with this OFF, CreatePullPointSubscriptionResponse showed
+                             // CurrentTime/TerminationTime only ~10s apart - this camera defaults to a ~10s
+                             // subscription lifetime when we don't request one, nowhere close to
+                             // SUBSCRIPTION_LIFETIME_MS/RENEW_MARGIN_MS's renew cadence. The 2 PullMessages
+                             // calls that succeeded both landed inside that 10s window; the next one hit an
+                             // already-expired subscription, which is what the empty-reason fault actually was.
+                             // Requesting PT5M explicitly (see cameraCreatePullPoint in camera.cpp) should fix it.
+
+    // Confirmed working direct snapshot URL (Reolink's own api.cgi, not the
+    // ONVIF GetSnapshotUri flow) - used in preference to untested ONVIF
+    // snapshot resolution for this camera. No credentials needed in the URL.
+    "http://192.168.8.104:80/cgi-bin/api.cgi?cmd=onvifSnapPic&channel=0",
+    nullptr                 // untested - set once GetProfiles shows what profiles this camera exposes
+  },
+  {
+    "D08-PortariaDir",
+    "http://192.168.8.222:10080/onvif/device_service",
+    false,                   // disabled - ActionNotSupported on CreatePullPointSubscription, same as
+                             // D03-Escritorio (see its comment below) - this Vstarcam batch doesn't
+                             // implement ONVIF eventing at all.
     true,                    // standards-compliant default - GetProfiles/Capabilities/Properties all work with this
     false, false,            // CreatePullPointSubscription-only NotAuthorized -> same fix as the XM530
-    nullptr,                // no known-broken snapshot URI yet -> try standard GetSnapshotUri first
+    // Vstarcam brand - GetSnapshotUri not trusted; confirmed working direct
+    // snapshot URL used instead. {USER}/{PASS} substituted from st.user/
+    // st.pass (secrets.h) at runtime - see D04-Pavilhao's comment above for
+    // why. Update secrets.h's CAMERA_SECRETS entry for "D08-PortariaDir"
+    // with the matching admin user/pass.
+    "http://192.168.8.222:81/snapshot.cgi?loginuse={USER}&loginpas={PASS}",
     "sub"                   // substream: smaller JPEG -> less heap pressure for the Telegram TLS handshake
   },
   {
     "D09-Portao",
-    "http://192.168.8.223/onvif/device_service",
-    true,                    // enabled
+    "http://192.168.8.223:10080/onvif/device_service",
+    false,                   // disabled - ActionNotSupported on CreatePullPointSubscription, same as
+                             // D03-Escritorio (see its comment below) - this Vstarcam batch doesn't
+                             // implement ONVIF eventing at all.
     true,                    // standards-compliant default - GetProfiles/Capabilities/Properties all work with this
     false, false,            // CreatePullPointSubscription-only NotAuthorized -> same fix as the XM530
-    nullptr,                // no known-broken snapshot URI yet -> try standard GetSnapshotUri first
+    // Vstarcam brand - GetSnapshotUri not trusted; confirmed working direct
+    // snapshot URL used instead. {USER}/{PASS} substituted from st.user/
+    // st.pass (secrets.h) at runtime - see D04-Pavilhao's comment above for
+    // why. Update secrets.h's CAMERA_SECRETS entry for "D09-Portao" with
+    // the matching admin user/pass.
+    "http://192.168.8.223:81/snapshot.cgi?loginuse={USER}&loginpas={PASS}",
     "sub"                   // substream: smaller JPEG -> less heap pressure for the Telegram TLS handshake
   },
 };

@@ -24,6 +24,10 @@ Arduino-ESP32/IDF releases.
   so a silently hung or endlessly-retrying board doesn't go unnoticed.
 - Credentials are kept out of the committed source (`secrets.h`, gitignored) and
   matched to cameras by name, not by array position.
+- Remote mute/unmute per camera via Telegram commands (`/on <name>`, `/off <name>`,
+  `/status`), restricted to `TELEGRAM_CHAT_ID` and persisted across reboots in NVS.
+  A muted camera keeps polling ONVIF and its subscription stays alive - only the
+  Telegram photo send is suppressed.
 
 ## Hardware
 

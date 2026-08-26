@@ -16,9 +16,11 @@ String soapEnvelope(const String& action, const String& body, const String& to,
                      const char* user, const char* pass, bool includeReplyToAnonymous,
                      bool useWSSecurity = true);
 
-// basicAuthUser/basicAuthPass: set both (non-null) to send HTTP Basic Auth
-// instead of/alongside WS-Security - needed for cameras with useWSSecurity=false.
-String soapPost(const String& url, const String& action, const String& xml,
+// cameraName prefixes the [SOAP] log line so it's identifiable when several
+// cameras' tasks are logging concurrently. basicAuthUser/basicAuthPass: set
+// both (non-null) to send HTTP Basic Auth instead of/alongside WS-Security -
+// needed for cameras with useWSSecurity=false.
+String soapPost(const char* cameraName, const String& url, const String& action, const String& xml,
                  const char* basicAuthUser = nullptr, const char* basicAuthPass = nullptr);
 
 String findElementByLocalName(const String& xml, const String& localName, int fromPosition = 0);

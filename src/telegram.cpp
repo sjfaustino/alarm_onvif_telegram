@@ -4,6 +4,7 @@
 #include <HTTPClient.h>
 #include <NetworkClient.h> // HTTPClient::getStreamPtr() returns NetworkClient* on Arduino-ESP32 3.x cores
 #include <esp_heap_caps.h>
+#include <Preferences.h>
 #include <time.h>
 #include <cstring>
 
@@ -338,9 +339,12 @@ bool sendTelegramMessage(const String& text) {
 }
 
 void triggerMotionAlert(const CameraConfig& cfg, CameraState& st) {
+  if (!st.alertsEnabled) return; // muted via Telegram - see pollTelegramCommands
+
   uint32_t nowMs = millis();
-  if (nowMs - st.lastAlert < ALERT_COOLDOWN_MS) return; // cooling down
+  if (st.hasAlerted && nowMs - st.lastAlert < ALERT_COOLDOWN_MS) return; // cooling down
   st.lastAlert = nowMs;
+  st.hasAlerted = true;
 
   if (st.snapshotUri.length() == 0) {
     Serial.printf("[%s] No snapshot URI available - skipping Telegram send.\n", cfg.name);
@@ -401,5 +405,195 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st) {
   http.end();
   if (!ok) {
     Serial.printf("[%s] Telegram send failed.\n", cfg.name);
+  }
+}
+
+// ============================================================
+// Remote on/off control (Telegram commands)
+//
+// pollTelegramCommands() is called periodically from loop() and does a
+// short (timeout=0, not long-poll) getUpdates round trip. Parsing is
+// hand-rolled rather than pulling in a JSON library - matches how the ONVIF
+// side of this project hand-rolls its XML parsing (see onvif_soap.cpp)
+// instead of taking on a dependency for what's a small, predictable
+// response shape. lastUpdateId isn't persisted - after a reboot the next
+// poll may redeliver a couple of already-applied commands, which is
+// harmless since /on and /off are idempotent.
+// ============================================================
+
+static const char* ALERT_PREF_NAMESPACE = "camctl";
+
+bool loadAlertEnabledPref(size_t index) {
+  Preferences prefs;
+  prefs.begin(ALERT_PREF_NAMESPACE, true); // read-only
+  char key[8];
+  snprintf(key, sizeof(key), "c%u", (unsigned)index);
+  bool enabled = prefs.getBool(key, true); // default ON if never set
+  prefs.end();
+  return enabled;
+}
+
+static void saveAlertEnabledPref(size_t index, bool enabled) {
+  Preferences prefs;
+  prefs.begin(ALERT_PREF_NAMESPACE, false);
+  char key[8];
+  snprintf(key, sizeof(key), "c%u", (unsigned)index);
+  prefs.putBool(key, enabled);
+  prefs.end();
+}
+
+// Inverse of the jsonEscape() used when building outgoing messages - only
+// needs to handle what Telegram could plausibly send back in a text field.
+static String jsonUnescape(const String& in) {
+  String out;
+  out.reserve(in.length());
+  for (size_t i = 0; i < in.length(); i++) {
+    char c = in[i];
+    if (c == '\\' && i + 1 < in.length()) {
+      char n = in[++i];
+      switch (n) {
+        case '"':  out += '"';  break;
+        case '\\': out += '\\'; break;
+        case 'n':  out += '\n'; break;
+        case 'r':  out += '\r'; break;
+        case 't':  out += '\t'; break;
+        default:   out += n;    break;
+      }
+    } else {
+      out += c;
+    }
+  }
+  return out;
+}
+
+static void handleTelegramCommand(const String& text, const CameraConfig cameras[],
+                                   CameraState states[], size_t numCameras) {
+  Serial.printf("[Telegram] Command received: \"%s\"\n", text.c_str());
+
+  if (text.equalsIgnoreCase("/status")) {
+    String msg = "Camera alert status:\n";
+    for (size_t i = 0; i < numCameras; i++) {
+      if (!cameras[i].enabled) continue;
+      msg += String(cameras[i].name) + ": " + (states[i].alertsEnabled ? "ON" : "OFF") + "\n";
+    }
+    Serial.println("[Telegram] Replying with camera status.");
+    sendTelegramMessage(msg);
+    return;
+  }
+
+  bool turnOn;
+  String cameraName;
+  if (text.startsWith("/on ")) { turnOn = true; cameraName = text.substring(4); }
+  else if (text.startsWith("/off ")) { turnOn = false; cameraName = text.substring(5); }
+  else {
+    Serial.println("[Telegram] Unrecognized command - ignored.");
+    return;
+  }
+
+  cameraName.trim();
+  for (size_t i = 0; i < numCameras; i++) {
+    if (!cameras[i].enabled) continue;
+    if (cameraName.equalsIgnoreCase(cameras[i].name)) {
+      states[i].alertsEnabled = turnOn;
+      saveAlertEnabledPref(i, turnOn);
+      Serial.printf("[%s] Alerts turned %s via Telegram.\n", cameras[i].name, turnOn ? "ON" : "OFF");
+      sendTelegramMessage(String(cameras[i].name) + " alerts: " + (turnOn ? "ON" : "OFF"));
+      return;
+    }
+  }
+  Serial.printf("[Telegram] /%s target not found or disabled: \"%s\"\n", turnOn ? "on" : "off", cameraName.c_str());
+  sendTelegramMessage("Unknown or disabled camera: " + cameraName);
+}
+
+void pollTelegramCommands(const CameraConfig cameras[], CameraState states[], size_t numCameras) {
+  static long lastUpdateId = 0;
+
+  WiFiClientSecure client;
+  client.setCACert(TELEGRAM_ROOT_CA);
+  if (!client.connect("api.telegram.org", 443)) {
+    Serial.println("[Telegram] pollTelegramCommands: could not connect - will retry next poll.");
+    return; // transient - next poll retries
+  }
+
+  String requestLine;
+  requestLine.reserve(96 + strlen(TELEGRAM_BOT_TOKEN));
+  requestLine += "GET /bot" + String(TELEGRAM_BOT_TOKEN) + "/getUpdates?offset=" +
+                  String(lastUpdateId + 1) + "&timeout=0 HTTP/1.1\r\n";
+  requestLine += "Host: api.telegram.org\r\n";
+  requestLine += "Connection: close\r\n\r\n";
+  writeAllBytes(client, (const uint8_t*)requestLine.c_str(), requestLine.length());
+
+  uint32_t t0 = millis();
+  while (client.connected() && !client.available() && millis() - t0 < 10000) delay(10);
+  if (!client.available()) {
+    Serial.println("[Telegram] pollTelegramCommands: no response within timeout.");
+    client.stop();
+    return;
+  }
+
+  String body;
+  uint32_t readStart = millis();
+  while (client.connected() && millis() - readStart < 3000) {
+    while (client.available()) { body += (char)client.read(); readStart = millis(); }
+  }
+  while (client.available()) body += (char)client.read();
+  client.stop();
+
+  int bodyStart = body.indexOf("\r\n\r\n");
+  if (bodyStart < 0) {
+    Serial.println("[Telegram] pollTelegramCommands: malformed response (no header/body split).");
+    return;
+  }
+  body = body.substring(bodyStart + 4);
+
+  // Each update is a JSON object in the "result" array; scan for
+  // "update_id" (always its first key) to find each object's start, then
+  // brace-count to find its end - cheaper and more robust than string-
+  // searching for keys across the whole response, since nested objects
+  // (message/from/chat) can't confuse where one update ends and the next
+  // begins.
+  int searchPos = 0;
+  while (true) {
+    int updateIdPos = body.indexOf("\"update_id\":", searchPos);
+    if (updateIdPos < 0) break;
+    long updateId = body.substring(updateIdPos + 12).toInt();
+
+    int objStart = body.lastIndexOf('{', updateIdPos);
+    if (objStart < 0) break;
+    int depth = 0, objEnd = -1;
+    for (int i = objStart; i < (int)body.length(); i++) {
+      if (body[i] == '{') depth++;
+      else if (body[i] == '}') { depth--; if (depth == 0) { objEnd = i; break; } }
+    }
+    if (objEnd < 0) break;
+
+    String block = body.substring(objStart, objEnd + 1);
+    searchPos = objEnd + 1;
+    if (updateId > lastUpdateId) lastUpdateId = updateId;
+
+    // chat.id, not message.from.id or message.message_id - both of which
+    // also match a bare "id": search, so this anchors on "chat" first.
+    int chatPos = block.indexOf("\"chat\":");
+    if (chatPos < 0) continue;
+    int chatIdPos = block.indexOf("\"id\":", chatPos);
+    if (chatIdPos < 0) continue;
+    // toInt() stops at the first non-numeric character, so this doesn't
+    // need to know whether a ',' or '}' ends the value.
+    long chatId = block.substring(chatIdPos + 5).toInt();
+    if (chatId != String(TELEGRAM_CHAT_ID).toInt()) {
+      Serial.printf("[Telegram] Ignored command from unauthorized chat ID %ld\n", chatId);
+      continue; // only TELEGRAM_CHAT_ID may command this bot
+    }
+
+    int textPos = block.indexOf("\"text\":\"");
+    if (textPos < 0) continue;
+    textPos += 8;
+    String rawText;
+    for (int i = textPos; i < (int)block.length(); i++) {
+      char c = block[i];
+      if (c == '"' && block[i - 1] != '\\') break;
+      rawText += c;
+    }
+    handleTelegramCommand(jsonUnescape(rawText), cameras, states, numCameras);
   }
 }
