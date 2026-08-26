@@ -15,19 +15,33 @@ static const unsigned long RENEW_MARGIN_MS          = 60UL * 1000UL;
 static const unsigned long RETRY_INTERVAL_MS        = 10000UL;
 static const uint32_t      ALERT_COOLDOWN_MS        = 15000UL;       // per-camera cooldown
 static const uint16_t      HTTP_TIMEOUT_MS          = 10000;
-static const size_t        SNAPSHOT_MAX_BYTES       = 100000;        // no-PSRAM assumption, same as original
+static const unsigned long HEARTBEAT_INTERVAL_MS    = 6UL * 60UL * 60UL * 1000UL; // liveness ping cadence
+static const size_t        SNAPSHOT_MAX_BYTES       = 100000;        // internal-RAM buffer cap (no-PSRAM boards)
+static const size_t        SNAPSHOT_MAX_BYTES_PSRAM = 2000000UL;     // PSRAM buffer cap - generous; real snapshots are far smaller
 static const bool          VERBOSE_SOAP_LOG         = false;         // flip true to debug one camera at a time
 
-// NOTE: arduino-esp32's WiFiClientSecure has no setBufferSizes() - that's a
-// BearSSL (ESP8266/Arduino-Pico) API. On this chip mbedTLS's ~16KB RX + 16KB
-// TX session buffers are fixed at build time in the precompiled core; they
-// can't be shrunk at runtime for framework = arduino. That fixed cost is
-// exactly what was failing at 54KB nominally-free-but-fragmented heap.
-// The lever that IS available: never hold the whole JPEG in RAM at the same
-// time as those TLS buffers. telegram.cpp now streams the photo straight
-// from the camera's HTTP connection into Telegram's TLS connection
-// STREAM_CHUNK_BYTES at a time, so only one small chunk (not the full
-// 100KB snapshot) competes with the TLS buffers for heap.
+// NOTE ON HARDWARE: this project has now been flashed to three different
+// boards over the course of development - a no-PSRAM ESP32-S2, a no-PSRAM
+// dual-core classic ESP32 (ESP32-D0WDQ6), and a dual-core ESP32-S3 with 8MB
+// embedded PSRAM - each confirmed via `esptool.exe chip-id`. Rather than
+// hardcode assumptions for whichever board happened to be connected at the
+// time, the two things that actually varied across them are now handled at
+// RUNTIME instead of via comments/config here:
+//   - PSRAM: telegram.cpp checks ESP.getPsramSize() at the point of each
+//     Telegram send and picks buffered-in-PSRAM vs. streamed-via-internal-
+//     RAM accordingly (see telegram.cpp's top comment for the full
+//     rationale). SNAPSHOT_MAX_BYTES_PSRAM above only applies on the
+//     PSRAM path; SNAPSHOT_MAX_BYTES only applies on the non-PSRAM path.
+//   - Core count: camera.cpp's per-camera FreeRTOS tasks are pinned to
+//     core 1 in main.cpp. This requires a genuine second core - fine for
+//     all three boards above (all dual-core), but would need changing to
+//     plain xTaskCreate (no pinning) if this is ever flashed to a
+//     single-core chip (e.g. an ESP32-C3, which came up mid-conversation
+//     as a possible board before being ruled out - see platformio.ini for
+//     the per-board build environments this project now keeps side by side).
+// mbedTLS's ~16KB RX + 16KB TX TLS session buffers are fixed at build time
+// on every variant - that part of the original fragmentation analysis
+// holds regardless of which ESP32 this is.
 static const size_t        STREAM_CHUNK_BYTES       = 2048;
 
 // ============================================================
@@ -68,8 +82,6 @@ static const size_t        STREAM_CHUNK_BYTES       = 2048;
 struct CameraConfig {
   const char* name;
   const char* deviceServiceUrl;
-  const char* user;
-  const char* pass;
   bool        enabled;
   bool        useWSSecurity;
   bool        includeInitialTerminationTime;
@@ -78,11 +90,16 @@ struct CameraConfig {
   const char* preferredProfileKeyword;
 };
 
+// Credentials are NOT listed here anymore - they're resolved at task startup
+// by matching `name` (exactly, case-sensitive) against CAMERA_SECRETS in
+// secrets.h. See camera.h's resolveCameraCredentials() and secrets.h.example
+// for the credential-side format. This means the `name` string below is now
+// load-bearing (it's the join key to secrets.h), not just a display label -
+// if you rename a camera here, rename its CAMERA_SECRETS entry to match.
 static const CameraConfig CAMERAS[] = {
   {
-    "Front Gate Cam",                                            // XM530 - proven quirks
+    "2Lentes",                                            // XM530 - proven quirks
     "http://192.168.1.178:8899/onvif/device_service",
-    CAM0_USER, CAM0_PASS,
     false,                   // temporarily disconnected - flip back on once it's reachable
     true,                    // WS-Security digest is how this camera authenticates
     false, false,            // both OFF - this is what fixed ResourceUnknownFault
@@ -90,9 +107,71 @@ static const CameraConfig CAMERAS[] = {
     nullptr
   },
   {
-    "Vatilon H80",
+    "D01-FDir",
+    "http://192.168.8.224/onvif/device_service",
+    true,                    // enabled
+    true,                    // standards-compliant default - GetProfiles/Capabilities/Properties all work with this
+    false, false,            // CreatePullPointSubscription-only NotAuthorized -> same fix as the XM530
+    nullptr,                // no known-broken snapshot URI yet -> try standard GetSnapshotUri first
+    "sub"                   // substream: smaller JPEG -> less heap pressure for the Telegram TLS handshake
+  },
+  {
+    "D02-FEsq",
+    "http://192.168.8.231/onvif/device_service",
+    false,                    // enabled
+    true,                    // standards-compliant default - GetProfiles/Capabilities/Properties all work with this
+    false, false,            // CreatePullPointSubscription-only NotAuthorized -> same fix as the XM530
+    nullptr,                // no known-broken snapshot URI yet -> try standard GetSnapshotUri first
+    "sub"                   // substream: smaller JPEG -> less heap pressure for the Telegram TLS handshake
+  },
+  {
+    "D03-Escritorio",
+    "http://192.168.8.195/onvif/device_service",
+    true,                    // enabled
+    true,                    // standards-compliant default - GetProfiles/Capabilities/Properties all work with this
+    false, false,            // CreatePullPointSubscription-only NotAuthorized -> same fix as the XM530
+    nullptr,                // no known-broken snapshot URI yet -> try standard GetSnapshotUri first
+    "sub"                   // substream: smaller JPEG -> less heap pressure for the Telegram TLS handshake
+  },
+  {
+    "D04-Pavilhao",
+    "http://192.168.8.199/onvif/device_service",
+    true,                    // enabled
+    true,                    // standards-compliant default - GetProfiles/Capabilities/Properties all work with this
+    false, false,            // CreatePullPointSubscription-only NotAuthorized -> same fix as the XM530
+    nullptr,                // no known-broken snapshot URI yet -> try standard GetSnapshotUri first
+    "sub"                   // substream: smaller JPEG -> less heap pressure for the Telegram TLS handshake
+  },
+  {
+    "D05-Traseiras",
     "http://192.168.8.148/onvif/device_service",
-    CAM1_USER, CAM1_PASS,
+    false,                    // enabled
+    true,                    // standards-compliant default - GetProfiles/Capabilities/Properties all work with this
+    false, false,            // CreatePullPointSubscription-only NotAuthorized -> same fix as the XM530
+    nullptr,                // no known-broken snapshot URI yet -> try standard GetSnapshotUri first
+    "sub"                   // substream: smaller JPEG -> less heap pressure for the Telegram TLS handshake
+  },
+  {
+    "D06-Centro",
+    "http://192.168.8.234/onvif/device_service",
+    true,                    // enabled
+    true,                    // standards-compliant default - GetProfiles/Capabilities/Properties all work with this
+    false, false,            // CreatePullPointSubscription-only NotAuthorized -> same fix as the XM530
+    nullptr,                // no known-broken snapshot URI yet -> try standard GetSnapshotUri first
+    "sub"                   // substream: smaller JPEG -> less heap pressure for the Telegram TLS handshake
+  },
+  {
+    "D08-PortariaDir",
+    "http://192.168.8.222/onvif/device_service",
+    true,                    // enabled
+    true,                    // standards-compliant default - GetProfiles/Capabilities/Properties all work with this
+    false, false,            // CreatePullPointSubscription-only NotAuthorized -> same fix as the XM530
+    nullptr,                // no known-broken snapshot URI yet -> try standard GetSnapshotUri first
+    "sub"                   // substream: smaller JPEG -> less heap pressure for the Telegram TLS handshake
+  },
+  {
+    "D09-Portao",
+    "http://192.168.8.223/onvif/device_service",
     true,                    // enabled
     true,                    // standards-compliant default - GetProfiles/Capabilities/Properties all work with this
     false, false,            // CreatePullPointSubscription-only NotAuthorized -> same fix as the XM530

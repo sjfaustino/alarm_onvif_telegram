@@ -37,9 +37,9 @@ static void randomBytes(uint8_t* data, size_t len) {
 bool sha1Bytes(const uint8_t* input, size_t inputLen, uint8_t output[20]) {
   mbedtls_sha1_context ctx;
   mbedtls_sha1_init(&ctx);
-  bool ok = mbedtls_sha1_starts_ret(&ctx) == 0 &&
-            mbedtls_sha1_update_ret(&ctx, input, inputLen) == 0 &&
-            mbedtls_sha1_finish_ret(&ctx, output) == 0;
+  bool ok = mbedtls_sha1_starts(&ctx) == 0 &&
+            mbedtls_sha1_update(&ctx, input, inputLen) == 0 &&
+            mbedtls_sha1_finish(&ctx, output) == 0;
   mbedtls_sha1_free(&ctx);
   return ok;
 }

@@ -3,17 +3,40 @@
 #include "telegram.h"
 #include <WiFi.h>
 #include <vector>
+#include <cstring>
+
+// Looks up {user, pass} for cfg.name in CAMERA_SECRETS (secrets.h) by exact
+// name match. Logs an error and returns false on no match, so a typo'd
+// `name` in either config.h or secrets.h fails loudly at boot instead of
+// silently sending the wrong (or a previous camera's) credentials.
+bool resolveCameraCredentials(const CameraConfig& cfg, CameraState& st) {
+  for (size_t i = 0; i < NUM_CAMERA_SECRETS; i++) {
+    if (strcmp(CAMERA_SECRETS[i].name, cfg.name) == 0) {
+      st.user = CAMERA_SECRETS[i].user;
+      st.pass = CAMERA_SECRETS[i].pass;
+      return true;
+    }
+  }
+  Serial.printf("[%s] ERROR: no matching entry in CAMERA_SECRETS (secrets.h) - "
+                "check that its `name` exactly matches this camera's name in "
+                "config.h's CAMERAS[] (case-sensitive, no extra whitespace). "
+                "%u secret entries checked.\n",
+                cfg.name, (unsigned)NUM_CAMERA_SECRETS);
+  return false;
+}
 
 // Builds the envelope and posts it, honoring cfg.useWSSecurity: when true,
 // auth rides in the WSSE header (the ONVIF-standard way); when false, the
 // envelope carries no Security header and credentials go over HTTP Basic
-// Auth instead, for cameras/stacks that expect that.
-static String cameraSoapCall(const CameraConfig& cfg, const String& url, const String& to,
-                              const String& action, const String& body) {
-  String xml = soapEnvelope(action, body, to, cfg.user, cfg.pass,
+// Auth instead, for cameras/stacks that expect that. Credentials come from
+// st.user/st.pass (resolved by name via resolveCameraCredentials at task
+// startup), not from CameraConfig.
+static String cameraSoapCall(const CameraConfig& cfg, const CameraState& st, const String& url,
+                              const String& to, const String& action, const String& body) {
+  String xml = soapEnvelope(action, body, to, st.user, st.pass,
                              cfg.includeReplyToAnonymous, cfg.useWSSecurity);
-  const char* basicUser = cfg.useWSSecurity ? nullptr : cfg.user;
-  const char* basicPass = cfg.useWSSecurity ? nullptr : cfg.pass;
+  const char* basicUser = cfg.useWSSecurity ? nullptr : st.user;
+  const char* basicPass = cfg.useWSSecurity ? nullptr : st.pass;
   return soapPost(url, action, xml, basicUser, basicPass);
 }
 
@@ -22,7 +45,7 @@ bool cameraDiscoverServices(const CameraConfig& cfg, CameraState& st) {
 
   String action = "http://www.onvif.org/ver10/device/wsdl/GetCapabilities";
   String body = "<tds:GetCapabilities><tds:Category>All</tds:Category></tds:GetCapabilities>";
-  String response = cameraSoapCall(cfg, cfg.deviceServiceUrl, "", action, body);
+  String response = cameraSoapCall(cfg, st, cfg.deviceServiceUrl, "", action, body);
 
   if (response.length() == 0 || responseHasFault(response) ||
       response.indexOf("GetCapabilitiesResponse") < 0) {
@@ -58,7 +81,7 @@ bool cameraDiscoverServices(const CameraConfig& cfg, CameraState& st) {
 bool cameraGetEventServiceCapabilities(const CameraConfig& cfg, CameraState& st) {
   String action = "http://www.onvif.org/ver10/events/wsdl/EventPortType/GetServiceCapabilitiesRequest";
   String body = "<tev:GetServiceCapabilities/>";
-  String response = cameraSoapCall(cfg, st.eventServiceUrl, st.eventServiceUrl, action, body);
+  String response = cameraSoapCall(cfg, st, st.eventServiceUrl, st.eventServiceUrl, action, body);
 
   if (response.length() == 0 || responseHasFault(response) ||
       response.indexOf("GetServiceCapabilitiesResponse") < 0) {
@@ -71,7 +94,7 @@ bool cameraGetEventServiceCapabilities(const CameraConfig& cfg, CameraState& st)
 bool cameraGetEventProperties(const CameraConfig& cfg, CameraState& st) {
   String action = "http://www.onvif.org/ver10/events/wsdl/EventPortType/GetEventPropertiesRequest";
   String body = "<tev:GetEventProperties/>";
-  String response = cameraSoapCall(cfg, st.eventServiceUrl, st.eventServiceUrl, action, body);
+  String response = cameraSoapCall(cfg, st, st.eventServiceUrl, st.eventServiceUrl, action, body);
 
   if (response.length() == 0 || responseHasFault(response) ||
       response.indexOf("GetEventPropertiesResponse") < 0) {
@@ -138,7 +161,7 @@ bool cameraFetchProfileAndSnapshotUri(const CameraConfig& cfg, CameraState& st) 
 
   String action = "http://www.onvif.org/ver10/media/wsdl/GetProfiles";
   String body = "<trt:GetProfiles/>";
-  String response = cameraSoapCall(cfg, st.mediaServiceUrl, "", action, body);
+  String response = cameraSoapCall(cfg, st, st.mediaServiceUrl, "", action, body);
 
   if (response.length() == 0 || responseHasFault(response)) {
     Serial.printf("[%s] GetProfiles FAILED\n", cfg.name);
@@ -168,7 +191,7 @@ bool cameraFetchProfileAndSnapshotUri(const CameraConfig& cfg, CameraState& st) 
   String snapAction = "http://www.onvif.org/ver10/media/wsdl/GetSnapshotUri";
   String snapBody = "<trt:GetSnapshotUri><trt:ProfileToken>" + xmlEscape(st.profileToken) +
                      "</trt:ProfileToken></trt:GetSnapshotUri>";
-  String snapResponse = cameraSoapCall(cfg, st.mediaServiceUrl, "", snapAction, snapBody);
+  String snapResponse = cameraSoapCall(cfg, st, st.mediaServiceUrl, "", snapAction, snapBody);
 
   if (snapResponse.length() == 0 || responseHasFault(snapResponse)) {
     Serial.printf("[%s] GetSnapshotUri FAILED\n", cfg.name);
@@ -199,7 +222,7 @@ bool cameraCreatePullPoint(const CameraConfig& cfg, CameraState& st) {
   }
   body += "</tev:CreatePullPointSubscription>";
 
-  String response = cameraSoapCall(cfg, st.eventServiceUrl, st.eventServiceUrl, action, body);
+  String response = cameraSoapCall(cfg, st, st.eventServiceUrl, st.eventServiceUrl, action, body);
 
   if (response.length() == 0 || responseHasFault(response) ||
       response.indexOf("CreatePullPointSubscriptionResponse") < 0) {
@@ -271,12 +294,15 @@ bool cameraPullMessages(const CameraConfig& cfg, CameraState& st) {
   if (!st.subscriptionActive || st.pullPointUrl.length() == 0) return false;
 
   String action = "http://www.onvif.org/ver10/events/wsdl/PullPointSubscription/PullMessagesRequest";
-  // PT1S, not the original single-camera sketch's PT5S: with several cameras
-  // round-robining, a 5s long-poll per camera stacks up badly across the
-  // group. This trades a little poll efficiency for responsiveness.
+  // PT1S: a holdover from when this was single-camera-per-round-robin-slot
+  // and a 5s long-poll per camera would stack up badly across the group.
+  // Now that each camera has its own task (see cameraTaskFn), that
+  // constraint is gone - PT1S still works fine and is left as-is, but PT5S
+  // (fewer, longer polls) is worth trying if you want to reduce request
+  // volume per camera.
   String body = "<tev:PullMessages><tev:Timeout>PT1S</tev:Timeout>"
                 "<tev:MessageLimit>20</tev:MessageLimit></tev:PullMessages>";
-  String response = cameraSoapCall(cfg, st.pullPointUrl, st.pullPointUrl, action, body);
+  String response = cameraSoapCall(cfg, st, st.pullPointUrl, st.pullPointUrl, action, body);
 
   if (response.length() == 0) return false;
 
@@ -298,7 +324,7 @@ bool cameraRenewSubscription(const CameraConfig& cfg, CameraState& st) {
 
   String action = "http://docs.oasis-open.org/wsn/bw-2/Renew";
   String body = "<wsnt:Renew><wsnt:TerminationTime>PT5M</wsnt:TerminationTime></wsnt:Renew>";
-  String response = cameraSoapCall(cfg, st.pullPointUrl, st.pullPointUrl, action, body);
+  String response = cameraSoapCall(cfg, st, st.pullPointUrl, st.pullPointUrl, action, body);
 
   if (response.indexOf("RenewResponse") >= 0) {
     st.lastRenew = millis();
@@ -329,18 +355,15 @@ bool cameraSetupSequence(const CameraConfig& cfg, CameraState& st) {
 // Per-camera FreeRTOS task
 //
 // Replaces main.cpp's old round-robin loop() slot for this camera. Each
-// enabled camera gets one of these, created once in setup(). Runs forever;
-// never returns (matches the original round-robin's "one camera's worth of
-// work per pass, forever" shape, just without waiting for the other
-// cameras' turns first).
+// enabled camera gets one of these, created once in setup() and pinned to
+// core 1. Runs forever; never returns.
 //
-// Note this chip (ESP32-S2) is single-core, so this isn't true parallel
-// execution - it's cooperative multitasking via vTaskDelay yield points.
-// The win is still real: the old loop() blocked the ENTIRE round-robin on
-// each camera's PullMessages long-poll (up to PT1S) and on every Telegram
-// TLS send. With separate tasks, camera B's poll timer keeps ticking while
-// camera A is inside a slow SOAP call or a photo upload, instead of
-// queuing behind it.
+// This board turned out to be a genuine dual-core ESP32 (ESP32-D0WDQ6, per
+// esptool chip-id), not the single-core S2 this was first written against -
+// so with tasks pinned to core 1, this IS true parallel execution: camera
+// A's slow SOAP call or Telegram TLS upload doesn't steal core 1 time from
+// camera B's task the way it would on a single core, and neither competes
+// with the WiFi/BT stack or the Arduino loopTask, which stay on core 0.
 // ============================================================
 void cameraTaskFn(void* pvParameters) {
   CameraTaskContext* ctx = static_cast<CameraTaskContext*>(pvParameters);
@@ -349,6 +372,19 @@ void cameraTaskFn(void* pvParameters) {
   delete ctx; // context struct's job is done once we've unpacked it
 
   Serial.printf("[%s] Task started.\n", cfg.name);
+
+  // Resolve credentials by name once, before anything else. A mismatch here
+  // is a config typo, not a flaky network condition - retrying it forever
+  // would just spam the log, so this camera's task exits instead. The
+  // Telegram alert doesn't need this camera's credentials to send.
+  if (!resolveCameraCredentials(cfg, st)) {
+    Serial.printf("[%s] FATAL: no credentials resolved - task exiting, camera will NOT be monitored "
+                  "until secrets.h is fixed and the board is reflashed.\n", cfg.name);
+    sendTelegramMessage("\xE2\x9A\xA0\xEF\xB8\x8F " + String(cfg.name) +
+                         ": no matching entry in secrets.h's CAMERA_SECRETS - this camera is NOT being monitored.");
+    vTaskDelete(nullptr);
+    return;
+  }
 
   if (WiFi.status() == WL_CONNECTED) {
     if (!cameraSetupSequence(cfg, st)) {
@@ -371,7 +407,11 @@ void cameraTaskFn(void* pvParameters) {
 
     if (!st.subscriptionActive) {
       if (millis() - st.lastRetry >= RETRY_INTERVAL_MS) {
-        st.lastRetry = millis();
+        // Jitter the retry timer (+/- up to 2s) so cameras that failed
+        // together at boot or during a WiFi outage don't stay locked in
+        // lockstep, all retrying (and all failing again, if the network's
+        // still overwhelmed) on the same 10s tick forever.
+        st.lastRetry = millis() - (unsigned long)random(0, 2001);
         Serial.printf("[%s] Retrying subscription...\n", cfg.name);
         if (st.eventServiceUrl.length() == 0) {
           cameraSetupSequence(cfg, st); // full rediscovery if we never got services

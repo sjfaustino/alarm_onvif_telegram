@@ -13,7 +13,23 @@ struct CameraState {
   unsigned long lastRenew = 0;
   unsigned long lastRetry = 0;
   uint32_t lastAlert      = 0;
+
+  // Resolved once by resolveCameraCredentials() at task startup - looked up
+  // by cfg.name against CAMERA_SECRETS in secrets.h, NOT by array position.
+  // nullptr until resolved; every SOAP/snapshot call in camera.cpp and
+  // telegram.cpp reads these instead of touching secrets.h directly.
+  const char* user = nullptr;
+  const char* pass = nullptr;
 };
+
+// Looks up {user, pass} for cfg.name in CAMERA_SECRETS (secrets.h) by exact
+// name match and stores them into st.user/st.pass. This replaces matching
+// credentials to cameras by their position in two separate arrays (CAMERAS[]
+// here vs CAM0_USER/CAM1_USER.. in secrets.h) - a scheme where reordering or
+// adding a camera in one file without the other silently sends the wrong
+// (or empty) credentials to a camera. Returns false and logs which name
+// failed to match if no CAMERA_SECRETS entry has that name.
+bool resolveCameraCredentials(const CameraConfig& cfg, CameraState& st);
 
 // Runs GetCapabilities -> GetServiceCapabilities -> GetEventProperties ->
 // GetProfiles/GetSnapshotUri -> CreatePullPointSubscription, in order.

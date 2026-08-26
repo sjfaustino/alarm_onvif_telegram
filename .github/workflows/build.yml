@@ -1,0 +1,40 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        env: [esp32dev, esp32s3]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Cache PlatformIO packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+
+      - name: Install PlatformIO
+        run: pip install --upgrade platformio
+
+      - name: Stub out secrets
+        # secrets.h is gitignored (real credentials never live in the repo) -
+        # the example template compiles fine on its own for a build-only check.
+        # telegram_ca.h IS committed but ships with a placeholder certificate
+        # string, which is also fine for compilation (only mbedtls cares at
+        # runtime whether it's a real cert).
+        run: cp include/secrets.h.example include/secrets.h
+
+      - name: Build (${{ matrix.env }})
+        run: pio run -e ${{ matrix.env }}
