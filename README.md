@@ -121,7 +121,7 @@ practice; a single-core PSRAM chip is untested.
      camera leaves its password unchanged if you leave that field blank, same as the
      Network page's WiFi password. Adding, editing, or deleting writes to NVS
      immediately but only takes effect after the next reboot.
-   - **Telegram Users** — add/delete/view recipients. Each one picks specific
+   - **Telegram Users** — add/edit/delete/view recipients. Each one picks specific
      cameras or "all cameras", and independently toggles heartbeat/boot messages and
      command permission. Takes effect immediately, no reboot needed.
    - **Firmware** — upload a `.bin` (built with `pio run -e esp32s3`) to reflash
@@ -159,9 +159,11 @@ src/
 
 ## Notes on reliability
 
-- A camera's subscription is retried on a fixed interval (`RETRY_INTERVAL_MS` in
-  `config.h`) if it drops — this doesn't currently back off, so a camera that's down
-  for a long time will be retried at a steady cadence rather than escalating delays.
+- A camera's subscription retry backs off on consecutive failures - starting at
+  `RETRY_INTERVAL_MS` (`config.h`) and doubling up to a 5-minute cap
+  (`CameraState::retryDelayMs`, `camera.cpp`), resetting the moment a retry
+  succeeds - so a camera that's down for a long time doesn't get hammered at a
+  steady cadence for the whole outage.
 - The Telegram heartbeat reports liveness but can't detect a fully frozen board on
   its own, since a hung `loop()` can't send anything - that's what the ESP32 task
   watchdog (`initWatchdog()` in `main.cpp`) covers: a 90s timeout on `loop()`

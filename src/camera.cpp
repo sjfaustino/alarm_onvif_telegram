@@ -375,6 +375,10 @@ bool cameraSetupSequence(const CameraConfig& cfg, CameraState& st) {
   return true;
 }
 
+// Cap for the per-camera subscription retry backoff below - see
+// CameraState::retryDelayMs's comment in camera.h.
+static const unsigned long RETRY_BACKOFF_MAX_MS = 300000UL; // 5 minutes between retries
+
 // ============================================================
 // Per-camera FreeRTOS task
 //
@@ -430,17 +434,34 @@ void cameraTaskFn(void* pvParameters) {
     }
 
     if (!st.subscriptionActive) {
-      if (millis() - st.lastRetry >= RETRY_INTERVAL_MS) {
+      unsigned long dueInterval = (st.retryDelayMs > 0) ? st.retryDelayMs : RETRY_INTERVAL_MS;
+      if (millis() - st.lastRetry >= dueInterval) {
         // Jitter the retry timer (+/- up to 2s) so cameras that failed
         // together at boot or during a WiFi outage don't stay locked in
         // lockstep, all retrying (and all failing again, if the network's
-        // still overwhelmed) on the same 10s tick forever.
+        // still overwhelmed) on the same tick forever.
         st.lastRetry = millis() - (unsigned long)random(0, 2001);
         Serial.printf("[%s] Retrying subscription...\n", cfg.name.c_str());
         if (st.eventServiceUrl.length() == 0) {
           cameraSetupSequence(cfg, st); // full rediscovery if we never got services
-        } else if (cameraGetEventServiceCapabilities(cfg, st) && cameraCreatePullPoint(cfg, st)) {
+        } else {
+          cameraGetEventServiceCapabilities(cfg, st) && cameraCreatePullPoint(cfg, st);
+        }
+
+        // Both calls above set st.subscriptionActive=true on success (see
+        // cameraCreatePullPoint) as a side effect, so it's the signal here
+        // regardless of which branch ran.
+        if (st.subscriptionActive) {
           Serial.printf("[%s] Subscription recovered.\n", cfg.name.c_str());
+          st.retryStreak = 0;
+          st.retryDelayMs = 0;
+        } else {
+          st.retryStreak++;
+          st.retryDelayMs = (st.retryStreak <= 1)
+              ? RETRY_INTERVAL_MS
+              : (st.retryDelayMs * 2UL < RETRY_BACKOFF_MAX_MS ? st.retryDelayMs * 2UL : RETRY_BACKOFF_MAX_MS);
+          Serial.printf("[%s] Still not subscribed after %u consecutive attempt(s) - next retry in %lus.\n",
+                        cfg.name.c_str(), (unsigned)st.retryStreak, st.retryDelayMs / 1000UL);
         }
       }
     } else {

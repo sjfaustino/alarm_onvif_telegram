@@ -143,3 +143,19 @@ bool deleteTelegramUser(const String& name) {
   }
   return false;
 }
+
+bool updateTelegramUser(const String& originalName, const TelegramUser& user) {
+  std::vector<TelegramUser> users = loadTelegramUsers();
+  int idx = -1;
+  for (size_t i = 0; i < users.size(); i++) {
+    if (users[i].name.equalsIgnoreCase(originalName)) { idx = (int)i; break; }
+  }
+  if (idx < 0) return false;
+
+  for (size_t i = 0; i < users.size(); i++) {
+    if ((int)i != idx && users[i].name.equalsIgnoreCase(user.name)) return false;
+  }
+
+  users[idx] = user;
+  return saveTelegramUsers(users);
+}

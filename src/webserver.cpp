@@ -526,7 +526,53 @@ static String testCameraConnection(CameraConfig cfg) {
 // Telegram Users panel
 // ============================================================
 
-static String renderUsersPanel() {
+// Shared by the "Add Telegram user" form (v = a fresh TelegramUser with
+// allCameras forced true, matching the old hardcoded default), "Edit user"
+// (v = the stored record), and a failed-save redisplay (v = whatever was
+// just submitted). isEdit controls the legend/button text and whether a
+// hidden originalName field is emitted - see saveUserSubmission for what
+// that's used for.
+static String renderTelegramUserForm(const TelegramUser& v, const std::vector<CameraConfig>& cams, bool isEdit) {
+  String html;
+  String legend = isEdit ? ("Edit Telegram user: " + htmlEscape(v.name)) : "Add Telegram user";
+  html += "<fieldset><legend>" + legend + "</legend><form method=\"POST\" action=\"/users/save\">";
+  if (isEdit) {
+    html += "<input type=\"hidden\" name=\"originalName\" value=\"" + htmlEscape(v.name) + "\">";
+  }
+  html += "<label>Name (unique)<input type=\"text\" name=\"name\" value=\"" + htmlEscape(v.name) +
+          "\" required></label>";
+  html += "<label>Chat ID (message @userinfobot, or check "
+          "https://api.telegram.org/bot&lt;TOKEN&gt;/getUpdates after messaging your bot)"
+          "<input type=\"text\" name=\"chatId\" value=\"" + htmlEscape(v.chatId) + "\" required></label>";
+  html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"allCameras\"" +
+          String(v.allCameras ? " checked" : "") + "> All cameras (including ones added later)</label>";
+  html += "<label>Or pick specific cameras (ignored if \"All cameras\" is checked):</label>";
+  html += "<div class=\"camera-list\">";
+  if (cams.empty()) {
+    html += "<span class=\"hint\">No cameras defined yet.</span>";
+  }
+  for (auto& c : cams) {
+    bool checked = false;
+    for (auto& n : v.cameraNames) {
+      if (n.equalsIgnoreCase(c.name)) { checked = true; break; }
+    }
+    html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"cam_" + htmlEscape(c.name) + "\"" +
+            String(checked ? " checked" : "") + "> " + htmlEscape(c.name) + "</label>";
+  }
+  html += "</div>";
+  html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"systemMessages\"" +
+          String(v.systemMessages ? " checked" : "") + "> Receive heartbeat and boot-online messages</label>";
+  html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"canCommand\"" +
+          String(v.canCommand ? " checked" : "") + "> May send /on, /off, /status commands</label>";
+  html += "<p><button type=\"submit\">" + String(isEdit ? "Save changes" : "Add user") + "</button>";
+  if (isEdit) html += " <a href=\"/users\">Cancel</a>";
+  html += "</p></form></fieldset>";
+  return html;
+}
+
+// prefill/isEdit repopulate the Add/Edit form after an edit-link click or a
+// failed save - null prefill is the normal blank "Add Telegram user" state.
+static String renderUsersPanel(const TelegramUser* prefill, bool isEdit) {
   std::vector<TelegramUser> users = loadTelegramUsers();
   std::vector<CameraConfig> cams = loadCameras();
 
@@ -549,6 +595,7 @@ static String renderUsersPanel() {
     html += "<tr><td>" + htmlEscape(u.name) + "</td><td>" + htmlEscape(u.chatId) + "</td><td>" +
             camerasCol + "</td><td>" + (u.systemMessages ? "yes" : "no") + "</td><td>" +
             (u.canCommand ? "yes" : "no") + "</td><td>";
+    html += "<a href=\"/users/edit?name=" + urlEncode(u.name) + "\">Edit</a> ";
     html += "<form class=\"inline\" method=\"POST\" action=\"/users/delete\" "
             "onsubmit=\"return confirm('Delete " + htmlEscape(u.name) + "?');\">";
     html += "<input type=\"hidden\" name=\"name\" value=\"" + htmlEscape(u.name) + "\">";
@@ -556,35 +603,20 @@ static String renderUsersPanel() {
   }
   html += "</table>";
 
-  html += "<fieldset><legend>Add Telegram user</legend><form method=\"POST\" action=\"/users/add\">";
-  html += "<label>Name (unique)<input type=\"text\" name=\"name\" required></label>";
-  html += "<label>Chat ID (message @userinfobot, or check "
-          "https://api.telegram.org/bot&lt;TOKEN&gt;/getUpdates after messaging your bot)"
-          "<input type=\"text\" name=\"chatId\" required></label>";
-  html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"allCameras\" checked> "
-          "All cameras (including ones added later)</label>";
-  html += "<label>Or pick specific cameras (ignored if \"All cameras\" is checked):</label>";
-  html += "<div class=\"camera-list\">";
-  if (cams.empty()) {
-    html += "<span class=\"hint\">No cameras defined yet.</span>";
-  }
-  for (auto& c : cams) {
-    html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"cam_" + htmlEscape(c.name) +
-            "\"> " + htmlEscape(c.name) + "</label>";
-  }
-  html += "</div>";
-  html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"systemMessages\"> "
-          "Receive heartbeat and boot-online messages</label>";
-  html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"canCommand\"> "
-          "May send /on, /off, /status commands</label>";
-  html += "<p><button type=\"submit\">Add user</button></p></form></fieldset>";
+  TelegramUser blankAdd;
+  blankAdd.allCameras = true; // friendlier default for a brand-new user than the struct's own false
+  html += renderTelegramUserForm(prefill ? *prefill : blankAdd, cams, isEdit);
 
-  html += "<p class=\"hint\">Changes take effect on the next Telegram poll/alert - no reboot needed "
-          "(unlike camera changes).</p>";
+  html += "<p class=\"hint\">Adding, editing, or deleting a Telegram user takes effect on the next "
+          "Telegram poll/alert - no reboot needed (unlike camera changes).</p>";
   return html;
 }
 
-static void handleAddUser(PsychicRequest* request, String& banner) {
+// PsychicRequest's public API doesn't expose "all values for a repeated
+// param name", so each camera gets its own uniquely-named checkbox
+// ("cam_<name>") instead of sharing name="camera" - probe for each known
+// camera by name rather than trying to enumerate submitted fields.
+static TelegramUser parseUserForm(PsychicRequest* request) {
   TelegramUser u;
   u.name           = request->getParam("name", "");
   u.chatId         = request->getParam("chatId", "");
@@ -594,10 +626,6 @@ static void handleAddUser(PsychicRequest* request, String& banner) {
   u.name.trim();
   u.chatId.trim();
 
-  // PsychicRequest's public API doesn't expose "all values for a repeated
-  // param name", so each camera gets its own uniquely-named checkbox
-  // ("cam_<name>") instead of sharing name="camera" - probe for each known
-  // camera by name rather than trying to enumerate submitted fields.
   if (!u.allCameras) {
     for (auto& c : loadCameras()) {
       if (request->hasParam(("cam_" + c.name).c_str())) {
@@ -605,14 +633,31 @@ static void handleAddUser(PsychicRequest* request, String& banner) {
       }
     }
   }
+  return u;
+}
 
-  if (u.name.length() == 0 || u.chatId.length() == 0) {
-    banner = "Name and Chat ID are required - user not added.";
-    return;
+// originalName is "" for a brand-new user (add), non-empty for an edit (the
+// name the user had before this submission - user.name may differ, which
+// is a rename).
+static bool saveUserSubmission(const TelegramUser& user, const String& originalName, String& banner) {
+  if (user.name.length() == 0 || user.chatId.length() == 0) {
+    banner = "Name and Chat ID are required - user not saved.";
+    return false;
   }
-  if (!addTelegramUser(u)) {
-    banner = "A Telegram user named \"" + htmlEscape(u.name) + "\" already exists - user not added.";
+
+  if (originalName.length() == 0) {
+    if (!addTelegramUser(user)) {
+      banner = "A Telegram user named \"" + htmlEscape(user.name) + "\" already exists - user not added.";
+      return false;
+    }
+    return true;
   }
+
+  if (!updateTelegramUser(originalName, user)) {
+    banner = "Could not save \"" + htmlEscape(user.name) + "\" - a different user already uses that name.";
+    return false;
+  }
+  return true;
 }
 
 // ============================================================
@@ -739,14 +784,31 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
   });
 
   server.on("/users", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
-    return response->send(200, "text/html", renderShell(Tab::Users, "", renderUsersPanel()).c_str());
+    return response->send(200, "text/html", renderShell(Tab::Users, "", renderUsersPanel(nullptr, false)).c_str());
   });
 
-  server.on("/users/add", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
+  server.on("/users/edit", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
+    String name = request->getParam("name", "");
+    for (auto& u : loadTelegramUsers()) {
+      if (u.name.equalsIgnoreCase(name)) {
+        TelegramUser prefill = u;
+        return response->send(200, "text/html",
+                               renderShell(Tab::Users, "", renderUsersPanel(&prefill, true)).c_str());
+      }
+    }
+    return response->redirect("/users");
+  });
+
+  server.on("/users/save", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
+    TelegramUser submitted = parseUserForm(request);
+    String originalName = request->getParam("originalName", "");
+    originalName.trim();
+
     String banner;
-    handleAddUser(request, banner);
-    if (banner.length() > 0) {
-      return response->send(200, "text/html", renderShell(Tab::Users, banner, renderUsersPanel()).c_str());
+    if (!saveUserSubmission(submitted, originalName, banner)) {
+      return response->send(200, "text/html",
+                             renderShell(Tab::Users, banner,
+                                         renderUsersPanel(&submitted, originalName.length() > 0)).c_str());
     }
     return response->redirect("/users");
   });

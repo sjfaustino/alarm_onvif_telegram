@@ -13,6 +13,15 @@ struct CameraState {
   unsigned long lastPull  = 0;
   unsigned long lastRenew = 0;
   unsigned long lastRetry = 0;
+
+  // Consecutive subscription-retry failures and the resulting backoff
+  // delay - see cameraTaskFn's retry logic in camera.cpp. retryDelayMs
+  // starts at RETRY_INTERVAL_MS on the first failure and doubles on each
+  // consecutive one after that, up to a cap; both reset to 0 the moment a
+  // retry succeeds, so a camera that's merely flaky (fails once, recovers)
+  // isn't held to the long delay a truly dead one has earned.
+  uint8_t retryStreak     = 0;
+  unsigned long retryDelayMs = 0;
   uint32_t lastAlert      = 0;
   bool     hasAlerted     = false; // lastAlert==0 is indistinguishable from "alerted at boot" - this
                                     // disambiguates so the cooldown doesn't swallow an alert that fires

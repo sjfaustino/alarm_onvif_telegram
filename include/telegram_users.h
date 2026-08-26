@@ -42,3 +42,9 @@ bool saveTelegramUsers(const std::vector<TelegramUser>& users);
 // exists.
 bool addTelegramUser(const TelegramUser& user);
 bool deleteTelegramUser(const String& name);
+
+// Replaces the user currently named originalName with user - user.name
+// doesn't have to match originalName, so this also handles a rename. Fails
+// (returns false, nothing saved) if originalName isn't found, or if
+// user.name collides with a *different* existing user's name.
+bool updateTelegramUser(const String& originalName, const TelegramUser& user);
