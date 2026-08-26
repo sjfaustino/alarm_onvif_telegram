@@ -5,24 +5,15 @@
 #include <vector>
 #include <cstring>
 
-// Looks up {user, pass} for cfg.name in CAMERA_SECRETS (secrets.h) by exact
-// name match. Logs an error and returns false on no match, so a typo'd
-// `name` in either config.h or secrets.h fails loudly at boot instead of
-// silently sending the wrong (or a previous camera's) credentials.
 bool resolveCameraCredentials(const CameraConfig& cfg, CameraState& st) {
-  for (size_t i = 0; i < NUM_CAMERA_SECRETS; i++) {
-    if (strcmp(CAMERA_SECRETS[i].name, cfg.name) == 0) {
-      st.user = CAMERA_SECRETS[i].user;
-      st.pass = CAMERA_SECRETS[i].pass;
-      return true;
-    }
+  if (cfg.user.length() == 0 || cfg.pass.length() == 0) {
+    Serial.printf("[%s] ERROR: no username/password set for this camera - add them via the web UI.\n",
+                  cfg.name.c_str());
+    return false;
   }
-  Serial.printf("[%s] ERROR: no matching entry in CAMERA_SECRETS (secrets.h) - "
-                "check that its `name` exactly matches this camera's name in "
-                "config.h's CAMERAS[] (case-sensitive, no extra whitespace). "
-                "%u secret entries checked.\n",
-                cfg.name, (unsigned)NUM_CAMERA_SECRETS);
-  return false;
+  st.user = cfg.user.c_str();
+  st.pass = cfg.pass.c_str();
+  return true;
 }
 
 // Builds the envelope and posts it, honoring cfg.useWSSecurity: when true,
@@ -37,11 +28,11 @@ static String cameraSoapCall(const CameraConfig& cfg, const CameraState& st, con
                              cfg.includeReplyToAnonymous, cfg.useWSSecurity);
   const char* basicUser = cfg.useWSSecurity ? nullptr : st.user;
   const char* basicPass = cfg.useWSSecurity ? nullptr : st.pass;
-  return soapPost(cfg.name, url, action, xml, basicUser, basicPass);
+  return soapPost(cfg.name.c_str(), url, action, xml, basicUser, basicPass);
 }
 
 bool cameraDiscoverServices(const CameraConfig& cfg, CameraState& st) {
-  Serial.printf("\n[%s] GetCapabilities\n", cfg.name);
+  Serial.printf("\n[%s] GetCapabilities\n", cfg.name.c_str());
 
   String action = "http://www.onvif.org/ver10/device/wsdl/GetCapabilities";
   String body = "<tds:GetCapabilities><tds:Category>All</tds:Category></tds:GetCapabilities>";
@@ -49,7 +40,7 @@ bool cameraDiscoverServices(const CameraConfig& cfg, CameraState& st) {
 
   if (response.length() == 0 || responseHasFault(response) ||
       response.indexOf("GetCapabilitiesResponse") < 0) {
-    Serial.printf("[%s] GetCapabilities FAILED\n", cfg.name);
+    Serial.printf("[%s] GetCapabilities FAILED\n", cfg.name.c_str());
     return false;
   }
 
@@ -58,11 +49,11 @@ bool cameraDiscoverServices(const CameraConfig& cfg, CameraState& st) {
     String discovered = findElementByLocalName(response, "XAddr", eventsPos);
     if (discovered.startsWith("http")) {
       st.eventServiceUrl = discovered;
-      Serial.printf("[%s] Event service: %s\n", cfg.name, st.eventServiceUrl.c_str());
+      Serial.printf("[%s] Event service: %s\n", cfg.name.c_str(), st.eventServiceUrl.c_str());
     }
   }
   if (st.eventServiceUrl.length() == 0) {
-    Serial.printf("[%s] Event XAddr not found in GetCapabilities response.\n", cfg.name);
+    Serial.printf("[%s] Event XAddr not found in GetCapabilities response.\n", cfg.name.c_str());
     return false;
   }
 
@@ -71,7 +62,7 @@ bool cameraDiscoverServices(const CameraConfig& cfg, CameraState& st) {
     String discoveredMedia = findElementByLocalName(response, "XAddr", mediaPos);
     if (discoveredMedia.startsWith("http")) {
       st.mediaServiceUrl = discoveredMedia;
-      Serial.printf("[%s] Media service: %s\n", cfg.name, st.mediaServiceUrl.c_str());
+      Serial.printf("[%s] Media service: %s\n", cfg.name.c_str(), st.mediaServiceUrl.c_str());
     }
   }
 
@@ -85,7 +76,7 @@ bool cameraGetEventServiceCapabilities(const CameraConfig& cfg, CameraState& st)
 
   if (response.length() == 0 || responseHasFault(response) ||
       response.indexOf("GetServiceCapabilitiesResponse") < 0) {
-    Serial.printf("[%s] GetServiceCapabilities FAILED\n", cfg.name);
+    Serial.printf("[%s] GetServiceCapabilities FAILED\n", cfg.name.c_str());
     return false;
   }
   return true;
@@ -98,7 +89,7 @@ bool cameraGetEventProperties(const CameraConfig& cfg, CameraState& st) {
 
   if (response.length() == 0 || responseHasFault(response) ||
       response.indexOf("GetEventPropertiesResponse") < 0) {
-    Serial.printf("[%s] GetEventProperties FAILED\n", cfg.name);
+    Serial.printf("[%s] GetEventProperties FAILED\n", cfg.name.c_str());
     return false;
   }
   return true;
@@ -146,25 +137,25 @@ static std::vector<ProfileInfo> parseProfiles(const String& xml) {
 }
 
 bool cameraFetchProfileAndSnapshotUri(const CameraConfig& cfg, CameraState& st) {
-  Serial.printf("\n[%s] Resolving snapshot URI\n", cfg.name);
+  Serial.printf("\n[%s] Resolving snapshot URI\n", cfg.name.c_str());
 
-  if (cfg.snapshotUriOverride != nullptr) {
+  if (cfg.snapshotUriOverride.length() > 0) {
     st.snapshotUri = cfg.snapshotUriOverride;
     // {USER}/{PASS} let an override embed query-string auth (some Vstarcam
     // firmwares want ?loginuse=...&loginpas=... instead of HTTP Basic Auth)
-    // without putting the actual credential in config.h, which is committed -
-    // st.user/st.pass come from secrets.h (gitignored) via
-    // resolveCameraCredentials, already resolved by the time this runs.
+    // without putting the actual credential in a committed file - st.user/
+    // st.pass come from resolveCameraCredentials, already resolved by the
+    // time this runs.
     st.snapshotUri.replace("{USER}", st.user);
     st.snapshotUri.replace("{PASS}", st.pass);
     String logUri = cfg.snapshotUriOverride; // log the un-substituted form - avoids echoing st.pass to serial
     logUri.replace("{PASS}", "***");
-    Serial.printf("[%s] Using configured snapshot override: %s\n", cfg.name, logUri.c_str());
+    Serial.printf("[%s] Using configured snapshot override: %s\n", cfg.name.c_str(), logUri.c_str());
     return true;
   }
 
   if (st.mediaServiceUrl.length() == 0) {
-    Serial.printf("[%s] No media service discovered, can't resolve snapshot URI.\n", cfg.name);
+    Serial.printf("[%s] No media service discovered, can't resolve snapshot URI.\n", cfg.name.c_str());
     return false;
   }
 
@@ -173,18 +164,18 @@ bool cameraFetchProfileAndSnapshotUri(const CameraConfig& cfg, CameraState& st) 
   String response = cameraSoapCall(cfg, st, st.mediaServiceUrl, "", action, body);
 
   if (response.length() == 0 || responseHasFault(response)) {
-    Serial.printf("[%s] GetProfiles FAILED\n", cfg.name);
+    Serial.printf("[%s] GetProfiles FAILED\n", cfg.name.c_str());
     return false;
   }
 
   std::vector<ProfileInfo> profiles = parseProfiles(response);
   if (profiles.empty()) {
-    Serial.printf("[%s] No profiles found in GetProfiles response.\n", cfg.name);
+    Serial.printf("[%s] No profiles found in GetProfiles response.\n", cfg.name.c_str());
     return false;
   }
 
   ProfileInfo chosen = profiles[0];
-  if (cfg.preferredProfileKeyword != nullptr) {
+  if (cfg.preferredProfileKeyword.length() > 0) {
     String keyword = cfg.preferredProfileKeyword;
     keyword.toLowerCase();
     for (auto& p : profiles) {
@@ -195,7 +186,7 @@ bool cameraFetchProfileAndSnapshotUri(const CameraConfig& cfg, CameraState& st) 
   }
   st.profileToken = chosen.token;
   Serial.printf("[%s] Using profile '%s' (token=%s) out of %u found\n",
-                cfg.name, chosen.name.c_str(), chosen.token.c_str(), (unsigned)profiles.size());
+                cfg.name.c_str(), chosen.name.c_str(), chosen.token.c_str(), (unsigned)profiles.size());
 
   String snapAction = "http://www.onvif.org/ver10/media/wsdl/GetSnapshotUri";
   String snapBody = "<trt:GetSnapshotUri><trt:ProfileToken>" + xmlEscape(st.profileToken) +
@@ -203,18 +194,18 @@ bool cameraFetchProfileAndSnapshotUri(const CameraConfig& cfg, CameraState& st) 
   String snapResponse = cameraSoapCall(cfg, st, st.mediaServiceUrl, "", snapAction, snapBody);
 
   if (snapResponse.length() == 0 || responseHasFault(snapResponse)) {
-    Serial.printf("[%s] GetSnapshotUri FAILED\n", cfg.name);
+    Serial.printf("[%s] GetSnapshotUri FAILED\n", cfg.name.c_str());
     return false;
   }
 
   st.snapshotUri = findElementByLocalName(snapResponse, "Uri");
   st.snapshotUri.trim();
   if (st.snapshotUri.length() == 0) {
-    Serial.printf("[%s] Could not find snapshot URI in response.\n", cfg.name);
+    Serial.printf("[%s] Could not find snapshot URI in response.\n", cfg.name.c_str());
     return false;
   }
 
-  Serial.printf("[%s] Snapshot URI: %s\n", cfg.name, st.snapshotUri.c_str());
+  Serial.printf("[%s] Snapshot URI: %s\n", cfg.name.c_str(), st.snapshotUri.c_str());
   Serial.println("  ^ if this looks wrong (bad IP/port), that's the same GetSnapshotUri "
                   "quirk seen on the XM530 - you may need a snapshotUriOverride for this camera too.");
   return true;
@@ -222,7 +213,7 @@ bool cameraFetchProfileAndSnapshotUri(const CameraConfig& cfg, CameraState& st) 
 
 bool cameraCreatePullPoint(const CameraConfig& cfg, CameraState& st) {
   Serial.printf("\n[%s] CreatePullPointSubscription (initTermTime=%d, replyToAnon=%d)\n",
-                cfg.name, cfg.includeInitialTerminationTime, cfg.includeReplyToAnonymous);
+                cfg.name.c_str(), cfg.includeInitialTerminationTime, cfg.includeReplyToAnonymous);
 
   String action = "http://www.onvif.org/ver10/events/wsdl/EventPortType/CreatePullPointSubscriptionRequest";
   String body = "<tev:CreatePullPointSubscription>";
@@ -235,14 +226,14 @@ bool cameraCreatePullPoint(const CameraConfig& cfg, CameraState& st) {
 
   if (response.length() == 0 || responseHasFault(response) ||
       response.indexOf("CreatePullPointSubscriptionResponse") < 0) {
-    Serial.printf("[%s] CreatePullPointSubscription FAILED\n", cfg.name);
+    Serial.printf("[%s] CreatePullPointSubscription FAILED\n", cfg.name.c_str());
     return false;
   }
 
   String address = findElementByLocalName(response, "Address");
   address.trim();
   if (!address.startsWith("http")) {
-    Serial.printf("[%s] No usable PullPoint address in response.\n", cfg.name);
+    Serial.printf("[%s] No usable PullPoint address in response.\n", cfg.name.c_str());
     return false;
   }
 
@@ -250,7 +241,7 @@ bool cameraCreatePullPoint(const CameraConfig& cfg, CameraState& st) {
   st.subscriptionActive = true;
   st.lastRenew = millis();
   st.lastPull = millis();
-  Serial.printf("[%s] Subscription ACTIVE: %s\n", cfg.name, st.pullPointUrl.c_str());
+  Serial.printf("[%s] Subscription ACTIVE: %s\n", cfg.name.c_str(), st.pullPointUrl.c_str());
   return true;
 }
 
@@ -286,7 +277,7 @@ static void printEventState(const CameraConfig& cfg, const String& xml, const St
 
   String state = xml.substring(start, end);
   state.trim();
-  Serial.printf("[%s] State = %s\n", cfg.name, state.c_str());
+  Serial.printf("[%s] State = %s\n", cfg.name.c_str(), state.c_str());
 }
 
 static void parseEvents(const CameraConfig& cfg, CameraState& st, const String& xml) {
@@ -300,10 +291,10 @@ static void parseEvents(const CameraConfig& cfg, CameraState& st, const String& 
 
   if (!motionAlarm && !cellMotion && !signalLoss && !tamper) return;
 
-  if (motionAlarm) { Serial.printf("[%s] MOTION ALARM EVENT\n", cfg.name); printEventState(cfg, xml, "MotionAlarm"); }
-  if (cellMotion)  { Serial.printf("[%s] CELL MOTION EVENT\n", cfg.name);  printEventState(cfg, xml, "CellMotionDetector"); }
-  if (signalLoss)  { Serial.printf("[%s] SIGNAL LOSS EVENT\n", cfg.name);  printEventState(cfg, xml, "SignalLoss"); }
-  if (tamper)      { Serial.printf("[%s] TAMPER EVENT\n", cfg.name);       printEventState(cfg, xml, "TamperDetector"); }
+  if (motionAlarm) { Serial.printf("[%s] MOTION ALARM EVENT\n", cfg.name.c_str()); printEventState(cfg, xml, "MotionAlarm"); }
+  if (cellMotion)  { Serial.printf("[%s] CELL MOTION EVENT\n", cfg.name.c_str());  printEventState(cfg, xml, "CellMotionDetector"); }
+  if (signalLoss)  { Serial.printf("[%s] SIGNAL LOSS EVENT\n", cfg.name.c_str());  printEventState(cfg, xml, "SignalLoss"); }
+  if (tamper)      { Serial.printf("[%s] TAMPER EVENT\n", cfg.name.c_str());       printEventState(cfg, xml, "TamperDetector"); }
 
   // Same simplification as the original: doesn't distinguish which topic was
   // true if several arrive in the same batch. Fine for a hobby alert bot;
@@ -336,7 +327,7 @@ bool cameraPullMessages(const CameraConfig& cfg, CameraState& st) {
   }
 
   if (response.indexOf("ResourceUnknownFault") >= 0 || responseHasFault(response)) {
-    Serial.printf("[%s] PullPoint gone, will resubscribe.\n", cfg.name);
+    Serial.printf("[%s] PullPoint gone, will resubscribe.\n", cfg.name.c_str());
     st.subscriptionActive = false;
     st.pullPointUrl = "";
   }
@@ -352,11 +343,11 @@ bool cameraRenewSubscription(const CameraConfig& cfg, CameraState& st) {
 
   if (response.indexOf("RenewResponse") >= 0) {
     st.lastRenew = millis();
-    Serial.printf("[%s] Subscription renewed.\n", cfg.name);
+    Serial.printf("[%s] Subscription renewed.\n", cfg.name.c_str());
     return true;
   }
 
-  Serial.printf("[%s] Renew failed, will resubscribe.\n", cfg.name);
+  Serial.printf("[%s] Renew failed, will resubscribe.\n", cfg.name.c_str());
   st.subscriptionActive = false;
   st.pullPointUrl = "";
   return false;
@@ -366,7 +357,7 @@ bool cameraSetupSequence(const CameraConfig& cfg, CameraState& st) {
   if (!cameraDiscoverServices(cfg, st)) return false;
   if (!cameraFetchProfileAndSnapshotUri(cfg, st)) {
     Serial.printf("[%s] Snapshot URI not resolved - motion will still be detected "
-                  "and logged, but photo alerts won't work until this is fixed.\n", cfg.name);
+                  "and logged, but photo alerts won't work until this is fixed.\n", cfg.name.c_str());
     // deliberately not returning false: detection/logging still has value
   }
   if (!cameraGetEventServiceCapabilities(cfg, st)) return false;
@@ -395,24 +386,24 @@ void cameraTaskFn(void* pvParameters) {
   CameraState& st = *ctx->st;
   delete ctx; // context struct's job is done once we've unpacked it
 
-  Serial.printf("[%s] Task started.\n", cfg.name);
+  Serial.printf("[%s] Task started.\n", cfg.name.c_str());
 
-  // Resolve credentials by name once, before anything else. A mismatch here
-  // is a config typo, not a flaky network condition - retrying it forever
+  // Resolve credentials once, before anything else. A mismatch here is a
+  // config mistake, not a flaky network condition - retrying it forever
   // would just spam the log, so this camera's task exits instead. The
   // Telegram alert doesn't need this camera's credentials to send.
   if (!resolveCameraCredentials(cfg, st)) {
     Serial.printf("[%s] FATAL: no credentials resolved - task exiting, camera will NOT be monitored "
-                  "until secrets.h is fixed and the board is reflashed.\n", cfg.name);
-    sendTelegramMessage("\xE2\x9A\xA0\xEF\xB8\x8F " + String(cfg.name) +
-                         ": no matching entry in secrets.h's CAMERA_SECRETS - this camera is NOT being monitored.");
+                  "until this is fixed via the web UI and the board is rebooted.\n", cfg.name.c_str());
+    sendTelegramMessage("\xE2\x9A\xA0\xEF\xB8\x8F " + cfg.name +
+                         ": no username/password set for this camera - it is NOT being monitored.");
     vTaskDelete(nullptr);
     return;
   }
 
   if (WiFi.status() == WL_CONNECTED) {
     if (!cameraSetupSequence(cfg, st)) {
-      Serial.printf("[%s] Initial setup FAILED - will keep retrying.\n", cfg.name);
+      Serial.printf("[%s] Initial setup FAILED - will keep retrying.\n", cfg.name.c_str());
     }
   }
 
@@ -436,11 +427,11 @@ void cameraTaskFn(void* pvParameters) {
         // lockstep, all retrying (and all failing again, if the network's
         // still overwhelmed) on the same 10s tick forever.
         st.lastRetry = millis() - (unsigned long)random(0, 2001);
-        Serial.printf("[%s] Retrying subscription...\n", cfg.name);
+        Serial.printf("[%s] Retrying subscription...\n", cfg.name.c_str());
         if (st.eventServiceUrl.length() == 0) {
           cameraSetupSequence(cfg, st); // full rediscovery if we never got services
         } else if (cameraGetEventServiceCapabilities(cfg, st) && cameraCreatePullPoint(cfg, st)) {
-          Serial.printf("[%s] Subscription recovered.\n", cfg.name);
+          Serial.printf("[%s] Subscription recovered.\n", cfg.name.c_str());
         }
       }
     } else {

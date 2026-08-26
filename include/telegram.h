@@ -3,15 +3,17 @@
 #include "config.h"
 #include "camera.h"
 
-// Fetches a snapshot JPEG from st.snapshotUri, sends it to Telegram with a
-// caption of "<camera name> - <UTC timestamp>", subject to cfg's per-camera
+// Fetches a snapshot JPEG from st.snapshotUri and sends it, with a caption
+// of "<camera name> - <UTC timestamp>", to every Telegram user (see
+// telegram_users.h) subscribed to this camera - subject to cfg's per-camera
 // alert cooldown. Safe to call on every motion event; it self-throttles.
 void triggerMotionAlert(const CameraConfig& cfg, CameraState& st);
 
-// Sends a plain text message to TELEGRAM_CHAT_ID (no photo attached) - used
-// for the boot-time "camera monitor is online" notice, but generic enough
-// for any future status/error message. Returns false on any failure
-// (connect, write, or a non-200 Telegram response).
+// Sends a plain text message (no photo attached) to every Telegram user
+// with systemMessages enabled - used for the boot-time "camera monitor is
+// online" notice and the periodic heartbeat, but generic enough for any
+// future broadcast. Returns false if no user has systemMessages enabled, or
+// if every send to one that does failed.
 bool sendTelegramMessage(const String& text);
 
 // True once TELEGRAM_ROOT_CA (telegram_ca.h) has been filled in with a real
@@ -27,14 +29,16 @@ bool telegramCAConfigured();
 // starts in whatever state a previous /on or /off command left it in.
 bool loadAlertEnabledPref(size_t index);
 
-// Polls Telegram's getUpdates for new commands from TELEGRAM_CHAT_ID and
-// applies them to states[]/cameras[] (matched by CameraConfig::name):
+// Polls Telegram's getUpdates for new commands and applies them to
+// states[]/cameras[] (matched by CameraConfig::name):
 //   /on <camera name>   - resume Telegram alerts for that camera
 //   /off <camera name>  - mute Telegram alerts for that camera (polling and
 //                         its ONVIF subscription keep running regardless)
 //   /status             - list every enabled camera's current on/off state
-// Each toggle is persisted via NVS so it survives a reboot. Commands from any
-// chat ID other than TELEGRAM_CHAT_ID are ignored. Call periodically from
-// loop() (e.g. every TELEGRAM_COMMAND_POLL_MS) - each call is one short,
-// non-blocking-long-poll HTTPS round trip, safe to call often.
+// Each toggle is persisted via NVS so it survives a reboot. The reply goes
+// back to whichever chat sent the command. Commands from a chat ID that
+// doesn't belong to a Telegram user with canCommand enabled (see
+// telegram_users.h) are ignored. Call periodically from loop() (e.g. every
+// TELEGRAM_COMMAND_POLL_MS) - each call is one short, non-blocking-long-poll
+// HTTPS round trip, safe to call often.
 void pollTelegramCommands(const CameraConfig cameras[], CameraState states[], size_t numCameras);

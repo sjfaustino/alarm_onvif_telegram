@@ -3,30 +3,33 @@
 #include <esp_heap_caps.h>
 #include "config.h"
 #include "camera.h"
+#include "camera_store.h"
+#include "network_store.h"
 #include "telegram.h"
+#include "webserver.h"
 
-static CameraState cameraStates[NUM_CAMERAS];
+static std::vector<CameraConfig> g_cameras;
+static std::vector<CameraState> g_cameraStates;
+static WifiCredentials g_wifiCredentials;
 static unsigned long lastHeartbeatMs = 0;
 static unsigned long lastCommandPollMs = 0;
 
 // Extracts "host[:port]" out of a URL like "http://192.168.1.178:8899/onvif/..."
-// for the startup camera listing - config.h only stores the full service URL,
-// not a separate IP field.
-static String extractHost(const char* url) {
-  String s(url);
-  int schemeEnd = s.indexOf("://");
+// for the startup camera listing.
+static String extractHost(const String& url) {
+  int schemeEnd = url.indexOf("://");
   int start = (schemeEnd >= 0) ? schemeEnd + 3 : 0;
-  int pathStart = s.indexOf('/', start);
-  int end = (pathStart >= 0) ? pathStart : (int)s.length();
-  return s.substring(start, end);
+  int pathStart = url.indexOf('/', start);
+  int end = (pathStart >= 0) ? pathStart : (int)url.length();
+  return url.substring(start, end);
 }
 
 static void printCameraList() {
   Serial.println("\n--- Configured cameras ---");
-  for (size_t i = 0; i < NUM_CAMERAS; i++) {
-    const CameraConfig& cfg = CAMERAS[i];
+  for (size_t i = 0; i < g_cameras.size(); i++) {
+    const CameraConfig& cfg = g_cameras[i];
     Serial.printf("  [%u] %-20s %-24s %s\n",
-                  (unsigned)i, cfg.name, extractHost(cfg.deviceServiceUrl).c_str(),
+                  (unsigned)i, cfg.name.c_str(), extractHost(cfg.deviceServiceUrl).c_str(),
                   cfg.enabled ? "enabled" : "disabled");
   }
   Serial.println("--------------------------\n");
@@ -37,11 +40,11 @@ static void printCameraList() {
 // enabled/disabled so it reads at a glance.
 static String buildCameraListMessage() {
   String s = "--- Configured cameras ---\n";
-  for (size_t i = 0; i < NUM_CAMERAS; i++) {
-    const CameraConfig& cfg = CAMERAS[i];
-    char line[48];
+  for (size_t i = 0; i < g_cameras.size(); i++) {
+    const CameraConfig& cfg = g_cameras[i];
+    char line[64];
     snprintf(line, sizeof(line), "  [%u] %-20s %s\n",
-              (unsigned)i, cfg.name, cfg.enabled ? "ON" : "OFF");
+              (unsigned)i, cfg.name.c_str(), cfg.enabled ? "ON" : "OFF");
     s += line;
   }
   s += "--------------------------";
@@ -53,7 +56,7 @@ static void connectWiFi() {
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
   WiFi.persistent(false);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  WiFi.begin(g_wifiCredentials.ssid.c_str(), g_wifiCredentials.password.c_str());
 
   unsigned long start = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - start < 30000UL) {
@@ -107,11 +110,11 @@ static void sendHeartbeat() {
   String msg = "\xF0\x9F\x92\x93 Camera monitor heartbeat\n";
   msg += "Uptime: " + formatUptime(millis()) + "\n";
   msg += "Free heap: " + String(ESP.getFreeHeap()) + " bytes\n";
-  for (size_t i = 0; i < NUM_CAMERAS; i++) {
-    if (!CAMERAS[i].enabled) continue;
-    msg += String(CAMERAS[i].name) + ": " +
-           (cameraStates[i].subscriptionActive ? "subscribed" : "NOT subscribed") +
-           (cameraStates[i].alertsEnabled ? "" : " (alerts OFF)") + "\n";
+  for (size_t i = 0; i < g_cameras.size(); i++) {
+    if (!g_cameras[i].enabled) continue;
+    msg += g_cameras[i].name + ": " +
+           (g_cameraStates[i].subscriptionActive ? "subscribed" : "NOT subscribed") +
+           (g_cameraStates[i].alertsEnabled ? "" : " (alerts OFF)") + "\n";
   }
   if (!sendTelegramMessage(msg)) {
     Serial.println("Heartbeat: Telegram send failed.");
@@ -123,25 +126,52 @@ void setup() {
   delay(1000);
   Serial.println("\n========================================");
   Serial.println("MULTI-CAMERA ONVIF MOTION MONITOR");
-  Serial.printf("Cameras configured: %u\n", (unsigned)NUM_CAMERAS);
   Serial.println("========================================");
 
   Serial.printf("PSRAM: %u bytes%s\n", (unsigned)ESP.getPsramSize(),
                 ESP.getPsramSize() == 0 ? " (none detected)" : "");
 
-  if (ESP.getPsramSize() > 0) {
-    // Previously only telegram.cpp's explicit snapshot buffer used PSRAM -
-    // every other sizeable allocation (GetProfiles/GetSnapshotUri SOAP
-    // response Strings in onvif_soap.cpp/camera.cpp, which can run several
-    // KB with multiple profiles) still competed with mbedTLS's own
-    // internal-heap TLS buffers for internal RAM. This routes any single
-    // allocation >=4KB to PSRAM automatically instead. Small/frequent
-    // allocations stay on internal RAM on purpose - PSRAM access is slower
-    // than internal RAM, so forcing every short-lived tag-name String
-    // through it would cost more than it saves.
-    heap_caps_malloc_extmem_enable(4096);
-    Serial.println("PSRAM: allocations >=4KB will be routed here automatically.");
+  // PSRAM is mandatory, not just preferred - triggerMotionAlert (telegram.cpp)
+  // always buffers the full snapshot in RAM now, once, to resend it to every
+  // Telegram user subscribed to that camera. On a no-PSRAM board that buffer
+  // (up to SNAPSHOT_MAX_BYTES) would sit in internal RAM alongside mbedTLS's
+  // own fixed ~32KB of TLS session buffers - risky, and the kind of thing
+  // that fails partway through a send rather than at boot. Refusing to start
+  // at all is safer than trusting a board that's likely to run out of heap
+  // the first time it actually needs to.
+  if (ESP.getPsramSize() == 0) {
+    Serial.println("\n========================================");
+    Serial.println("FATAL: this board has no PSRAM.");
+    Serial.println("This project requires a PSRAM-equipped board (e.g. ESP32-S3 with");
+    Serial.println("embedded octal PSRAM - see platformio.ini's [env:esp32s3]).");
+    Serial.println("Refusing to start rather than run degraded and fail later.");
+    Serial.println("========================================");
+    while (true) {
+      delay(5000);
+      Serial.println("HALTED: no PSRAM detected - see message above. Reflash onto a PSRAM board.");
+    }
   }
+
+  // Previously only telegram.cpp's explicit snapshot buffer used PSRAM -
+  // every other sizeable allocation (GetProfiles/GetSnapshotUri SOAP
+  // response Strings in onvif_soap.cpp/camera.cpp, which can run several KB
+  // with multiple profiles) still competed with mbedTLS's own internal-heap
+  // TLS buffers for internal RAM. This routes any single allocation >=4KB to
+  // PSRAM automatically instead. Small/frequent allocations stay on internal
+  // RAM on purpose - PSRAM access is slower than internal RAM, so forcing
+  // every short-lived tag-name String through it would cost more than it saves.
+  heap_caps_malloc_extmem_enable(4096);
+  Serial.println("PSRAM: allocations >=4KB will be routed here automatically.");
+
+  g_wifiCredentials = loadWifiCredentials();
+
+  // Loaded once here and kept alive for the process's lifetime (never
+  // resized/reallocated afterward) - camera.h's CameraState::user/pass and
+  // every CameraTaskContext hold raw pointers/references into these
+  // vectors' elements, which stay valid only as long as that holds.
+  g_cameras = loadCameras();
+  g_cameraStates.resize(g_cameras.size());
+  Serial.printf("Cameras configured: %u\n", (unsigned)g_cameras.size());
 
   printCameraList();
 
@@ -153,6 +183,9 @@ void setup() {
   connectWiFi();
   if (WiFi.status() != WL_CONNECTED) return;
   setupTime();
+
+  startWebServer(&g_cameras, &g_cameraStates);
+  Serial.printf("Web UI: http://%s/\n", WiFi.localIP().toString().c_str());
 
   // One FreeRTOS task per enabled camera, pinned to core 1 - see
   // xTaskCreatePinnedToCore's comment below and cameraTaskFn's comment in
@@ -167,13 +200,13 @@ void setup() {
   // accept 1-2 concurrent connections, so hitting all N at once caused a
   // thundering-herd of "Connection reset by peer" failures at boot even
   // though the cameras were fine individually.
-  for (size_t i = 0; i < NUM_CAMERAS; i++) {
-    if (!CAMERAS[i].enabled) {
-      Serial.printf("[%s] Disabled - no task created.\n", CAMERAS[i].name);
+  for (size_t i = 0; i < g_cameras.size(); i++) {
+    if (!g_cameras[i].enabled) {
+      Serial.printf("[%s] Disabled - no task created.\n", g_cameras[i].name.c_str());
       continue;
     }
-    cameraStates[i].alertsEnabled = loadAlertEnabledPref(i); // restore any /on or /off from before a reboot
-    CameraTaskContext* ctx = new CameraTaskContext{&CAMERAS[i], &cameraStates[i]};
+    g_cameraStates[i].alertsEnabled = loadAlertEnabledPref(i); // restore any /on or /off from before a reboot
+    CameraTaskContext* ctx = new CameraTaskContext{&g_cameras[i], &g_cameraStates[i]};
     char taskName[16];
     snprintf(taskName, sizeof(taskName), "cam%u", (unsigned)i);
     // 10KB stack: covers the SOAP String churn plus a WiFiClientSecure TLS
@@ -191,10 +224,10 @@ void setup() {
   }
 
   int enabledCount = 0;
-  for (size_t i = 0; i < NUM_CAMERAS; i++) if (CAMERAS[i].enabled) enabledCount++;
+  for (size_t i = 0; i < g_cameras.size(); i++) if (g_cameras[i].enabled) enabledCount++;
 
   String bootMsg = "\xF0\x9F\x93\xB7 Camera monitor online\n";
-  bootMsg += String(enabledCount) + "/" + String((int)NUM_CAMERAS) + " cameras enabled\n";
+  bootMsg += String(enabledCount) + "/" + String((int)g_cameras.size()) + " cameras enabled\n";
   bootMsg += buildCameraListMessage();
   if (!sendTelegramMessage(bootMsg)) {
     Serial.println("Boot notice: Telegram send failed (network/token/CA issue?) - continuing anyway.");
@@ -220,7 +253,7 @@ void loop() {
 
   if (WiFi.status() == WL_CONNECTED && millis() - lastCommandPollMs >= TELEGRAM_COMMAND_POLL_MS) {
     lastCommandPollMs = millis();
-    pollTelegramCommands(CAMERAS, cameraStates, NUM_CAMERAS);
+    pollTelegramCommands(g_cameras.data(), g_cameraStates.data(), g_cameras.size());
   }
 
   delay(1000);

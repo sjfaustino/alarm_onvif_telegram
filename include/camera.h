@@ -1,6 +1,7 @@
 #pragma once
 #include <Arduino.h>
 #include "config.h"
+#include "camera_store.h" // CameraConfig
 
 struct CameraState {
   String   eventServiceUrl;
@@ -24,21 +25,21 @@ struct CameraState {
   // triggerMotionAlert's Telegram send is suppressed.
   bool     alertsEnabled = true;
 
-  // Resolved once by resolveCameraCredentials() at task startup - looked up
-  // by cfg.name against CAMERA_SECRETS in secrets.h, NOT by array position.
-  // nullptr until resolved; every SOAP/snapshot call in camera.cpp and
-  // telegram.cpp reads these instead of touching secrets.h directly.
+  // Copied once from cfg.user/cfg.pass by resolveCameraCredentials() at
+  // task startup. Kept as const char* (rather than reading cfg.user/pass
+  // directly everywhere) so every SOAP/snapshot call in camera.cpp and
+  // telegram.cpp can keep using a plain const char* the way it always has -
+  // safe because cfg lives in main.cpp's camera vector, which is only ever
+  // populated once at boot and never resized/reallocated afterward, so
+  // these pointers (into cfg's String storage) stay valid for the process's
+  // lifetime.
   const char* user = nullptr;
   const char* pass = nullptr;
 };
 
-// Looks up {user, pass} for cfg.name in CAMERA_SECRETS (secrets.h) by exact
-// name match and stores them into st.user/st.pass. This replaces matching
-// credentials to cameras by their position in two separate arrays (CAMERAS[]
-// here vs CAM0_USER/CAM1_USER.. in secrets.h) - a scheme where reordering or
-// adding a camera in one file without the other silently sends the wrong
-// (or empty) credentials to a camera. Returns false and logs which name
-// failed to match if no CAMERA_SECRETS entry has that name.
+// Copies cfg.user/cfg.pass into st.user/st.pass. Returns false (and logs)
+// if either is empty, so a camera added via the web UI without credentials
+// filled in fails loudly at boot instead of silently sending blank auth.
 bool resolveCameraCredentials(const CameraConfig& cfg, CameraState& st);
 
 // Runs GetCapabilities -> GetServiceCapabilities -> GetEventProperties ->
@@ -69,7 +70,7 @@ struct CameraTaskContext {
 // each camera gets its own task instead of sharing one round-robin slot, so
 // N cameras' PullMessages long-polls overlap instead of serializing.
 //
-// Reads CAMERAS[]/cfg (never mutated after boot) and only ever touches its
+// Reads cfg (never mutated after boot) and only ever touches its
 // own CameraState - no locking needed between camera tasks. It does read
 // WiFi.status() each iteration and skips network calls while disconnected,
 // but never calls WiFi.begin() itself - loop() in main.cpp remains the sole

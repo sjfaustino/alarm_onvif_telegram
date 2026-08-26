@@ -14,32 +14,36 @@ Arduino-ESP32/IDF releases.
 - Polls each enabled camera's ONVIF PullPoint subscription on its own FreeRTOS task
   (parallel, not round-robin) and auto-resubscribes/retries on failure.
 - Sends a Telegram photo alert on motion/tamper events, per-camera cooldown to avoid
-  spam, with the JPEG buffered in PSRAM or streamed through internal RAM depending
-  on what the board has.
+  spam, JPEG buffered once in PSRAM and resent to every Telegram user subscribed to
+  that camera.
 - TLS to Telegram is certificate-pinned (not `setInsecure()`).
 - Per-camera quirks handled via config flags: WS-Security vs. HTTP Basic Auth,
   optional `InitialTerminationTime`/`ReplyTo` (needed by some Xiongmai-derived
   stacks), snapshot URI override, and preferred video profile.
 - Periodic Telegram heartbeat (uptime, free heap, per-camera subscription status)
   so a silently hung or endlessly-retrying board doesn't go unnoticed.
-- Credentials are kept out of the committed source (`secrets.h`, gitignored) and
-  matched to cameras by name, not by array position.
-- Remote mute/unmute per camera via Telegram commands (`/on <name>`, `/off <name>`,
-  `/status`), restricted to `TELEGRAM_CHAT_ID` and persisted across reboots in NVS.
-  A muted camera keeps polling ONVIF and its subscription stays alive - only the
-  Telegram photo send is suppressed.
+- Cameras and Telegram recipients are managed at runtime through a built-in
+  sidebar dashboard ([hoeken/PsychicHttp](https://github.com/hoeken/PsychicHttp))
+  and persisted in NVS - no more editing and reflashing `config.h`/`secrets.h` to
+  change either. Camera changes take effect after a reboot; Telegram user changes
+  apply immediately.
+- Any number of Telegram users, each independently configured for which cameras
+  they hear from (specific list or "all, including future ones"), whether they get
+  the heartbeat/boot messages, and whether they're allowed to send `/on`, `/off`,
+  `/status` commands (which apply per-camera and reply to whoever sent them).
 
 ## Hardware
 
-Tested on:
-- Classic dual-core ESP32 (no PSRAM) — `[env:esp32dev]`
-- ESP32-S3 with 8MB embedded octal PSRAM — `[env:esp32s3]`
+**PSRAM is required.** A motion alert can go to more than one Telegram user, so the
+snapshot JPEG is buffered once in RAM and resent per recipient - `src/main.cpp`'s
+`setup()` checks `ESP.getPsramSize()` and refuses to start (loops forever printing a
+warning instead of proceeding) if there isn't any, rather than run degraded and fail
+partway through a send later.
 
-Both PSRAM presence and core count are detected/handled at runtime (see the
-comments in `include/config.h` and `src/telegram.cpp`), so the only per-board
-difference is the PlatformIO build environment you flash. A single-core board
-(e.g. ESP32-C3) is **not currently supported** — `src/main.cpp` pins one FreeRTOS
-task per camera to core 1, which requires a second core.
+Tested on an ESP32-S3 with 8MB embedded octal PSRAM — `[env:esp32s3]`. Also needs a
+second core (`src/main.cpp` pins one FreeRTOS task per camera to core 1), which every
+PSRAM-equipped ESP32-S3 variant has, so this hasn't been a real constraint in
+practice; a single-core PSRAM chip is untested.
 
 ## Setup
 
@@ -55,43 +59,63 @@ task per camera to core 1, which requires a second core.
      [@BotFather](https://t.me/BotFather) to create a bot, then message
      [@userinfobot](https://t.me/userinfobot) (or hit
      `https://api.telegram.org/bot<TOKEN>/getUpdates` after messaging your bot once)
-     to get your chat ID.
-   - `CAMERA_SECRETS[]` — one `{ name, user, pass }` entry per camera. **`name` must
-     exactly match** that camera's `name` in `include/config.h`'s `CAMERAS[]` — that's
-     how credentials get matched up at boot, not the order of the array. A mismatch
-     is logged loudly (and reported over Telegram) rather than silently sending the
-     wrong password.
+     to get your chat ID. `TELEGRAM_CHAT_ID` becomes the seed for a single "Admin"
+     Telegram user (all cameras, heartbeat/boot messages, can command) on first boot -
+     add more users, or adjust that one, from the web UI's Telegram Users page after.
+   - `CAMERA_SEED[]` — optional, one-time only. Leave it empty to add every camera
+     through the web UI after first boot; fill it in only if you're migrating cameras
+     already tuned elsewhere and want them pre-populated. It's read exactly once, on
+     the very first boot after NVS has no camera data yet, and never again after that.
 
 3. **Fill in `include/telegram_ca.h`** with Telegram's current root CA — instructions
    are in that file's comments (`openssl s_client` one-liner or browser cert export).
    Root CAs don't rotate often, so this is a one-time setup step, not a per-build one.
    The boot log warns you plainly if this is still the placeholder.
 
-4. **Configure your cameras** in `include/config.h`'s `CAMERAS[]`. Each field is
-   documented in the comment block above the array — the ones you're most likely to
-   need to flip are `useWSSecurity`, `includeInitialTerminationTime`/
-   `includeReplyToAnonymous`, and `snapshotUriOverride` if `GetSnapshotUri` comes back
-   with a broken address for your camera.
-
-5. **Build and upload:**
+4. **Build and upload:**
    ```sh
-   pio run -e esp32s3 -t upload    # or -e esp32dev
+   pio run -e esp32s3 -t upload
    pio device monitor -b 115200
    ```
-   `default_envs` in `platformio.ini` picks `esp32s3` if you omit `-e`.
+   `default_envs` in `platformio.ini` already picks `esp32s3` if you omit `-e`.
+
+5. **Open the dashboard** at `http://<board's IP>/` (printed in the boot log and the
+   Telegram boot message). The sidebar has three sections:
+   - **Network** — connection status (SSID, IP, MAC, signal, uptime) and an editable
+     WiFi SSID/password. Saving writes to NVS immediately but only takes effect after
+     the next reboot - a live change could drop the board off the network with no way
+     back to this page if the new credentials are wrong.
+   - **Cameras** — add/delete/view. Fill in the device service URL, credentials, and
+     any per-camera quirk flags (the form documents what each one does). Adding or
+     deleting writes to NVS immediately but only takes effect after the next reboot.
+   - **Telegram Users** — add/delete/view recipients. Each one picks specific
+     cameras or "all cameras", and independently toggles heartbeat/boot messages and
+     command permission. Takes effect immediately, no reboot needed.
+
+   No login is required — anyone on your LAN who can reach the board's IP can view
+   and change this, including camera and WiFi credentials. Don't forward port 80 to
+   the internet.
 
 ## Project layout
 
 ```
 include/
-  config.h          # timing constants + per-camera CAMERAS[] (committed)
+  config.h          # timing constants (committed) - no longer holds per-camera config
+  camera_store.h    # CameraConfig struct + NVS load/save (add/delete/view backing)
+  telegram_users.h  # TelegramUser struct + NVS load/save (recipients, per-user permissions)
+  network_store.h    # WiFi credentials, NVS load/save (editable from the dashboard)
+  webserver.h       # sidebar dashboard - Network + Cameras + Telegram Users (PsychicHttp)
   secrets.h.example # template for secrets.h (copy, fill in, gitignored)
   telegram_ca.h      # Telegram's root CA for TLS pinning (committed, not secret)
   camera.h, telegram.h, onvif_soap.h
 src/
-  main.cpp          # boot sequence, WiFi/NTP, per-camera task spawn, heartbeat
+  main.cpp          # boot sequence, PSRAM check, WiFi/NTP, per-camera task spawn, heartbeat
   camera.cpp        # ONVIF SOAP calls, event parsing, per-camera FreeRTOS task
-  telegram.cpp       # photo/message send paths (buffered vs. streamed)
+  camera_store.cpp   # NVS-backed camera list (load/save/add/delete, one-time seed)
+  telegram_users.cpp # NVS-backed Telegram user list (load/save/add/delete, one-time seed)
+  network_store.cpp  # NVS-backed WiFi credentials (load/save, one-time seed)
+  webserver.cpp      # dashboard HTML pages and form handlers
+  telegram.cpp       # photo/message send paths, multi-recipient fan-out, remote commands
   onvif_soap.cpp     # SOAP envelope building, WS-Security digest, XML helpers
 ```
 

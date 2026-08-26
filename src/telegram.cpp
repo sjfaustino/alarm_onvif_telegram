@@ -1,5 +1,6 @@
 #include "telegram.h"
 #include "telegram_ca.h"
+#include "telegram_users.h"
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <NetworkClient.h> // HTTPClient::getStreamPtr() returns NetworkClient* on Arduino-ESP32 3.x cores
@@ -7,6 +8,7 @@
 #include <Preferences.h>
 #include <time.h>
 #include <cstring>
+#include <vector>
 
 bool telegramCAConfigured() {
   // Cheap sanity check that this actually looks like a PEM certificate,
@@ -19,31 +21,24 @@ bool telegramCAConfigured() {
 }
 
 // ============================================================
-// Camera -> Telegram: two send paths, chosen at RUNTIME
+// Camera -> Telegram
 //
-// This project has now run on three different boards across development -
-// no-PSRAM ESP32-S2, no-PSRAM dual-core ESP32, and this PSRAM-equipped
-// ESP32-S3 - so rather than hardcode an assumption about the current board,
-// the choice is made at boot by checking ESP.getPsramSize(). Whichever
-// board this gets flashed to next, it adapts on its own:
-//
-//   PSRAM present (this board: 8MB): buffer the whole JPEG in PSRAM via
-//   allocateSnapshotBuffer() below, then send it in one shot. With a pool
-//   that size, the internal-heap fragmentation problem that motivated
-//   streaming in the first place doesn't apply, so there's no reason not
-//   to take the simpler buffered path.
-//
-//   No PSRAM: stream the JPEG from the camera's HTTP connection straight
-//   into Telegram's TLS connection, STREAM_CHUNK_BYTES at a time, so the
-//   full image is never resident in internal RAM alongside mbedTLS's own
-//   fixed ~16KB+16KB session buffers (see config.h's PSRAM note for the
-//   original failure this fixed).
+// PSRAM is a hard requirement now (main.cpp's setup() refuses to boot
+// without it), because a motion alert can go to more than one Telegram
+// user: the JPEG has to be fetched from the camera once, held in memory,
+// and resent per recipient (see triggerMotionAlert below). This project did
+// run on a couple of earlier no-PSRAM boards, with a streamed send path
+// that relayed camera bytes straight into Telegram's TLS connection to
+// avoid ever holding the whole JPEG in RAM - that path is gone, since
+// streaming consumes the camera's response as it goes and could only ever
+// have served a single recipient. SNAPSHOT_MAX_BYTES (much smaller than
+// SNAPSHOT_MAX_BYTES_PSRAM) survives only as allocateSnapshotBuffer's
+// fallback cap for the rare case a PSRAM allocation itself fails.
 // ============================================================
 
-// Allocates `cap` bytes for a snapshot buffer, preferring PSRAM when the
-// board has it and falling back to internal RAM otherwise (covers both a
-// board with no PSRAM at all and the rare case of a PSRAM allocation
-// failing e.g. due to fragmentation of the PSRAM pool itself).
+// Allocates `cap` bytes for a snapshot buffer, preferring PSRAM (always
+// available - see above) and falling back to internal RAM only if that
+// specific allocation fails, e.g. due to PSRAM pool fragmentation.
 static uint8_t* allocateSnapshotBuffer(size_t cap) {
   uint8_t* buf = (uint8_t*)heap_caps_malloc(cap, MALLOC_CAP_SPIRAM);
   if (!buf) buf = (uint8_t*)malloc(cap);
@@ -124,12 +119,12 @@ struct TelegramMultipart {
   size_t contentLength;
 };
 
-static TelegramMultipart buildMultipart(size_t jpgLen, const String& caption) {
+static TelegramMultipart buildMultipart(size_t jpgLen, const String& caption, const String& chatId) {
   TelegramMultipart m;
   m.boundary = "----ESP32Boundary7MA4YWxk";
   m.head.reserve(160 + caption.length());
   m.head += "--" + m.boundary + "\r\n";
-  m.head += "Content-Disposition: form-data; name=\"chat_id\"\r\n\r\n" + String(TELEGRAM_CHAT_ID) + "\r\n";
+  m.head += "Content-Disposition: form-data; name=\"chat_id\"\r\n\r\n" + chatId + "\r\n";
   m.head += "--" + m.boundary + "\r\n";
   m.head += "Content-Disposition: form-data; name=\"caption\"\r\n\r\n" + caption + "\r\n";
   m.head += "--" + m.boundary + "\r\n";
@@ -170,76 +165,21 @@ static bool readTelegramResponse(WiFiClientSecure& client) {
   return ok;
 }
 
-// Streams a JPEG straight from the camera's open HTTP connection into
-// Telegram's TLS connection, STREAM_CHUNK_BYTES at a time. jpgLen must be
-// the camera's exact reported Content-Length for the bytes about to be read
-// from camStream.
-static bool sendTelegramPhotoStreamed(HTTPClient& http, NetworkClient* camStream,
-                                       size_t jpgLen, const String& caption) {
-  if (!camStream || jpgLen == 0) return false;
-
-  Serial.printf("Free heap before Telegram send (streamed): %u bytes (max alloc: %u, jpg: %u bytes)\n",
-                (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap(), (unsigned)jpgLen);
-
-  WiFiClientSecure client;
-  client.setCACert(TELEGRAM_ROOT_CA); // see telegram_ca.h if this needs refreshing
-  if (!client.connect("api.telegram.org", 443)) {
-    char errBuf[128];
-    client.lastError(errBuf, sizeof(errBuf));
-    Serial.printf("Could not connect to api.telegram.org - TLS/socket error: %s\n", errBuf);
-    if (!telegramCAConfigured()) {
-      Serial.println("  ^ TELEGRAM_ROOT_CA in telegram_ca.h is still the placeholder - fill it in.");
-    }
-    Serial.printf("Free heap at failure: %u bytes\n", (unsigned)ESP.getFreeHeap());
-    return false;
-  }
-
-  TelegramMultipart m = buildMultipart(jpgLen, caption);
-
-  size_t sent = 0;
-  sent += writeAllBytes(client, (const uint8_t*)m.requestLine.c_str(), m.requestLine.length());
-  sent += writeAllBytes(client, (const uint8_t*)m.head.c_str(), m.head.length());
-
-  // The relay loop: read a chunk from the camera, push it straight to
-  // Telegram, repeat. Only STREAM_CHUNK_BYTES is ever resident at once -
-  // the full JPEG never exists in a single buffer.
-  uint8_t chunk[STREAM_CHUNK_BYTES];
-  size_t jpgRelayed = 0;
-  while (jpgRelayed < jpgLen) {
-    size_t want = min((size_t)STREAM_CHUNK_BYTES, jpgLen - jpgRelayed);
-    size_t got = readSomeBytes(http, camStream, chunk, want);
-    if (got == 0) {
-      Serial.printf("Camera stream ended early: got %u of %u bytes\n",
-                    (unsigned)jpgRelayed, (unsigned)jpgLen);
-      break;
-    }
-    size_t wroteNow = writeAllBytes(client, chunk, got);
-    sent += wroteNow;
-    jpgRelayed += got;
-    if (wroteNow < got) {
-      Serial.println("Telegram write stalled mid-photo - aborting send.");
-      break;
-    }
-  }
-
-  sent += writeAllBytes(client, (const uint8_t*)m.tail.c_str(), m.tail.length());
-
-  size_t expectedTotal = m.requestLine.length() + m.contentLength;
-  if (jpgRelayed < jpgLen || sent < expectedTotal) {
-    Serial.println("Write incomplete - server will never see the full request.");
-    client.stop();
-    return false;
-  }
-
-  return readTelegramResponse(client);
-}
-
-// Fallback path for cameras that don't report Content-Length: sends a
-// buffer that's already fully in RAM, same behavior as the original code.
-static bool sendTelegramPhotoBuffered(const uint8_t* jpg, size_t jpgLen, const String& caption) {
+// Sends a buffer that's already fully in RAM to one chat. Used for every
+// recipient of a motion alert - the JPEG is fetched from the camera once
+// and this is called once per subscribed Telegram user, reusing the same
+// PSRAM buffer (see triggerMotionAlert). This used to have a sibling
+// sendTelegramPhotoStreamed() that relayed camera bytes straight into
+// Telegram's TLS connection without ever buffering the whole JPEG - dropped
+// because streaming consumes the camera's HTTP response as it goes, so it
+// can only ever serve a single recipient; multiple Telegram users need the
+// JPEG held in memory to resend, which is exactly why PSRAM is now
+// mandatory rather than just preferred (see this file's top comment).
+static bool sendTelegramPhotoBuffered(const uint8_t* jpg, size_t jpgLen, const String& caption,
+                                       const String& chatId) {
   if (!jpg || jpgLen == 0) return false;
 
-  Serial.printf("Free heap before Telegram send (buffered fallback): %u bytes (max alloc: %u, jpg: %u bytes)\n",
+  Serial.printf("Free heap before Telegram send: %u bytes (max alloc: %u, jpg: %u bytes)\n",
                 (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap(), (unsigned)jpgLen);
 
   WiFiClientSecure client;
@@ -255,7 +195,7 @@ static bool sendTelegramPhotoBuffered(const uint8_t* jpg, size_t jpgLen, const S
     return false;
   }
 
-  TelegramMultipart m = buildMultipart(jpgLen, caption);
+  TelegramMultipart m = buildMultipart(jpgLen, caption, chatId);
 
   size_t sent = 0;
   sent += writeAllBytes(client, (const uint8_t*)m.requestLine.c_str(), m.requestLine.length());
@@ -301,21 +241,24 @@ static String jsonEscape(const String& in) {
   return out;
 }
 
-bool sendTelegramMessage(const String& text) {
+// Low-level single-recipient send - the actual HTTPS round trip. Used both
+// directly (command replies, which must go back to whoever sent the
+// command, not everyone) and by sendTelegramMessage() below (broadcast to
+// every "system messages" user).
+static bool sendTelegramMessageTo(const String& chatId, const String& text) {
   WiFiClientSecure client;
   client.setCACert(TELEGRAM_ROOT_CA); // see telegram_ca.h if this needs refreshing
   if (!client.connect("api.telegram.org", 443)) {
     char errBuf[128];
     client.lastError(errBuf, sizeof(errBuf));
-    Serial.printf("sendTelegramMessage: could not connect - %s\n", errBuf);
+    Serial.printf("sendTelegramMessageTo(%s): could not connect - %s\n", chatId.c_str(), errBuf);
     if (!telegramCAConfigured()) {
       Serial.println("  ^ TELEGRAM_ROOT_CA in telegram_ca.h is still the placeholder - fill it in.");
     }
     return false;
   }
 
-  String body = "{\"chat_id\":\"" + String(TELEGRAM_CHAT_ID) + "\",\"text\":\"" +
-                jsonEscape(text) + "\"}";
+  String body = "{\"chat_id\":\"" + chatId + "\",\"text\":\"" + jsonEscape(text) + "\"}";
 
   String requestLine;
   requestLine.reserve(96 + strlen(TELEGRAM_BOT_TOKEN));
@@ -330,12 +273,31 @@ bool sendTelegramMessage(const String& text) {
   sent += writeAllBytes(client, (const uint8_t*)body.c_str(), body.length());
 
   if (sent < requestLine.length() + body.length()) {
-    Serial.println("sendTelegramMessage: write incomplete.");
+    Serial.printf("sendTelegramMessageTo(%s): write incomplete.\n", chatId.c_str());
     client.stop();
     return false;
   }
 
   return readTelegramResponse(client);
+}
+
+// Broadcasts to every Telegram user with systemMessages enabled - used for
+// the heartbeat, the boot-online notice, and the "no credentials" fatal
+// alert. Returns true if it reached at least one recipient.
+bool sendTelegramMessage(const String& text) {
+  std::vector<TelegramUser> users = loadTelegramUsers();
+  bool anyRecipient = false;
+  bool anyOk = false;
+  for (auto& u : users) {
+    if (!u.systemMessages) continue;
+    anyRecipient = true;
+    if (sendTelegramMessageTo(u.chatId, text)) anyOk = true;
+  }
+  if (!anyRecipient) {
+    Serial.println("sendTelegramMessage: no Telegram user has systemMessages enabled - nothing sent.");
+    return false;
+  }
+  return anyOk;
 }
 
 void triggerMotionAlert(const CameraConfig& cfg, CameraState& st) {
@@ -346,8 +308,17 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st) {
   st.lastAlert = nowMs;
   st.hasAlerted = true;
 
+  std::vector<String> recipients;
+  for (auto& u : loadTelegramUsers()) {
+    if (telegramUserWantsCamera(u, cfg.name)) recipients.push_back(u.chatId);
+  }
+  if (recipients.empty()) {
+    Serial.printf("[%s] No Telegram user is subscribed to this camera - skipping send.\n", cfg.name.c_str());
+    return;
+  }
+
   if (st.snapshotUri.length() == 0) {
-    Serial.printf("[%s] No snapshot URI available - skipping Telegram send.\n", cfg.name);
+    Serial.printf("[%s] No snapshot URI available - skipping Telegram send.\n", cfg.name.c_str());
     return;
   }
 
@@ -358,60 +329,42 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st) {
 
   int code = http.GET();
   if (code != 200) {
-    Serial.printf("[%s] Snapshot GET failed, HTTP %d\n", cfg.name, code);
+    Serial.printf("[%s] Snapshot GET failed, HTTP %d\n", cfg.name.c_str(), code);
     http.end();
     return;
   }
 
-  String caption = String(cfg.name) + " - " + nowTimestampString();
+  String caption = cfg.name + " - " + nowTimestampString();
   int len = http.getSize();
-  bool ok = false;
-  bool psramAvailable = ESP.getPsramSize() > 0;
 
-  if (psramAvailable) {
-    // Plenty of headroom on this board - buffer the whole snapshot in
-    // PSRAM and send it in one shot. No fragmentation concern at this pool
-    // size, so the chunked-streaming path below isn't needed here.
-    // Read exactly `len` bytes when the camera reports Content-Length, so
-    // readSomeBytes stops as soon as the file is fully read instead of
-    // reading toward the full SNAPSHOT_MAX_BYTES_PSRAM cap and then eating
-    // its 5s stall-timeout on a keep-alive connection that has no more data
-    // to send - that stall was slow enough to make the following Telegram
-    // send fail outright on at least one camera (Reolink cgi-bin).
-    size_t cap = (len > 0) ? (size_t)len : SNAPSHOT_MAX_BYTES_PSRAM;
-    size_t jpgLen = 0;
-    uint8_t* jpg = fetchSnapshotBuffered(http, jpgLen, cap);
-    if (jpg) {
-      ok = sendTelegramPhotoBuffered(jpg, jpgLen, caption);
-      free(jpg);
-    } else {
-      Serial.printf("[%s] Snapshot fetch failed.\n", cfg.name);
-    }
-  } else if (len > 0 && (size_t)len <= SNAPSHOT_MAX_BYTES) {
-    // Known size up front -> stream camera bytes straight into the Telegram
-    // TLS connection. The JPEG is never fully buffered in internal RAM.
-    ok = sendTelegramPhotoStreamed(http, http.getStreamPtr(), (size_t)len, caption);
-  } else if (len > 0) {
-    Serial.printf("[%s] Snapshot too large for SNAPSHOT_MAX_BYTES cap (%d bytes).\n", cfg.name, len);
-  } else {
-    // No Content-Length (chunked/unknown) and no PSRAM to fall back on
-    // generously - buffer into internal RAM up to SNAPSHOT_MAX_BYTES, same
-    // as the original implementation.
-    Serial.printf("[%s] Snapshot has no Content-Length - falling back to buffered send.\n", cfg.name);
-    size_t jpgLen = 0;
-    uint8_t* jpg = fetchSnapshotBuffered(http, jpgLen, SNAPSHOT_MAX_BYTES);
-    if (jpg) {
-      ok = sendTelegramPhotoBuffered(jpg, jpgLen, caption);
-      free(jpg);
-    } else {
-      Serial.printf("[%s] Buffered snapshot fetch failed.\n", cfg.name);
-    }
-  }
+  // One fetch from the camera, buffered once (in PSRAM - mandatory, see
+  // this file's top comment), then resent to every subscribed recipient
+  // below - re-fetching per recipient would hammer cameras whose embedded
+  // HTTP stacks only tolerate 1-2 connections (see the boot-stagger comment
+  // in main.cpp).
+  //
+  // Read exactly `len` bytes when the camera reports Content-Length, so
+  // readSomeBytes stops as soon as the file is fully read instead of
+  // reading toward the full cap and eating a 5s stall-timeout on a
+  // keep-alive connection with no more data to send (confirmed slow enough
+  // on one camera - a Reolink cgi-bin - to make the Telegram send that
+  // followed fail outright).
+  size_t cap = (len > 0) ? (size_t)len : SNAPSHOT_MAX_BYTES_PSRAM;
 
+  size_t jpgLen = 0;
+  uint8_t* jpg = fetchSnapshotBuffered(http, jpgLen, cap);
   http.end();
-  if (!ok) {
-    Serial.printf("[%s] Telegram send failed.\n", cfg.name);
+  if (!jpg) {
+    Serial.printf("[%s] Snapshot fetch failed.\n", cfg.name.c_str());
+    return;
   }
+
+  for (auto& chatId : recipients) {
+    if (!sendTelegramPhotoBuffered(jpg, jpgLen, caption, chatId)) {
+      Serial.printf("[%s] Telegram send to chat %s failed.\n", cfg.name.c_str(), chatId.c_str());
+    }
+  }
+  free(jpg);
 }
 
 // ============================================================
@@ -472,9 +425,9 @@ static String jsonUnescape(const String& in) {
   return out;
 }
 
-static void handleTelegramCommand(const String& text, const CameraConfig cameras[],
+static void handleTelegramCommand(const String& fromChatId, const String& text, const CameraConfig cameras[],
                                    CameraState states[], size_t numCameras) {
-  Serial.printf("[Telegram] Command received: \"%s\"\n", text.c_str());
+  Serial.printf("[Telegram] Command from chat %s: \"%s\"\n", fromChatId.c_str(), text.c_str());
 
   if (text.equalsIgnoreCase("/status")) {
     String msg = "Camera alert status:\n";
@@ -483,7 +436,7 @@ static void handleTelegramCommand(const String& text, const CameraConfig cameras
       msg += String(cameras[i].name) + ": " + (states[i].alertsEnabled ? "ON" : "OFF") + "\n";
     }
     Serial.println("[Telegram] Replying with camera status.");
-    sendTelegramMessage(msg);
+    sendTelegramMessageTo(fromChatId, msg);
     return;
   }
 
@@ -502,13 +455,13 @@ static void handleTelegramCommand(const String& text, const CameraConfig cameras
     if (cameraName.equalsIgnoreCase(cameras[i].name)) {
       states[i].alertsEnabled = turnOn;
       saveAlertEnabledPref(i, turnOn);
-      Serial.printf("[%s] Alerts turned %s via Telegram.\n", cameras[i].name, turnOn ? "ON" : "OFF");
-      sendTelegramMessage(String(cameras[i].name) + " alerts: " + (turnOn ? "ON" : "OFF"));
+      Serial.printf("[%s] Alerts turned %s via Telegram.\n", cameras[i].name.c_str(), turnOn ? "ON" : "OFF");
+      sendTelegramMessageTo(fromChatId, String(cameras[i].name) + " alerts: " + (turnOn ? "ON" : "OFF"));
       return;
     }
   }
   Serial.printf("[Telegram] /%s target not found or disabled: \"%s\"\n", turnOn ? "on" : "off", cameraName.c_str());
-  sendTelegramMessage("Unknown or disabled camera: " + cameraName);
+  sendTelegramMessageTo(fromChatId, "Unknown or disabled camera: " + cameraName);
 }
 
 void pollTelegramCommands(const CameraConfig cameras[], CameraState states[], size_t numCameras) {
@@ -558,6 +511,7 @@ void pollTelegramCommands(const CameraConfig cameras[], CameraState states[], si
   // searching for keys across the whole response, since nested objects
   // (message/from/chat) can't confuse where one update ends and the next
   // begins.
+  std::vector<TelegramUser> users = loadTelegramUsers();
   int searchPos = 0;
   while (true) {
     int updateIdPos = body.indexOf("\"update_id\":", searchPos);
@@ -586,9 +540,15 @@ void pollTelegramCommands(const CameraConfig cameras[], CameraState states[], si
     // toInt() stops at the first non-numeric character, so this doesn't
     // need to know whether a ',' or '}' ends the value.
     long chatId = block.substring(chatIdPos + 5).toInt();
-    if (chatId != String(TELEGRAM_CHAT_ID).toInt()) {
-      Serial.printf("[Telegram] Ignored command from unauthorized chat ID %ld\n", chatId);
-      continue; // only TELEGRAM_CHAT_ID may command this bot
+
+    const TelegramUser* sender = nullptr;
+    for (auto& u : users) {
+      if (u.chatId.toInt() == chatId) { sender = &u; break; }
+    }
+    if (!sender || !sender->canCommand) {
+      Serial.printf("[Telegram] Ignored command from chat ID %ld (%s)\n", chatId,
+                    sender ? "not authorized to send commands" : "unknown chat");
+      continue;
     }
 
     int textPos = block.indexOf("\"text\":\"");
@@ -600,6 +560,6 @@ void pollTelegramCommands(const CameraConfig cameras[], CameraState states[], si
       if (c == '"' && block[i - 1] != '\\') break;
       rawText += c;
     }
-    handleTelegramCommand(jsonUnescape(rawText), cameras, states, numCameras);
+    handleTelegramCommand(sender->chatId, jsonUnescape(rawText), cameras, states, numCameras);
   }
 }
