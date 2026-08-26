@@ -455,10 +455,13 @@ static void handleTelegramCommand(const String& fromChatId, const String& text, 
     return;
   }
 
+  String lowerText = text;
+  lowerText.toLowerCase();
+
   bool turnOn;
   String cameraName;
-  if (text.startsWith("/on ")) { turnOn = true; cameraName = text.substring(4); }
-  else if (text.startsWith("/off ")) { turnOn = false; cameraName = text.substring(5); }
+  if (lowerText.startsWith("/on ")) { turnOn = true; cameraName = text.substring(4); }
+  else if (lowerText.startsWith("/off ")) { turnOn = false; cameraName = text.substring(5); }
   else {
     Serial.println("[Telegram] Unrecognized command - ignored.");
     return;
