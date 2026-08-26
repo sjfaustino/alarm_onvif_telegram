@@ -32,7 +32,8 @@ static String serializeCamera(const CameraConfig& c) {
   s += stripSeparators(c.pass);                      s += FIELD_SEP;
   s += stripSeparators(c.notes);                     s += FIELD_SEP;
   s += String(c.alertCooldownMs);                    s += FIELD_SEP;
-  s += String(c.offlineThresholdMs);
+  s += String(c.offlineThresholdMs);                 s += FIELD_SEP;
+  s += String(c.snapshotBurstCount);
   return s;
 }
 
@@ -59,14 +60,17 @@ static CameraConfig deserializeCamera(const String& record) {
   c.user                          = fields[8];
   c.pass                          = fields[9];
   c.notes                         = fields[10];
-  // alertCooldownMs/offlineThresholdMs were added after the original
-  // 11-field format - records saved before that keep CameraConfig's
-  // defaults via fields.size().
+  // alertCooldownMs/offlineThresholdMs/snapshotBurstCount were added after
+  // the original 11-field format - records saved before each of these
+  // existed keep CameraConfig's defaults via fields.size().
   if (fields.size() >= 12 && fields[11].length() > 0) {
     c.alertCooldownMs = (unsigned long)fields[11].toInt();
   }
   if (fields.size() >= 13 && fields[12].length() > 0) {
     c.offlineThresholdMs = (unsigned long)fields[12].toInt();
+  }
+  if (fields.size() >= 14 && fields[13].length() > 0) {
+    c.snapshotBurstCount = (unsigned int)fields[13].toInt();
   }
   return c;
 }

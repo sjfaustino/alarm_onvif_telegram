@@ -381,6 +381,10 @@ static String renderCameraForm(const CameraConfig& v, bool isEdit) {
   html += "<label>Offline threshold, minutes (no response for this long -> OFFLINE alert)"
           "<input type=\"text\" name=\"offlineThresholdMin\" value=\"" + String(v.offlineThresholdMs / 60000UL) +
           "\"></label>";
+  html += "<label>Snapshots per alert (1-10) - how many consecutive photos to send when motion "
+          "fires, half a second apart; raise it to see more of what led up to the alert"
+          "<input type=\"text\" name=\"snapshotBurstCount\" value=\"" + String(v.snapshotBurstCount) +
+          "\"></label>";
   html += "<label>Notes<input type=\"text\" name=\"notes\" value=\"" + htmlEscape(v.notes) + "\"></label>";
   html += "<p><button type=\"submit\" formaction=\"/cameras/save\">" +
           String(isEdit ? "Save changes" : "Add camera") + "</button> ";
@@ -398,8 +402,8 @@ static String renderCamerasPanel(const CameraConfig* prefill, bool isEdit) {
 
   String html = "<h1>Cameras</h1>";
   html += "<table><tr><th>Name</th><th>Device Service URL</th><th>Enabled</th>"
-          "<th>Cooldown</th><th>Offline After</th><th>Live Status</th><th>Last Alert</th>"
-          "<th>Notes</th><th></th></tr>";
+          "<th>Cooldown</th><th>Offline After</th><th>Shots/Alert</th><th>Live Status</th>"
+          "<th>Last Alert</th><th>Notes</th><th></th></tr>";
   for (auto& c : cams) {
     int idx = findLiveCameraIndex(c.name);
     String liveStatus;
@@ -419,7 +423,8 @@ static String renderCamerasPanel(const CameraConfig* prefill, bool isEdit) {
     html += "<tr><td>" + htmlEscape(c.name) + "</td><td>" + htmlEscape(c.deviceServiceUrl) +
             "</td><td>" + (c.enabled ? "yes" : "no") + "</td><td>" +
             String(c.alertCooldownMs / 1000) + "s</td><td>" +
-            String(c.offlineThresholdMs / 60000UL) + "m</td><td>" + liveStatus + "</td><td>" +
+            String(c.offlineThresholdMs / 60000UL) + "m</td><td>" +
+            String(c.snapshotBurstCount) + "</td><td>" + liveStatus + "</td><td>" +
             lastAlertStr + "</td><td>" +
             htmlEscape(c.notes) + "</td><td>";
     html += "<a href=\"/cameras/edit?name=" + urlEncode(c.name) + "\">Edit</a> ";
@@ -464,6 +469,15 @@ static CameraConfig parseCameraForm(PsychicRequest* request) {
 
   long offlineMin = request->getParam("offlineThresholdMin", "5").toInt();
   c.offlineThresholdMs = offlineMin > 0 ? (unsigned long)offlineMin * 60000UL : CameraConfig().offlineThresholdMs;
+
+  long burstCount = request->getParam("snapshotBurstCount", "1").toInt();
+  // Clamp to [1, 10] - a blank/zero/negative field falls back to 1 shot
+  // (today's plain behavior), and the upper bound keeps a fat-fingered
+  // large number from turning one motion event into a Telegram flood that
+  // risks hitting Telegram's per-chat rate limit.
+  if (burstCount < 1) burstCount = 1;
+  if (burstCount > 10) burstCount = 10;
+  c.snapshotBurstCount = (unsigned int)burstCount;
 
   return c;
 }

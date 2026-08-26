@@ -300,6 +300,51 @@ bool sendTelegramMessage(const String& text) {
   return anyOk;
 }
 
+// Fetches exactly one snapshot from st.snapshotUri, buffered fully (see
+// fetchSnapshotBuffered). Returns nullptr (and logs) on any failure - HTTP
+// GET failure, or the buffer fetch itself failing. Caller must free() a
+// non-null result.
+static uint8_t* fetchOneSnapshot(const CameraConfig& cfg, CameraState& st, size_t& outLen) {
+  outLen = 0;
+
+  HTTPClient http;
+  http.begin(st.snapshotUri);
+  http.setAuthorization(st.user, st.pass);
+  http.setTimeout(HTTP_TIMEOUT_MS);
+
+  int code = http.GET();
+  if (code != 200) {
+    Serial.printf("[%s] Snapshot GET failed, HTTP %d\n", cfg.name.c_str(), code);
+    http.end();
+    return nullptr;
+  }
+
+  int len = http.getSize();
+  // Read exactly `len` bytes when the camera reports Content-Length, so
+  // readSomeBytes stops as soon as the file is fully read instead of
+  // reading toward the full cap and eating a 5s stall-timeout on a
+  // keep-alive connection with no more data to send (confirmed slow enough
+  // on one camera - a Reolink cgi-bin - to make the Telegram send that
+  // followed fail outright).
+  size_t cap = (len > 0) ? (size_t)len : SNAPSHOT_MAX_BYTES_PSRAM;
+
+  size_t jpgLen = 0;
+  uint8_t* jpg = fetchSnapshotBuffered(http, jpgLen, cap);
+  http.end();
+  if (!jpg) {
+    Serial.printf("[%s] Snapshot fetch failed.\n", cfg.name.c_str());
+    return nullptr;
+  }
+  outLen = jpgLen;
+  return jpg;
+}
+
+// Spacing between shots in a multi-shot burst (CameraConfig::snapshotBurstCount)
+// - long enough for the scene to visibly change between frames, short enough
+// that the whole burst still reflects "what was happening when the alarm
+// fired" rather than drifting into an unrelated later moment.
+static const unsigned long BURST_SHOT_SPACING_MS = 500;
+
 void triggerMotionAlert(const CameraConfig& cfg, CameraState& st) {
   if (!st.alertsEnabled) return; // muted via Telegram - see pollTelegramCommands
 
@@ -333,49 +378,31 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st) {
   st.lastAlert = nowMs;
   st.hasAlerted = true;
 
-  HTTPClient http;
-  http.begin(st.snapshotUri);
-  http.setAuthorization(st.user, st.pass);
-  http.setTimeout(HTTP_TIMEOUT_MS);
+  unsigned int shots = (cfg.snapshotBurstCount > 0) ? cfg.snapshotBurstCount : 1;
 
-  int code = http.GET();
-  if (code != 200) {
-    Serial.printf("[%s] Snapshot GET failed, HTTP %d\n", cfg.name.c_str(), code);
-    http.end();
-    return;
-  }
+  // Each shot is its own fetch (a snapshot URI just returns "the current
+  // frame", so re-fetching is what makes consecutive shots actually differ)
+  // and its own fan-out to every recipient, same as the single-shot path
+  // always did - re-fetching per recipient instead would hammer cameras
+  // whose embedded HTTP stacks only tolerate 1-2 connections (see the
+  // boot-stagger comment in main.cpp).
+  for (unsigned int i = 0; i < shots; i++) {
+    size_t jpgLen = 0;
+    uint8_t* jpg = fetchOneSnapshot(cfg, st, jpgLen);
+    if (!jpg) continue; // one bad shot in a burst shouldn't abort the rest
 
-  String caption = cfg.name + " - " + nowTimestampString();
-  int len = http.getSize();
+    String caption = cfg.name + " - " + nowTimestampString();
+    if (shots > 1) caption += " (" + String(i + 1) + "/" + String(shots) + ")";
 
-  // One fetch from the camera, buffered once (in PSRAM - mandatory, see
-  // this file's top comment), then resent to every subscribed recipient
-  // below - re-fetching per recipient would hammer cameras whose embedded
-  // HTTP stacks only tolerate 1-2 connections (see the boot-stagger comment
-  // in main.cpp).
-  //
-  // Read exactly `len` bytes when the camera reports Content-Length, so
-  // readSomeBytes stops as soon as the file is fully read instead of
-  // reading toward the full cap and eating a 5s stall-timeout on a
-  // keep-alive connection with no more data to send (confirmed slow enough
-  // on one camera - a Reolink cgi-bin - to make the Telegram send that
-  // followed fail outright).
-  size_t cap = (len > 0) ? (size_t)len : SNAPSHOT_MAX_BYTES_PSRAM;
-
-  size_t jpgLen = 0;
-  uint8_t* jpg = fetchSnapshotBuffered(http, jpgLen, cap);
-  http.end();
-  if (!jpg) {
-    Serial.printf("[%s] Snapshot fetch failed.\n", cfg.name.c_str());
-    return;
-  }
-
-  for (auto& chatId : recipients) {
-    if (!sendTelegramPhotoBuffered(jpg, jpgLen, caption, chatId)) {
-      Serial.printf("[%s] Telegram send to chat %s failed.\n", cfg.name.c_str(), chatId.c_str());
+    for (auto& chatId : recipients) {
+      if (!sendTelegramPhotoBuffered(jpg, jpgLen, caption, chatId)) {
+        Serial.printf("[%s] Telegram send to chat %s failed.\n", cfg.name.c_str(), chatId.c_str());
+      }
     }
+    free(jpg);
+
+    if (i + 1 < shots) delay(BURST_SHOT_SPACING_MS);
   }
-  free(jpg);
 }
 
 void checkCameraOnlineStatus(const CameraConfig& cfg, CameraState& st) {

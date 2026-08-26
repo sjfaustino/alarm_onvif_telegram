@@ -15,7 +15,9 @@ Arduino-ESP32/IDF releases.
   (parallel, not round-robin) and auto-resubscribes/retries on failure.
 - Sends a Telegram photo alert on motion/tamper events, per-camera cooldown to avoid
   spam, JPEG buffered once in PSRAM and resent to every Telegram user subscribed to
-  that camera.
+  that camera. Per-camera snapshot burst count (default 1, up to 10) sends that many
+  consecutive photos half a second apart instead of just one, for when a single frame
+  isn't enough to tell why an alert fired.
 - TLS to Telegram is certificate-pinned (not `setInsecure()`).
 - Per-camera quirks handled via config flags: WS-Security vs. HTTP Basic Auth,
   optional `InitialTerminationTime`/`ReplyTo` (needed by some Xiongmai-derived
@@ -119,7 +121,9 @@ practice; a single-core PSRAM chip is untested.
      it hasn't yet). Fill in the device service URL, credentials, alert cooldown
      (minimum seconds between Telegram alerts for that camera, default 30s), offline
      threshold (minutes without a response before it's flagged OFFLINE, default 5),
-     and any per-camera quirk flags (the form documents what each one does). A Test
+     snapshots per alert (1-10, default 1 - that many consecutive photos sent half a
+     second apart instead of just one, for extra context on why an alert fired), and
+     any per-camera quirk flags (the form documents what each one does). A Test
      Connection button runs a live check against whatever's currently in the form
      (GetCapabilities, event service, snapshot URI) without saving anything, so a
      wrong URL/credential shows up before you commit to a reboot. Editing an existing

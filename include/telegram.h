@@ -3,8 +3,10 @@
 #include "config.h"
 #include "camera.h"
 
-// Fetches a snapshot JPEG from st.snapshotUri and sends it, with a caption
-// of "<camera name> - <UTC timestamp>", to every Telegram user (see
+// Fetches cfg.snapshotBurstCount snapshot(s) from st.snapshotUri (default
+// 1; re-fetched fresh per shot, spaced apart - see BURST_SHOT_SPACING_MS in
+// telegram.cpp) and sends each, captioned "<camera name> - <UTC timestamp>"
+// (plus "(n/N)" once there's more than one), to every Telegram user (see
 // telegram_users.h) subscribed to this camera - subject to cfg's per-camera
 // alert cooldown. Safe to call on every motion event; it self-throttles.
 void triggerMotionAlert(const CameraConfig& cfg, CameraState& st);
