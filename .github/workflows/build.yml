@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        env: [esp32dev, esp32s3]
+        env: [esp32s3]
     steps:
       - uses: actions/checkout@v4
 
