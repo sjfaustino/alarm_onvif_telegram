@@ -54,10 +54,14 @@ std::vector<TelegramUser> loadTelegramUsers() {
     admin.canCommand = true;
     admin.canSnap = true;
     users.push_back(admin);
-    saveTelegramUsers(users);
-    Serial.println("[telegram_users] First boot with NVS-backed user storage - seeded one "
-                    "\"Admin\" user from secrets.h's TELEGRAM_CHAT_ID (all cameras, system "
-                    "messages, can command, can snap).");
+    if (!saveTelegramUsers(users)) {
+      Serial.println("[telegram_users] ERROR: failed to persist the first-boot Admin user seed to "
+                      "NVS - this boot will still use it, but it wasn't saved and won't survive a reboot.");
+    } else {
+      Serial.println("[telegram_users] First boot with NVS-backed user storage - seeded one "
+                      "\"Admin\" user from secrets.h's TELEGRAM_CHAT_ID (all cameras, system "
+                      "messages, can command, can snap).");
+    }
     return users;
   }
 

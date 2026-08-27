@@ -82,9 +82,13 @@ std::vector<CameraConfig> loadCameras() {
 
   if (!alreadyInitialized) {
     std::vector<CameraConfig> cams = seedFromSecrets();
-    saveCameras(cams);
-    Serial.printf("[camera_store] First boot with NVS-backed camera storage - seeded %u camera(s) "
-                  "from secrets.h's CAMERA_SEED.\n", (unsigned)cams.size());
+    if (!saveCameras(cams)) {
+      Serial.println("[camera_store] ERROR: failed to persist the first-boot CAMERA_SEED to NVS - "
+                      "this boot will still use it, but it wasn't saved and won't survive a reboot.");
+    } else {
+      Serial.printf("[camera_store] First boot with NVS-backed camera storage - seeded %u camera(s) "
+                    "from secrets.h's CAMERA_SEED.\n", (unsigned)cams.size());
+    }
     sortCamerasByName(cams);
     return cams;
   }

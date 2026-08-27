@@ -38,7 +38,9 @@ bool telegramUserWantsCamera(const TelegramUser& user, const String& cameraName)
 
 // Loads the Telegram user list from NVS. On the very first boot (nothing
 // in NVS yet), seeds a single "Admin" user from secrets.h's
-// TELEGRAM_CHAT_ID with every permission enabled.
+// TELEGRAM_CHAT_ID: all cameras, system messages, can command, can snap -
+// but NOT canReset, which even this first user has to enable deliberately
+// from the dashboard afterward (see TelegramUser::canReset's own comment).
 std::vector<TelegramUser> loadTelegramUsers();
 
 // Overwrites the entire persisted user list.
