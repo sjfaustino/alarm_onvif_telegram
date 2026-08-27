@@ -59,8 +59,15 @@ enum class TelegramCommand { Unknown, Status, Uptime, Reset, On, Off, Snap };
 // the function - the exact class of bug that caused the /reset reboot
 // loop). Deliberately a switch with no default in both its declaration
 // site's usage and requiredPermissionForCommand's own implementation - a
-// new TelegramCommand value added without a case here fails to compile
-// (-Wswitch) instead of silently defaulting to Unknown/unauthorized.
+// new TelegramCommand value added without a case here is a build failure,
+// not a silent fall-through to Unknown/unauthorized. That's only actually
+// true because this module's own library.json sets -Werror=switch for it
+// specifically (this platform's default flags don't enable -Wswitch at
+// all otherwise, verified - see platformio.ini's build_src_flags comment
+// for why it's set per-module instead of project-wide: the project-wide
+// version of this fix applied the flag to every third-party library and
+// the Arduino/ESP-IDF framework too, which could hard-fail the build over
+// a non-exhaustive switch in code nobody here controls).
 enum class TelegramCommandPermission { Unknown, Command, Snap, Reset };
 TelegramCommandPermission requiredPermissionForCommand(TelegramCommand command);
 

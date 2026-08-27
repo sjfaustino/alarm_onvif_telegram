@@ -1,0 +1,6 @@
+{
+  "name": "telegram_parse",
+  "build": {
+    "flags": ["-Werror=switch"]
+  }
+}
