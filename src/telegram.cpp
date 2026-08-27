@@ -1,6 +1,7 @@
 #include "telegram.h"
 #include "telegram_ca.h"
 #include "telegram_users.h"
+#include "telegram_parse.h"
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <NetworkClient.h> // HTTPClient::getStreamPtr() returns NetworkClient* on Arduino-ESP32 3.x cores
@@ -231,22 +232,8 @@ static String nowTimestampString() {
 // Sends a plain text message via Telegram's sendMessage endpoint (JSON
 // body, not multipart - there's no photo). Shares writeAllBytes and
 // readTelegramResponse with the photo-send paths above so all three stay
-// consistent about what counts as success.
-static String jsonEscape(const String& in) {
-  String out; out.reserve(in.length() + 8);
-  for (size_t i = 0; i < in.length(); i++) {
-    char c = in[i];
-    switch (c) {
-      case '"':  out += "\\\""; break;
-      case '\\': out += "\\\\"; break;
-      case '\n': out += "\\n";  break;
-      case '\r': out += "\\r";  break;
-      case '\t': out += "\\t";  break;
-      default:   out += c;      break;
-    }
-  }
-  return out;
-}
+// consistent about what counts as success. jsonEscape() itself now lives
+// in telegram_parse.h/cpp (see that module's comment).
 
 // Low-level single-recipient send - the actual HTTPS round trip. Used both
 // directly (command replies, which must go back to whoever sent the
@@ -455,29 +442,7 @@ static void saveAlertEnabledPref(size_t index, bool enabled) {
   prefs.end();
 }
 
-// Inverse of the jsonEscape() used when building outgoing messages - only
-// needs to handle what Telegram could plausibly send back in a text field.
-static String jsonUnescape(const String& in) {
-  String out;
-  out.reserve(in.length());
-  for (size_t i = 0; i < in.length(); i++) {
-    char c = in[i];
-    if (c == '\\' && i + 1 < in.length()) {
-      char n = in[++i];
-      switch (n) {
-        case '"':  out += '"';  break;
-        case '\\': out += '\\'; break;
-        case 'n':  out += '\n'; break;
-        case 'r':  out += '\r'; break;
-        case 't':  out += '\t'; break;
-        default:   out += n;    break;
-      }
-    } else {
-      out += c;
-    }
-  }
-  return out;
-}
+// jsonUnescape() itself now lives in telegram_parse.h/cpp.
 
 // Fetches a fresh snapshot from cfg/st right now and sends it only to
 // chatId (whoever asked) - unlike triggerMotionAlert, this is an explicit
@@ -547,22 +512,15 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
   }
 
   cameraName.trim();
-  String needle = cameraName;
-  needle.toLowerCase();
 
   // Matched by prefix ("D01" matches "D01-FDir"), not just exact name, so
   // you don't have to type the full camera name - an exact match (name
   // equals the typed text) still works too, since a string always starts
   // with itself. If the prefix is ambiguous (matches more than one enabled
   // camera), nothing is applied and the reply lists what matched, rather
-  // than guessing which camera was meant.
-  std::vector<size_t> matches;
-  for (size_t i = 0; i < numCameras; i++) {
-    if (!cameras[i].enabled) continue;
-    String haystack = cameras[i].name;
-    haystack.toLowerCase();
-    if (haystack.startsWith(needle)) matches.push_back(i);
-  }
+  // than guessing which camera was meant. See test/test_telegram_parse for
+  // the matching behavior itself.
+  std::vector<size_t> matches = matchCamerasByPrefix(cameras, numCameras, cameraName);
 
   if (matches.size() > 1) {
     String list;

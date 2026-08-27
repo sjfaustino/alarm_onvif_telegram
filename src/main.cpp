@@ -11,6 +11,7 @@
 #include "network_store.h"
 #include "telegram.h"
 #include "webserver.h"
+#include "backoff.h"
 
 static std::vector<CameraConfig> g_cameras;
 static std::vector<CameraState> g_cameraStates;
@@ -446,10 +447,8 @@ void loop() {
       if (!g_monitoringStarted) startMonitoring();
       else setupTime();
     } else {
-      g_wifiRetryDelayMs = (g_wifiFailureStreak == 0)
-          ? WIFI_RETRY_BACKOFF_START_MS
-          : (g_wifiRetryDelayMs * 2UL < WIFI_RETRY_BACKOFF_MAX_MS ? g_wifiRetryDelayMs * 2UL
-                                                                    : WIFI_RETRY_BACKOFF_MAX_MS);
+      g_wifiRetryDelayMs = nextBackoffDelayMs(g_wifiRetryDelayMs, WIFI_RETRY_BACKOFF_START_MS,
+                                              WIFI_RETRY_BACKOFF_MAX_MS);
       g_wifiFailureStreak++;
       g_wifiRetryDueMs = millis() + g_wifiRetryDelayMs;
       Serial.printf("WiFi still down after %u consecutive attempt(s) - next attempt in %lus.\n",

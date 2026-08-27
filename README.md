@@ -190,8 +190,30 @@ src/
   auth_store.cpp      # NVS-backed dashboard login (load/save)
   webserver.cpp      # dashboard HTML pages and form handlers
   telegram.cpp       # photo/message send paths, multi-recipient fan-out, remote commands
-  onvif_soap.cpp     # SOAP envelope building, WS-Security digest, XML helpers
+  onvif_soap.cpp     # SOAP envelope building, WS-Security digest
+lib/                 # pure-logic modules with no hardware dependencies, split out of the
+                      # files above specifically so they're unit-testable - see test/README.md
+  xml_helpers/            # ONVIF response substring parsing + XML escaping
+  camera_serialize/       # CameraConfig <-> NVS blob (de)serialization
+  telegram_user_serialize/ # TelegramUser <-> NVS blob (de)serialization
+  telegram_parse/         # Telegram JSON escaping + /on,/off,/snap camera-name matching
+  backoff/                # the doubling-with-a-cap retry delay formula (shared by main.cpp
+                           # and camera.cpp, previously duplicated)
+test/                 # native unit tests for lib/* - `pio test -e native`, no hardware needed
 ```
+
+## Testing
+
+```sh
+pio test -e native
+```
+
+Runs the unit tests in `test/` against the pure-logic modules in `lib/` -
+compiles and executes on your own machine (or CI), no ESP32 board involved.
+This does **not** exercise ONVIF/Telegram network calls, NVS itself, the web
+server, or any FreeRTOS/task behavior - see `test/README.md` for exactly
+what is and isn't covered, and why. CI runs this on every push/PR
+alongside the firmware build.
 
 ## Notes on reliability
 

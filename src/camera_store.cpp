@@ -1,79 +1,16 @@
 #include "camera_store.h"
+#include "camera_serialize.h"
 #include "secrets.h"
 #include <Preferences.h>
 
 static const char* NVS_NAMESPACE = "camstore";
 static const char* NVS_KEY_LIST  = "list";
 
-// Non-printable ASCII separators - no camera name, URL, credential, or note
-// should ever legitimately contain these, so records are just split/joined
-// on them rather than building full field-escaping machinery.
-static const char FIELD_SEP  = '\x1F';
+// Separates whole camera records within the NVS blob (distinct from
+// camera_serialize.cpp's own FIELD_SEP, which separates one record's
+// fields - this file only ever joins/splits on RECORD_SEP, never sees
+// FIELD_SEP directly).
 static const char RECORD_SEP = '\x1E';
-
-static String stripSeparators(const String& s) {
-  String out = s;
-  out.replace(String(FIELD_SEP), "");
-  out.replace(String(RECORD_SEP), "");
-  return out;
-}
-
-static String serializeCamera(const CameraConfig& c) {
-  String s;
-  s += stripSeparators(c.name);                    s += FIELD_SEP;
-  s += stripSeparators(c.deviceServiceUrl);         s += FIELD_SEP;
-  s += (c.enabled ? "1" : "0");                     s += FIELD_SEP;
-  s += (c.useWSSecurity ? "1" : "0");                s += FIELD_SEP;
-  s += (c.includeInitialTerminationTime ? "1" : "0"); s += FIELD_SEP;
-  s += (c.includeReplyToAnonymous ? "1" : "0");      s += FIELD_SEP;
-  s += stripSeparators(c.snapshotUriOverride);       s += FIELD_SEP;
-  s += stripSeparators(c.preferredProfileKeyword);   s += FIELD_SEP;
-  s += stripSeparators(c.user);                      s += FIELD_SEP;
-  s += stripSeparators(c.pass);                      s += FIELD_SEP;
-  s += stripSeparators(c.notes);                     s += FIELD_SEP;
-  s += String(c.alertCooldownMs);                    s += FIELD_SEP;
-  s += String(c.offlineThresholdMs);                 s += FIELD_SEP;
-  s += String(c.snapshotBurstCount);
-  return s;
-}
-
-static CameraConfig deserializeCamera(const String& record) {
-  CameraConfig c;
-  std::vector<String> fields;
-  int fieldStart = 0;
-  for (int i = 0; i <= (int)record.length(); i++) {
-    if (i == (int)record.length() || record[i] == FIELD_SEP) {
-      fields.push_back(record.substring(fieldStart, i));
-      fieldStart = i + 1;
-    }
-  }
-  if (fields.size() < 11) return c; // malformed - caller skips entries with an empty name
-
-  c.name                          = fields[0];
-  c.deviceServiceUrl              = fields[1];
-  c.enabled                       = fields[2] == "1";
-  c.useWSSecurity                 = fields[3] == "1";
-  c.includeInitialTerminationTime = fields[4] == "1";
-  c.includeReplyToAnonymous       = fields[5] == "1";
-  c.snapshotUriOverride           = fields[6];
-  c.preferredProfileKeyword       = fields[7];
-  c.user                          = fields[8];
-  c.pass                          = fields[9];
-  c.notes                         = fields[10];
-  // alertCooldownMs/offlineThresholdMs/snapshotBurstCount were added after
-  // the original 11-field format - records saved before each of these
-  // existed keep CameraConfig's defaults via fields.size().
-  if (fields.size() >= 12 && fields[11].length() > 0) {
-    c.alertCooldownMs = (unsigned long)fields[11].toInt();
-  }
-  if (fields.size() >= 13 && fields[12].length() > 0) {
-    c.offlineThresholdMs = (unsigned long)fields[12].toInt();
-  }
-  if (fields.size() >= 14 && fields[13].length() > 0) {
-    c.snapshotBurstCount = (unsigned int)fields[13].toInt();
-  }
-  return c;
-}
 
 static std::vector<CameraConfig> seedFromSecrets() {
   std::vector<CameraConfig> cams;

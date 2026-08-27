@@ -1,6 +1,7 @@
 #include "camera.h"
 #include "onvif_soap.h"
 #include "telegram.h"
+#include "backoff.h"
 #include <WiFi.h>
 #include <vector>
 #include <cstring>
@@ -456,10 +457,8 @@ void cameraTaskFn(void* pvParameters) {
           st.retryStreak = 0;
           st.retryDelayMs = 0;
         } else {
+          st.retryDelayMs = nextBackoffDelayMs(st.retryDelayMs, RETRY_INTERVAL_MS, RETRY_BACKOFF_MAX_MS);
           st.retryStreak++;
-          st.retryDelayMs = (st.retryStreak <= 1)
-              ? RETRY_INTERVAL_MS
-              : (st.retryDelayMs * 2UL < RETRY_BACKOFF_MAX_MS ? st.retryDelayMs * 2UL : RETRY_BACKOFF_MAX_MS);
           Serial.printf("[%s] Still not subscribed after %u consecutive attempt(s) - next retry in %lus.\n",
                         cfg.name.c_str(), (unsigned)st.retryStreak, st.retryDelayMs / 1000UL);
         }

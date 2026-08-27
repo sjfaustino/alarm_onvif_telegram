@@ -6,6 +6,31 @@ on:
   pull_request:
 
 jobs:
+  test:
+    # Native unit tests (test/, backed by lib/*'s pure-logic modules) -
+    # runs on the CI runner directly, no ESP32 hardware or secrets.h
+    # involved. See test/README.md for what is and isn't covered this way.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Cache PlatformIO packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+          key: pio-native-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+
+      - name: Install PlatformIO
+        run: pip install --upgrade platformio
+
+      - name: Run native unit tests
+        run: pio test -e native
+
   build:
     runs-on: ubuntu-latest
     strategy:
