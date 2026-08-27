@@ -310,9 +310,16 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
       DashboardAuth newAuth;
       newAuth.username = username;
       newAuth.password = password;
-      saveDashboardAuth(newAuth);
-      g_authMiddleware.setUsername(newAuth.username.c_str()).setPassword(newAuth.password.c_str());
-      banner = "Saved - a login is now required on every page, starting now.";
+      if (!saveDashboardAuth(newAuth)) {
+        // Don't touch the live middleware if the write didn't actually
+        // land - doing so would protect the dashboard for this boot only,
+        // silently reverting to the old (or no) login on the next reboot
+        // with nothing telling the user it happened. See auth_store.cpp.
+        banner = "Failed to save - NVS write error (see Serial log). Login was NOT changed.";
+      } else {
+        g_authMiddleware.setUsername(newAuth.username.c_str()).setPassword(newAuth.password.c_str());
+        banner = "Saved - a login is now required on every page, starting now.";
+      }
     }
     return response->send(200, "text/html", renderShell(Tab::Security, banner, renderSecurityPanel()).c_str());
   });

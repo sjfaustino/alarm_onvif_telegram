@@ -163,7 +163,10 @@ static void connectWiFi() {
       WifiNetwork oldPrimary = g_wifiCredentials.primary;
       g_wifiCredentials.primary = g_wifiCredentials.backup;
       g_wifiCredentials.backup = oldPrimary;
-      saveWifiCredentials(g_wifiCredentials);
+      if (!saveWifiCredentials(g_wifiCredentials)) {
+        Serial.println("ERROR: failed to persist the promoted backup network to NVS - "
+                        "this boot will still use it, but it may try primary first again after a reboot.");
+      }
       return;
     }
   }

@@ -177,6 +177,9 @@ void handleSaveNetwork(PsychicRequest* request, String& banner) {
   posixTz.trim();
   creds.posixTz = posixTz;
 
-  saveWifiCredentials(creds);
+  if (!saveWifiCredentials(creds)) {
+    banner = "Failed to save - NVS write error (see Serial log). Network settings were NOT changed.";
+    return;
+  }
   banner = "Saved - reboot the board to apply the new network configuration.";
 }

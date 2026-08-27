@@ -53,31 +53,51 @@ WifiCredentials loadWifiCredentials() {
     creds.primary.password = WIFI_PASSWORD;
     creds.hostname = DEFAULT_HOSTNAME;
     creds.ntpServer = DEFAULT_NTP_SERVER;
-    saveWifiCredentials(creds);
-    Serial.println("[network_store] First boot with NVS-backed WiFi config - seeded primary from "
-                    "secrets.h's WIFI_SSID/WIFI_PASSWORD, default hostname \"" +
-                    String(DEFAULT_HOSTNAME) + "\", NTP server \"" + String(DEFAULT_NTP_SERVER) +
-                    "\" (1h resync), no backup network, DHCP.");
+    bool seeded = saveWifiCredentials(creds);
+    Serial.println(seeded
+        ? "[network_store] First boot with NVS-backed WiFi config - seeded primary from "
+          "secrets.h's WIFI_SSID/WIFI_PASSWORD, default hostname \"" + String(DEFAULT_HOSTNAME) +
+          "\", NTP server \"" + String(DEFAULT_NTP_SERVER) + "\" (1h resync), no backup network, DHCP."
+        : "[network_store] ERROR: failed to persist the first-boot WiFi config seed to NVS - "
+          "this boot will still use it, but it wasn't saved and won't survive a reboot.");
   }
   return creds;
+}
+
+// putString returns bytes written, 0 on failure - comparing against the
+// source string's own length (rather than just "> 0") correctly treats a
+// legitimately empty field (no backup network, DHCP, no TZ, etc. - several
+// of these fields are optional and empty by design) as success too, not
+// just a non-empty one. Same failure class camera_store.cpp's saveCameras
+// hit in the field (NVS full/write error silently ignored) - here it means
+// the WiFi config the caller believes it just set was never actually
+// persisted, and reverts to whatever's really on flash on the next reboot.
+static bool putStringChecked(Preferences& prefs, const char* key, const String& value) {
+  return prefs.putString(key, value) == value.length();
 }
 
 bool saveWifiCredentials(const WifiCredentials& creds) {
   Preferences prefs;
   if (!prefs.begin(NVS_NAMESPACE, false)) return false;
-  prefs.putString(NVS_KEY_SSID, creds.primary.ssid);
-  prefs.putString(NVS_KEY_PASS, creds.primary.password);
-  prefs.putString(NVS_KEY_SSID2, creds.backup.ssid);
-  prefs.putString(NVS_KEY_PASS2, creds.backup.password);
-  prefs.putString(NVS_KEY_HOST, creds.hostname);
-  prefs.putBool(NVS_KEY_STATIC, creds.useStaticIP);
-  prefs.putString(NVS_KEY_IP, creds.staticIP);
-  prefs.putString(NVS_KEY_SUBNET, creds.staticSubnet);
-  prefs.putString(NVS_KEY_GW, creds.staticGateway);
-  prefs.putString(NVS_KEY_DNS, creds.staticDNS);
-  prefs.putString(NVS_KEY_NTPSRV, creds.ntpServer);
-  prefs.putULong(NVS_KEY_NTPINT, creds.ntpSyncIntervalMs);
-  prefs.putString(NVS_KEY_TZ, creds.posixTz);
+  bool ok = true;
+  ok &= putStringChecked(prefs, NVS_KEY_SSID, creds.primary.ssid);
+  ok &= putStringChecked(prefs, NVS_KEY_PASS, creds.primary.password);
+  ok &= putStringChecked(prefs, NVS_KEY_SSID2, creds.backup.ssid);
+  ok &= putStringChecked(prefs, NVS_KEY_PASS2, creds.backup.password);
+  ok &= putStringChecked(prefs, NVS_KEY_HOST, creds.hostname);
+  ok &= prefs.putBool(NVS_KEY_STATIC, creds.useStaticIP) > 0;
+  ok &= putStringChecked(prefs, NVS_KEY_IP, creds.staticIP);
+  ok &= putStringChecked(prefs, NVS_KEY_SUBNET, creds.staticSubnet);
+  ok &= putStringChecked(prefs, NVS_KEY_GW, creds.staticGateway);
+  ok &= putStringChecked(prefs, NVS_KEY_DNS, creds.staticDNS);
+  ok &= putStringChecked(prefs, NVS_KEY_NTPSRV, creds.ntpServer);
+  ok &= prefs.putULong(NVS_KEY_NTPINT, creds.ntpSyncIntervalMs) > 0;
+  ok &= putStringChecked(prefs, NVS_KEY_TZ, creds.posixTz);
   prefs.end();
-  return true;
+  if (!ok) {
+    Serial.println("[network_store] ERROR: failed to persist WiFi config to NVS - NVS may be full. "
+                    "The in-memory config changed but NVS still has the old data; this WILL be lost "
+                    "on reboot.");
+  }
+  return ok;
 }

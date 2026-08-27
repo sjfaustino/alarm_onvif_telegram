@@ -190,6 +190,13 @@ bool saveCameraSubmission(CameraConfig cam, const String& originalName, String& 
 // Does create one real, temporary subscription on the camera (same as the
 // real thing would) - not cleaned up afterward, so it just expires on its
 // own.
+//
+// cfg.name/deviceServiceUrl are attacker-controllable the same way any other
+// dashboard-submitted field is, and this banner - unlike every other one in
+// this file - is built up from them directly rather than through a fixed
+// message with a pre-escaped substitution, so both are run through
+// htmlEscape() explicitly below. renderShell() (webserver.cpp) drops the
+// returned banner straight into the page with no escaping of its own.
 String testCameraConnection(CameraConfig cfg) {
   if (cfg.deviceServiceUrl.length() == 0) {
     return "Enter a device service URL first, then Test Connection.";
@@ -200,13 +207,16 @@ String testCameraConnection(CameraConfig cfg) {
     return "Enter a username and password first, then Test Connection.";
   }
 
+  String safeName = htmlEscape(cfg.name);
+  String safeUrl = htmlEscape(cfg.deviceServiceUrl);
+
   if (!cameraDiscoverServices(cfg, st)) {
-    return "Test FAILED for \"" + cfg.name + "\": could not reach " + cfg.deviceServiceUrl +
+    return "Test FAILED for \"" + safeName + "\": could not reach " + safeUrl +
            ", or no ONVIF event service was found there. Check the URL/credentials and see the "
            "Serial log for details.";
   }
 
-  String result = "Test result for \"" + cfg.name + "\": device service reachable, event service found.";
+  String result = "Test result for \"" + safeName + "\": device service reachable, event service found.";
 
   if (cameraGetEventServiceCapabilities(cfg, st) && cameraGetEventProperties(cfg, st)) {
     result += " Event service responds normally.";
