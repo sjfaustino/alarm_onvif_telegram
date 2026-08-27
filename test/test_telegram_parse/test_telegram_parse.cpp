@@ -195,42 +195,98 @@ void test_matchCamerasByPrefix_excludes_disabled_cameras(void) {
 // has to be declared, instead of a separate easy-to-forget check per
 // command (the exact class of bug that caused the /reset reboot loop).
 
-void test_requiredPermissionForCommand_status_needs_command(void) {
-  TEST_ASSERT_TRUE(TelegramCommandPermission::Command == requiredPermissionForCommand("/status"));
-}
-
-void test_requiredPermissionForCommand_uptime_needs_command(void) {
-  TEST_ASSERT_TRUE(TelegramCommandPermission::Command == requiredPermissionForCommand("/uptime"));
-}
-
-void test_requiredPermissionForCommand_reset_needs_reset(void) {
-  TEST_ASSERT_TRUE(TelegramCommandPermission::Reset == requiredPermissionForCommand("/reset"));
-}
-
-void test_requiredPermissionForCommand_on_off_need_command(void) {
-  TEST_ASSERT_TRUE(TelegramCommandPermission::Command == requiredPermissionForCommand("/on D01"));
-  TEST_ASSERT_TRUE(TelegramCommandPermission::Command == requiredPermissionForCommand("/off D01"));
+void test_requiredPermissionForCommand_status_uptime_on_off_need_command(void) {
+  TEST_ASSERT_TRUE(TelegramCommandPermission::Command == requiredPermissionForCommand(TelegramCommand::Status));
+  TEST_ASSERT_TRUE(TelegramCommandPermission::Command == requiredPermissionForCommand(TelegramCommand::Uptime));
+  TEST_ASSERT_TRUE(TelegramCommandPermission::Command == requiredPermissionForCommand(TelegramCommand::On));
+  TEST_ASSERT_TRUE(TelegramCommandPermission::Command == requiredPermissionForCommand(TelegramCommand::Off));
 }
 
 void test_requiredPermissionForCommand_snap_needs_snap(void) {
-  TEST_ASSERT_TRUE(TelegramCommandPermission::Snap == requiredPermissionForCommand("/snap D01"));
+  TEST_ASSERT_TRUE(TelegramCommandPermission::Snap == requiredPermissionForCommand(TelegramCommand::Snap));
 }
 
-void test_requiredPermissionForCommand_is_case_insensitive(void) {
-  TEST_ASSERT_TRUE(TelegramCommandPermission::Reset == requiredPermissionForCommand("/RESET"));
-  TEST_ASSERT_TRUE(TelegramCommandPermission::Snap == requiredPermissionForCommand("/SNAP D01"));
+void test_requiredPermissionForCommand_reset_needs_reset(void) {
+  TEST_ASSERT_TRUE(TelegramCommandPermission::Reset == requiredPermissionForCommand(TelegramCommand::Reset));
+}
+
+void test_requiredPermissionForCommand_unknown_needs_unknown(void) {
+  TEST_ASSERT_TRUE(TelegramCommandPermission::Unknown == requiredPermissionForCommand(TelegramCommand::Unknown));
+}
+
+// ---- parseTelegramCommand ----
+// The single place message text is matched against command syntax -
+// handleTelegramCommand used to parse this same text twice (once for
+// authorization, again to dispatch); this is now the only place it happens.
+
+void test_parseTelegramCommand_status(void) {
+  ParsedTelegramCommand p = parseTelegramCommand("/status");
+  TEST_ASSERT_TRUE(TelegramCommand::Status == p.command);
+  TEST_ASSERT_TRUE(TelegramCommandPermission::Command == p.requiredPermission);
+  TEST_ASSERT_EQUAL_STRING("", p.cameraName.c_str());
+}
+
+void test_parseTelegramCommand_uptime(void) {
+  TEST_ASSERT_TRUE(TelegramCommand::Uptime == parseTelegramCommand("/uptime").command);
+}
+
+void test_parseTelegramCommand_reset(void) {
+  ParsedTelegramCommand p = parseTelegramCommand("/reset");
+  TEST_ASSERT_TRUE(TelegramCommand::Reset == p.command);
+  TEST_ASSERT_TRUE(TelegramCommandPermission::Reset == p.requiredPermission);
+}
+
+void test_parseTelegramCommand_on_extracts_and_trims_camera_name(void) {
+  ParsedTelegramCommand p = parseTelegramCommand("/on  D01-FrontDoor  ");
+  TEST_ASSERT_TRUE(TelegramCommand::On == p.command);
+  TEST_ASSERT_TRUE(TelegramCommandPermission::Command == p.requiredPermission);
+  TEST_ASSERT_EQUAL_STRING("D01-FrontDoor", p.cameraName.c_str());
+}
+
+void test_parseTelegramCommand_off(void) {
+  ParsedTelegramCommand p = parseTelegramCommand("/off D02");
+  TEST_ASSERT_TRUE(TelegramCommand::Off == p.command);
+  TEST_ASSERT_EQUAL_STRING("D02", p.cameraName.c_str());
+}
+
+void test_parseTelegramCommand_snap(void) {
+  ParsedTelegramCommand p = parseTelegramCommand("/snap D03");
+  TEST_ASSERT_TRUE(TelegramCommand::Snap == p.command);
+  TEST_ASSERT_TRUE(TelegramCommandPermission::Snap == p.requiredPermission);
+  TEST_ASSERT_EQUAL_STRING("D03", p.cameraName.c_str());
+}
+
+void test_parseTelegramCommand_is_case_insensitive(void) {
+  TEST_ASSERT_TRUE(TelegramCommand::Reset == parseTelegramCommand("/RESET").command);
+  TEST_ASSERT_TRUE(TelegramCommand::Snap == parseTelegramCommand("/SNAP D01").command);
 }
 
 // Bare "/on" with no trailing space and camera name isn't a recognized
-// command at all (matches how handleTelegramCommand's own parsing - which
-// requires "/on " with a trailing space - falls through to "unrecognized,
-// ignored" for it) - it must not be treated as an unauthorized /on attempt.
-void test_requiredPermissionForCommand_on_without_target_is_unknown(void) {
-  TEST_ASSERT_TRUE(TelegramCommandPermission::Unknown == requiredPermissionForCommand("/on"));
+// command at all (matches how the old inline parsing - which required
+// "/on " with a trailing space - fell through to "unrecognized, ignored"
+// for it) - it must not be treated as an unauthorized /on attempt.
+void test_parseTelegramCommand_on_without_target_is_unknown(void) {
+  ParsedTelegramCommand p = parseTelegramCommand("/on");
+  TEST_ASSERT_TRUE(TelegramCommand::Unknown == p.command);
+  TEST_ASSERT_TRUE(TelegramCommandPermission::Unknown == p.requiredPermission);
 }
 
-void test_requiredPermissionForCommand_unrecognized_text_is_unknown(void) {
-  TEST_ASSERT_TRUE(TelegramCommandPermission::Unknown == requiredPermissionForCommand("hello"));
+void test_parseTelegramCommand_unrecognized_text_is_unknown(void) {
+  ParsedTelegramCommand p = parseTelegramCommand("hello");
+  TEST_ASSERT_TRUE(TelegramCommand::Unknown == p.command);
+  TEST_ASSERT_EQUAL_STRING("", p.cameraName.c_str());
+}
+
+// ---- commandDisplayName ----
+
+void test_commandDisplayName_every_command(void) {
+  TEST_ASSERT_EQUAL_STRING("/status", commandDisplayName(TelegramCommand::Status).c_str());
+  TEST_ASSERT_EQUAL_STRING("/uptime", commandDisplayName(TelegramCommand::Uptime).c_str());
+  TEST_ASSERT_EQUAL_STRING("/reset", commandDisplayName(TelegramCommand::Reset).c_str());
+  TEST_ASSERT_EQUAL_STRING("/on", commandDisplayName(TelegramCommand::On).c_str());
+  TEST_ASSERT_EQUAL_STRING("/off", commandDisplayName(TelegramCommand::Off).c_str());
+  TEST_ASSERT_EQUAL_STRING("/snap", commandDisplayName(TelegramCommand::Snap).c_str());
+  TEST_ASSERT_EQUAL_STRING("", commandDisplayName(TelegramCommand::Unknown).c_str());
 }
 
 int main(int argc, char** argv) {
@@ -254,13 +310,19 @@ int main(int argc, char** argv) {
   RUN_TEST(test_matchCamerasByPrefix_ambiguous_prefix_returns_all_matches);
   RUN_TEST(test_matchCamerasByPrefix_no_match_returns_empty);
   RUN_TEST(test_matchCamerasByPrefix_excludes_disabled_cameras);
-  RUN_TEST(test_requiredPermissionForCommand_status_needs_command);
-  RUN_TEST(test_requiredPermissionForCommand_uptime_needs_command);
-  RUN_TEST(test_requiredPermissionForCommand_reset_needs_reset);
-  RUN_TEST(test_requiredPermissionForCommand_on_off_need_command);
+  RUN_TEST(test_requiredPermissionForCommand_status_uptime_on_off_need_command);
   RUN_TEST(test_requiredPermissionForCommand_snap_needs_snap);
-  RUN_TEST(test_requiredPermissionForCommand_is_case_insensitive);
-  RUN_TEST(test_requiredPermissionForCommand_on_without_target_is_unknown);
-  RUN_TEST(test_requiredPermissionForCommand_unrecognized_text_is_unknown);
+  RUN_TEST(test_requiredPermissionForCommand_reset_needs_reset);
+  RUN_TEST(test_requiredPermissionForCommand_unknown_needs_unknown);
+  RUN_TEST(test_parseTelegramCommand_status);
+  RUN_TEST(test_parseTelegramCommand_uptime);
+  RUN_TEST(test_parseTelegramCommand_reset);
+  RUN_TEST(test_parseTelegramCommand_on_extracts_and_trims_camera_name);
+  RUN_TEST(test_parseTelegramCommand_off);
+  RUN_TEST(test_parseTelegramCommand_snap);
+  RUN_TEST(test_parseTelegramCommand_is_case_insensitive);
+  RUN_TEST(test_parseTelegramCommand_on_without_target_is_unknown);
+  RUN_TEST(test_parseTelegramCommand_unrecognized_text_is_unknown);
+  RUN_TEST(test_commandDisplayName_every_command);
   return UNITY_END();
 }

@@ -498,119 +498,119 @@ static void sendOnDemandSnapshot(const CameraConfig& cfg, CameraState& st, const
   free(jpg);
 }
 
-// lastUpdateId is the highest Telegram update_id seen so far this poll
-// (pollTelegramCommands' own running value, already advanced past `text`'s
-// update) - used only by /reset below, to persist it before doing anything
-// irreversible. Passed in rather than having pollTelegramCommands guess
-// from outside which commands are dangerous and need an early persist:
-// that guesswork is exactly what caused the /reset reboot loop in the
-// first place (the guess and the actual command handling drifted out of
-// sync). A future command that also needs to persist before acting should
-// do the same thing /reset does below - call saveLastUpdateId(lastUpdateId)
-// right before it - rather than adding another external guess.
+// lastUpdateId is this poll's running highest update_id, already advanced
+// past `text`'s own update - passed through so the Reset case below can
+// persist it immediately, before ESP.restart(). See this section's top
+// comment for why that decision belongs here and not in pollTelegramCommands.
+//
+// text is parsed exactly once, by parseTelegramCommand (telegram_parse.h) -
+// command identity, required permission, and (for On/Off/Snap) the camera
+// name are all decided there and used as-is below, instead of being
+// re-derived a second time here the way an earlier version did. The
+// switch below has no default case, and platformio.ini enables
+// -Werror=switch specifically because this toolchain's default flags
+// otherwise accept a non-exhaustive switch silently (verified, not
+// assumed) - so a new TelegramCommand added without a case here is a
+// build failure, not a silent "unrecognized, ignored".
 static void handleTelegramCommand(const TelegramUser& sender, const String& text, const CameraConfig cameras[],
                                    CameraState states[], size_t numCameras, long lastUpdateId) {
   Serial.printf("[Telegram] Command from user \"%s\": \"%s\"\n", sender.name.c_str(), text.c_str());
 
-  // Single authorization check for every command, built from
-  // requiredPermissionForCommand's table (telegram_parse.h) instead of a
-  // separate "if (!sender.canX)" scattered per command - that scattering
-  // is exactly how a new command's permission check gets forgotten.
-  TelegramCommandPermission required = requiredPermissionForCommand(text);
-  bool authorized = (required == TelegramCommandPermission::Command && sender.canCommand) ||
-                     (required == TelegramCommandPermission::Snap && sender.canSnap) ||
-                     (required == TelegramCommandPermission::Reset && sender.canReset);
-  if (required != TelegramCommandPermission::Unknown && !authorized) {
-    String cmdWord = text;
-    int sp = cmdWord.indexOf(' ');
-    if (sp >= 0) cmdWord = cmdWord.substring(0, sp);
-    cmdWord.toLowerCase();
-    Serial.printf("[Telegram] User \"%s\" not authorized for %s.\n", sender.name.c_str(), cmdWord.c_str());
-    sendTelegramMessageTo(sender.chatId, "You're not authorized to use " + cmdWord + ".");
+  ParsedTelegramCommand parsed = parseTelegramCommand(text);
+
+  bool authorized = false;
+  switch (parsed.requiredPermission) {
+    case TelegramCommandPermission::Command: authorized = sender.canCommand; break;
+    case TelegramCommandPermission::Snap:    authorized = sender.canSnap;    break;
+    case TelegramCommandPermission::Reset:   authorized = sender.canReset;   break;
+    case TelegramCommandPermission::Unknown: authorized = false;             break;
+  }
+  // Logged here for every command now, including /status/uptime/reset -
+  // an earlier version of this check only logged rejected /on//off/snap
+  // attempts, silently replying with no server-side trace for the others.
+  // Calling that out explicitly since it wasn't when this unification
+  // first landed.
+  if (parsed.requiredPermission != TelegramCommandPermission::Unknown && !authorized) {
+    String name = commandDisplayName(parsed.command);
+    Serial.printf("[Telegram] User \"%s\" not authorized for %s.\n", sender.name.c_str(), name.c_str());
+    sendTelegramMessageTo(sender.chatId, "You're not authorized to use " + name + ".");
     return;
   }
 
-  if (text.equalsIgnoreCase("/status")) {
-    // alertsEnabled is only ever written from this same task (below, and
-    // main.cpp's boot-time restore), so this self-read needs no lock.
-    String msg = "Camera alert status:\n";
-    for (size_t i = 0; i < numCameras; i++) {
-      if (!cameras[i].enabled) continue;
-      msg += String(cameras[i].name) + ": " + (states[i].alertsEnabled ? "ON" : "OFF") + "\n";
+  switch (parsed.command) {
+    case TelegramCommand::Status: {
+      // alertsEnabled is only ever written from this same task (below, and
+      // main.cpp's boot-time restore), so this self-read needs no lock.
+      String msg = "Camera alert status:\n";
+      for (size_t i = 0; i < numCameras; i++) {
+        if (!cameras[i].enabled) continue;
+        msg += String(cameras[i].name) + ": " + (states[i].alertsEnabled ? "ON" : "OFF") + "\n";
+      }
+      Serial.printf("[Telegram] Replying to user \"%s\" with camera status.\n", sender.name.c_str());
+      sendTelegramMessageTo(sender.chatId, msg);
+      return;
     }
-    Serial.printf("[Telegram] Replying to user \"%s\" with camera status.\n", sender.name.c_str());
-    sendTelegramMessageTo(sender.chatId, msg);
-    return;
+
+    case TelegramCommand::Uptime:
+      Serial.printf("[Telegram] Replying to user \"%s\" with uptime.\n", sender.name.c_str());
+      sendTelegramMessageTo(sender.chatId, "Uptime: " + formatUptime(millis()));
+      return;
+
+    case TelegramCommand::Reset:
+      Serial.printf("[Telegram] Reboot requested by user \"%s\" via /reset.\n", sender.name.c_str());
+      // Persisted here, immediately before the irreversible action - see
+      // this function's own top comment for why it's decided here and not
+      // by pollTelegramCommands ahead of time.
+      saveLastUpdateId(lastUpdateId);
+      // Reply before restarting - ESP.restart() never returns, so this is
+      // the last chance to confirm the command was actually received.
+      sendTelegramMessageTo(sender.chatId, "\xE2\x99\xBB\xEF\xB8\x8F Rebooting now...");
+      delay(500); // let the TLS send above finish flushing before the reboot tears down WiFi
+      ESP.restart();
+      return; // unreachable - ESP.restart() doesn't return - kept for a tidy switch
+
+    case TelegramCommand::On:
+    case TelegramCommand::Off:
+    case TelegramCommand::Snap:
+      break; // handled below - shares the camera-name-matching logic
+
+    case TelegramCommand::Unknown:
+      Serial.println("[Telegram] Unrecognized command - ignored.");
+      return;
   }
-
-  if (text.equalsIgnoreCase("/uptime")) {
-    Serial.printf("[Telegram] Replying to user \"%s\" with uptime.\n", sender.name.c_str());
-    sendTelegramMessageTo(sender.chatId, "Uptime: " + formatUptime(millis()));
-    return;
-  }
-
-  if (text.equalsIgnoreCase("/reset")) {
-    Serial.printf("[Telegram] Reboot requested by user \"%s\" via /reset.\n", sender.name.c_str());
-    // Persisted here, immediately before the irreversible action, rather
-    // than by pollTelegramCommands ahead of time - see this function's own
-    // top comment. Without this, the reboot below would redeliver this
-    // same update and re-execute /reset forever.
-    saveLastUpdateId(lastUpdateId);
-    // Reply before restarting - ESP.restart() never returns, so this is
-    // the last chance to confirm the command was actually received.
-    sendTelegramMessageTo(sender.chatId, "\xE2\x99\xBB\xEF\xB8\x8F Rebooting now...");
-    delay(500); // let the TLS send above finish flushing before the reboot tears down WiFi
-    ESP.restart();
-  }
-
-  String lowerText = text;
-  lowerText.toLowerCase();
-
-  enum class Cmd { On, Off, Snap };
-  Cmd cmd;
-  String cameraName;
-  if (lowerText.startsWith("/on ")) { cmd = Cmd::On; cameraName = text.substring(4); }
-  else if (lowerText.startsWith("/off ")) { cmd = Cmd::Off; cameraName = text.substring(5); }
-  else if (lowerText.startsWith("/snap ")) { cmd = Cmd::Snap; cameraName = text.substring(6); }
-  else {
-    Serial.println("[Telegram] Unrecognized command - ignored.");
-    return;
-  }
-
-  const char* verb = (cmd == Cmd::On) ? "on" : (cmd == Cmd::Off) ? "off" : "snap";
-  cameraName.trim();
 
   // Matched by prefix ("D01" matches "D01-FDir") - ambiguous matches get
   // nothing applied and a reply listing what matched, rather than guessing.
-  std::vector<size_t> matches = matchCamerasByPrefix(cameras, numCameras, cameraName);
+  std::vector<size_t> matches = matchCamerasByPrefix(cameras, numCameras, parsed.cameraName);
+  String verb = commandDisplayName(parsed.command).substring(1); // drop the leading "/" for mid-sentence use
 
   if (matches.size() > 1) {
     String list;
     for (size_t idx : matches) { if (list.length() > 0) list += ", "; list += cameras[idx].name; }
-    Serial.printf("[Telegram] /%s target \"%s\" from user \"%s\" is ambiguous: %s\n", verb,
-                  cameraName.c_str(), sender.name.c_str(), list.c_str());
-    sendTelegramMessageTo(sender.chatId, "\"" + cameraName + "\" matches more than one camera: " + list +
+    Serial.printf("[Telegram] /%s target \"%s\" from user \"%s\" is ambiguous: %s\n", verb.c_str(),
+                  parsed.cameraName.c_str(), sender.name.c_str(), list.c_str());
+    sendTelegramMessageTo(sender.chatId, "\"" + parsed.cameraName + "\" matches more than one camera: " + list +
                                           " - be more specific.");
     return;
   }
 
   if (matches.empty()) {
-    Serial.printf("[Telegram] /%s target not found or disabled: \"%s\" (user \"%s\")\n", verb,
-                  cameraName.c_str(), sender.name.c_str());
-    sendTelegramMessageTo(sender.chatId, "Unknown or disabled camera: " + cameraName);
+    Serial.printf("[Telegram] /%s target not found or disabled: \"%s\" (user \"%s\")\n", verb.c_str(),
+                  parsed.cameraName.c_str(), sender.name.c_str());
+    sendTelegramMessageTo(sender.chatId, "Unknown or disabled camera: " + parsed.cameraName);
     return;
   }
 
   size_t i = matches[0];
 
-  if (cmd == Cmd::Snap) {
+  if (parsed.command == TelegramCommand::Snap) {
     Serial.printf("[%s] On-demand snapshot requested by user \"%s\" via Telegram.\n",
                   cameras[i].name.c_str(), sender.name.c_str());
     sendOnDemandSnapshot(cameras[i], states[i], sender.chatId);
     return;
   }
 
-  bool turnOn = (cmd == Cmd::On);
+  bool turnOn = (parsed.command == TelegramCommand::On);
   { CameraStateLock lock(states[i]); states[i].alertsEnabled = turnOn; } // read cross-task by camera.cpp/webserver.cpp
   saveAlertEnabledPref(i, turnOn);
   Serial.printf("[%s] Alerts turned %s via Telegram by user \"%s\".\n", cameras[i].name.c_str(),

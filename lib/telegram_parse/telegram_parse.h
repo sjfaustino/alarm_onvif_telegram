@@ -46,15 +46,46 @@ bool chatIdMatches(const String& storedChatId, int64_t updateChatId);
 // on 0).
 std::vector<size_t> matchCamerasByPrefix(const CameraConfig cameras[], size_t numCameras, const String& needle);
 
-// Which TelegramUser permission a command's text requires - the single
-// source of truth handleTelegramCommand's authorization check is built
-// from, so a new command can't be added there without this table knowing
-// what it needs (previously each command had its own separate, easy-to-
-// forget "if (!sender.canX)" check scattered through the function).
-// Unknown means the text isn't a recognized command at all. Case-
-// insensitive; /on, /off, /snap specifically require a trailing space and
-// target (matching how handleTelegramCommand actually parses them) - bare
-// "/on" with nothing after it is Unknown, same as any other unrecognized
-// text, not a permission question.
+// The specific command a message's text was recognized as - Unknown means
+// it isn't a recognized command at all.
+enum class TelegramCommand { Unknown, Status, Uptime, Reset, On, Off, Snap };
+
+// Which TelegramUser permission a command requires - /status, /uptime,
+// /on, /off need canCommand; /snap needs canSnap; /reset needs canReset.
+// The single source of truth handleTelegramCommand's authorization check
+// is built from, so a new TelegramCommand can't be wired up without this
+// table knowing what it needs (previously each command had its own
+// separate, easy-to-forget "if (!sender.canX)" check scattered through
+// the function - the exact class of bug that caused the /reset reboot
+// loop). Deliberately a switch with no default in both its declaration
+// site's usage and requiredPermissionForCommand's own implementation - a
+// new TelegramCommand value added without a case here fails to compile
+// (-Wswitch) instead of silently defaulting to Unknown/unauthorized.
 enum class TelegramCommandPermission { Unknown, Command, Snap, Reset };
-TelegramCommandPermission requiredPermissionForCommand(const String& text);
+TelegramCommandPermission requiredPermissionForCommand(TelegramCommand command);
+
+// One recognized command, already fully parsed: which command it is, the
+// permission it requires (via requiredPermissionForCommand), and - for
+// /on, /off, /snap - the camera name/prefix that followed it, trimmed.
+// command is Unknown (and cameraName empty) for anything not recognized.
+struct ParsedTelegramCommand {
+  TelegramCommand command = TelegramCommand::Unknown;
+  TelegramCommandPermission requiredPermission = TelegramCommandPermission::Unknown;
+  String cameraName;
+};
+
+// The single place message text is matched against command syntax.
+// handleTelegramCommand (telegram.cpp) used to do this same matching
+// twice - once here (deciding what permission was needed) and again,
+// separately, to actually dispatch the command - two independent parses
+// of the same text that had to agree with each other. That's exactly the
+// kind of drift that caused the /reset reboot loop (a third such
+// duplication, since fixed). Case-insensitive; /on, /off, /snap
+// specifically require a trailing space and target to be recognized -
+// bare "/on" with nothing after it is Unknown, not a malformed /on.
+ParsedTelegramCommand parseTelegramCommand(const String& text);
+
+// The canonical "/word" text for a recognized command, e.g. for
+// "You're not authorized to use ___." replies - "" for Unknown. Also a
+// switch with no default, for the same reason as requiredPermissionForCommand.
+String commandDisplayName(TelegramCommand command);

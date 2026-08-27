@@ -71,12 +71,57 @@ std::vector<size_t> matchCamerasByPrefix(const CameraConfig cameras[], size_t nu
   return matches;
 }
 
-TelegramCommandPermission requiredPermissionForCommand(const String& text) {
+TelegramCommandPermission requiredPermissionForCommand(TelegramCommand command) {
+  switch (command) {
+    case TelegramCommand::Status:
+    case TelegramCommand::Uptime:
+    case TelegramCommand::On:
+    case TelegramCommand::Off:  return TelegramCommandPermission::Command;
+    case TelegramCommand::Snap: return TelegramCommandPermission::Snap;
+    case TelegramCommand::Reset: return TelegramCommandPermission::Reset;
+    case TelegramCommand::Unknown: return TelegramCommandPermission::Unknown;
+  }
+  return TelegramCommandPermission::Unknown; // unreachable if every enumerator above is handled
+}
+
+ParsedTelegramCommand parseTelegramCommand(const String& text) {
+  ParsedTelegramCommand result;
   String lower = text;
   lower.toLowerCase();
-  if (lower == "/status" || lower == "/uptime") return TelegramCommandPermission::Command;
-  if (lower == "/reset") return TelegramCommandPermission::Reset;
-  if (lower.startsWith("/on ") || lower.startsWith("/off ")) return TelegramCommandPermission::Command;
-  if (lower.startsWith("/snap ")) return TelegramCommandPermission::Snap;
-  return TelegramCommandPermission::Unknown;
+
+  if (lower == "/status") {
+    result.command = TelegramCommand::Status;
+  } else if (lower == "/uptime") {
+    result.command = TelegramCommand::Uptime;
+  } else if (lower == "/reset") {
+    result.command = TelegramCommand::Reset;
+  } else if (lower.startsWith("/on ")) {
+    result.command = TelegramCommand::On;
+    result.cameraName = text.substring(4);
+  } else if (lower.startsWith("/off ")) {
+    result.command = TelegramCommand::Off;
+    result.cameraName = text.substring(5);
+  } else if (lower.startsWith("/snap ")) {
+    result.command = TelegramCommand::Snap;
+    result.cameraName = text.substring(6);
+  } else {
+    return result; // Unknown, requiredPermission stays Unknown too
+  }
+
+  result.cameraName.trim();
+  result.requiredPermission = requiredPermissionForCommand(result.command);
+  return result;
+}
+
+String commandDisplayName(TelegramCommand command) {
+  switch (command) {
+    case TelegramCommand::Status: return "/status";
+    case TelegramCommand::Uptime: return "/uptime";
+    case TelegramCommand::Reset:  return "/reset";
+    case TelegramCommand::On:     return "/on";
+    case TelegramCommand::Off:    return "/off";
+    case TelegramCommand::Snap:   return "/snap";
+    case TelegramCommand::Unknown: return "";
+  }
+  return ""; // unreachable if every enumerator above is handled
 }
