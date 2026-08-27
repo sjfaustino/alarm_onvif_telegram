@@ -13,7 +13,11 @@
 // otherwise.
 struct TelegramUpdate {
   long updateId = 0;
-  long chatId = 0;
+  // int64_t, not long: `long` is only 32-bit on this platform (max ~2.1
+  // billion), and real Telegram chat IDs for ordinary accounts routinely
+  // exceed that (not just group/channel IDs) - a 32-bit chatId silently
+  // came back as 0 for one in the field, matching no configured user.
+  int64_t chatId = 0;
   bool hasChatId = false;
   String text;
 };
@@ -26,6 +30,13 @@ struct TelegramUpdate {
 // or the API itself reported failure (e.g. "ok":false from an invalid bot
 // token) - both cases return an empty vector.
 std::vector<TelegramUpdate> parseTelegramUpdates(const String& jsonBody, String* error = nullptr);
+
+// Compares a TelegramUser's stored chat ID (persisted as text, see
+// telegram_users.h) against a parsed update's chat ID. Uses strtoll
+// rather than Arduino's String::toInt() (also only 32-bit on this
+// platform) - same overflow risk as chatId above, so both sides of this
+// comparison need to be 64-bit or a large chat ID silently matches nothing.
+bool chatIdMatches(const String& storedChatId, int64_t updateChatId);
 
 // Case-insensitive prefix match of `needle` against every *enabled*
 // camera's name (e.g. "d01" matches "D01-FrontDoor") - shared by /on, /off,

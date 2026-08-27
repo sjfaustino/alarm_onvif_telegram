@@ -184,6 +184,42 @@ void test_field_separator_character_in_input_is_stripped_not_corrupting(void) {
   TEST_ASSERT_EQUAL_STRING("line oneline two", restored.notes.c_str());
 }
 
+// ---- sortCamerasByName ----
+
+static CameraConfig camWithName(const char* name) {
+  CameraConfig c;
+  c.name = name;
+  return c;
+}
+
+void test_sortCamerasByName_orders_alphabetically(void) {
+  std::vector<CameraConfig> cams = {camWithName("D02-FEsq"), camWithName("D01-FDir")};
+  sortCamerasByName(cams);
+  TEST_ASSERT_EQUAL_STRING("D01-FDir", cams[0].name.c_str());
+  TEST_ASSERT_EQUAL_STRING("D02-FEsq", cams[1].name.c_str());
+}
+
+void test_sortCamerasByName_is_case_insensitive(void) {
+  std::vector<CameraConfig> cams = {camWithName("banana"), camWithName("Apple")};
+  sortCamerasByName(cams);
+  TEST_ASSERT_EQUAL_STRING("Apple", cams[0].name.c_str());
+  TEST_ASSERT_EQUAL_STRING("banana", cams[1].name.c_str());
+}
+
+// The exact real-world case this was added for: zero-padded numeric
+// suffixes sort correctly as plain text, without needing a natural/
+// numeric-aware comparator - "D10" must land after "D09", not before it
+// (and not before "D01" just because it was inserted first).
+void test_sortCamerasByName_zero_padded_numeric_suffixes_in_order(void) {
+  std::vector<CameraConfig> cams = {camWithName("D10-2Lentes"), camWithName("D02-FEsq"),
+                                     camWithName("D01-FDir"), camWithName("D09-Portao")};
+  sortCamerasByName(cams);
+  TEST_ASSERT_EQUAL_STRING("D01-FDir", cams[0].name.c_str());
+  TEST_ASSERT_EQUAL_STRING("D02-FEsq", cams[1].name.c_str());
+  TEST_ASSERT_EQUAL_STRING("D09-Portao", cams[2].name.c_str());
+  TEST_ASSERT_EQUAL_STRING("D10-2Lentes", cams[3].name.c_str());
+}
+
 int main(int argc, char** argv) {
   UNITY_BEGIN();
   RUN_TEST(test_round_trip_preserves_every_field);
@@ -197,5 +233,8 @@ int main(int argc, char** argv) {
   RUN_TEST(test_v1_exact_field_count_is_accepted);
   RUN_TEST(test_unknown_future_version_falls_back_to_newest_known_layout);
   RUN_TEST(test_field_separator_character_in_input_is_stripped_not_corrupting);
+  RUN_TEST(test_sortCamerasByName_orders_alphabetically);
+  RUN_TEST(test_sortCamerasByName_is_case_insensitive);
+  RUN_TEST(test_sortCamerasByName_zero_padded_numeric_suffixes_in_order);
   return UNITY_END();
 }

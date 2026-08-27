@@ -85,6 +85,7 @@ std::vector<CameraConfig> loadCameras() {
     saveCameras(cams);
     Serial.printf("[camera_store] First boot with NVS-backed camera storage - seeded %u camera(s) "
                   "from secrets.h's CAMERA_SEED.\n", (unsigned)cams.size());
+    sortCamerasByName(cams);
     return cams;
   }
 
@@ -141,6 +142,7 @@ std::vector<CameraConfig> loadCameras() {
     saveCameras(cams);
   }
 
+  sortCamerasByName(cams);
   return cams;
 }
 

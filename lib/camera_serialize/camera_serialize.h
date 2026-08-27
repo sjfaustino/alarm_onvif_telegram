@@ -4,6 +4,7 @@
                       // lib's own #includes, and doesn't chain through camera_store.h since
                       // it's a loose top-level header (found via -Iinclude) rather than a
                       // library of its own
+#include <vector>
 #include "camera_store.h"
 
 // Pure (de)serialization between CameraConfig and the pipe-delimited
@@ -43,3 +44,9 @@ CameraConfig deserializeCamera(const String& record, uint16_t recordVersion);
 // diagnostic log when a record fails to parse, not used by deserializeCamera
 // itself.
 size_t cameraRecordFieldCount(const String& record);
+
+// Sorts in place by name, case-insensitively. Display/iteration order
+// only - doesn't touch NVS, and doesn't need natural/numeric-aware
+// comparison: zero-padded numeric suffixes ("D01".."D09", "D10") already
+// sort correctly as plain text.
+void sortCamerasByName(std::vector<CameraConfig>& cams);

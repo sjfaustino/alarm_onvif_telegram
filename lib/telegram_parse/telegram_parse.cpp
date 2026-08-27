@@ -1,5 +1,6 @@
 #include "telegram_parse.h"
 #include <ArduinoJson.h>
+#include <cstdlib>
 
 std::vector<TelegramUpdate> parseTelegramUpdates(const String& jsonBody, String* error) {
   std::vector<TelegramUpdate> updates;
@@ -31,7 +32,7 @@ std::vector<TelegramUpdate> parseTelegramUpdates(const String& jsonBody, String*
     if (!message.isNull()) {
       JsonObject chat = message["chat"];
       if (!chat.isNull() && !chat["id"].isNull()) {
-        u.chatId = chat["id"].as<long>();
+        u.chatId = chat["id"].as<int64_t>();
         u.hasChatId = true;
       }
       // const char*, not .as<String>() - same reasoning as the .c_str()
@@ -50,6 +51,10 @@ std::vector<TelegramUpdate> parseTelegramUpdates(const String& jsonBody, String*
     updates.push_back(u);
   }
   return updates;
+}
+
+bool chatIdMatches(const String& storedChatId, int64_t updateChatId) {
+  return strtoll(storedChatId.c_str(), nullptr, 10) == updateChatId;
 }
 
 std::vector<size_t> matchCamerasByPrefix(const CameraConfig cameras[], size_t numCameras, const String& needle) {

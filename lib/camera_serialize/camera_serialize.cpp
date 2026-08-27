@@ -1,4 +1,5 @@
 #include "camera_serialize.h"
+#include <algorithm>
 
 // Non-printable ASCII separator between a single camera's fields - no
 // camera name, URL, credential, or note should ever legitimately contain
@@ -126,4 +127,12 @@ CameraConfig deserializeCamera(const String& record, uint16_t recordVersion) {
 
 size_t cameraRecordFieldCount(const String& record) {
   return splitFields(record).size();
+}
+
+void sortCamerasByName(std::vector<CameraConfig>& cams) {
+  std::sort(cams.begin(), cams.end(), [](const CameraConfig& a, const CameraConfig& b) {
+    String an = a.name; an.toLowerCase();
+    String bn = b.name; bn.toLowerCase();
+    return an < bn;
+  });
 }

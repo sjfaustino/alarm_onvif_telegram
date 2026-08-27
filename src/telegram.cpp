@@ -559,14 +559,14 @@ void pollTelegramCommands(const CameraConfig cameras[], CameraState states[], si
 
     const TelegramUser* sender = nullptr;
     for (auto& u : users) {
-      if (u.chatId.toInt() == upd.chatId) { sender = &u; break; }
+      if (chatIdMatches(u.chatId, upd.chatId)) { sender = &u; break; }
     }
     // canCommand and canSnap are independent permissions (see TelegramUser)
     // - a sender needs at least one of them to reach handleTelegramCommand
     // at all; which specific commands that actually unlocks is decided
     // there, per-command.
     if (!sender || !(sender->canCommand || sender->canSnap)) {
-      Serial.printf("[Telegram] Ignored command from chat ID %ld (%s)\n", upd.chatId,
+      Serial.printf("[Telegram] Ignored command from chat ID %lld (%s)\n", (long long)upd.chatId,
                     sender ? "not authorized to send commands" : "unknown chat");
       continue;
     }

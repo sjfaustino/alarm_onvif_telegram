@@ -18,8 +18,21 @@ void test_parseTelegramUpdates_single_update(void) {
   TEST_ASSERT_EQUAL_INT(1, (int)updates.size());
   TEST_ASSERT_EQUAL_INT32(100, updates[0].updateId);
   TEST_ASSERT_TRUE(updates[0].hasChatId);
-  TEST_ASSERT_EQUAL_INT32(123456789, updates[0].chatId);
+  TEST_ASSERT_EQUAL_INT64(123456789, updates[0].chatId);
   TEST_ASSERT_EQUAL_STRING("/status", updates[0].text.c_str());
+}
+
+// Real Telegram chat IDs for ordinary accounts (not just groups/channels)
+// routinely exceed 32-bit range (~2.1 billion) - chatId must survive a
+// value that would silently overflow/truncate a `long` on this platform.
+// This is the exact bug hit in the field: a chat ID this size came back
+// as 0, matching no configured user.
+void test_parseTelegramUpdates_chat_id_beyond_32_bits(void) {
+  String body = R"({"ok":true,"result":[
+    {"update_id":1,"message":{"chat":{"id":8897455184},"text":"/status"}}
+  ]})";
+  std::vector<TelegramUpdate> updates = parseTelegramUpdates(body);
+  TEST_ASSERT_EQUAL_INT64(8897455184LL, updates[0].chatId);
 }
 
 void test_parseTelegramUpdates_multiple_updates_in_order(void) {
@@ -32,7 +45,7 @@ void test_parseTelegramUpdates_multiple_updates_in_order(void) {
   TEST_ASSERT_EQUAL_INT(3, (int)updates.size());
   TEST_ASSERT_EQUAL_STRING("/on D01", updates[0].text.c_str());
   TEST_ASSERT_EQUAL_STRING("/off D01", updates[1].text.c_str());
-  TEST_ASSERT_EQUAL_INT32(20, updates[2].chatId);
+  TEST_ASSERT_EQUAL_INT64(20, updates[2].chatId);
 }
 
 // A JSON-escaped quote/backslash/newline in the text field must come back
@@ -108,6 +121,24 @@ void test_parseTelegramUpdates_null_error_param_is_optional(void) {
   TEST_ASSERT_TRUE(updates.empty());
 }
 
+// ---- chatIdMatches ----
+
+void test_chatIdMatches_equal_ids(void) {
+  TEST_ASSERT_TRUE(chatIdMatches("123456789", 123456789LL));
+}
+
+void test_chatIdMatches_different_ids(void) {
+  TEST_ASSERT_FALSE(chatIdMatches("123456789", 987654321LL));
+}
+
+// The actual bug: a stored chat ID beyond 32-bit range must still match
+// correctly - String::toInt() (also only 32-bit here) was the other half
+// of this bug alongside TelegramUpdate::chatId itself being a `long`.
+void test_chatIdMatches_beyond_32_bits(void) {
+  TEST_ASSERT_TRUE(chatIdMatches("8897455184", 8897455184LL));
+  TEST_ASSERT_FALSE(chatIdMatches("8897455184", 8897455185LL));
+}
+
 // ---- matchCamerasByPrefix ----
 
 static CameraConfig makeCam(const char* name, bool enabled = true) {
@@ -160,6 +191,7 @@ void test_matchCamerasByPrefix_excludes_disabled_cameras(void) {
 int main(int argc, char** argv) {
   UNITY_BEGIN();
   RUN_TEST(test_parseTelegramUpdates_single_update);
+  RUN_TEST(test_parseTelegramUpdates_chat_id_beyond_32_bits);
   RUN_TEST(test_parseTelegramUpdates_multiple_updates_in_order);
   RUN_TEST(test_parseTelegramUpdates_unescapes_text_field);
   RUN_TEST(test_parseTelegramUpdates_update_without_message_still_returns_updateId);
@@ -168,6 +200,9 @@ int main(int argc, char** argv) {
   RUN_TEST(test_parseTelegramUpdates_malformed_json_reports_error);
   RUN_TEST(test_parseTelegramUpdates_api_error_reports_description);
   RUN_TEST(test_parseTelegramUpdates_null_error_param_is_optional);
+  RUN_TEST(test_chatIdMatches_equal_ids);
+  RUN_TEST(test_chatIdMatches_different_ids);
+  RUN_TEST(test_chatIdMatches_beyond_32_bits);
   RUN_TEST(test_matchCamerasByPrefix_single_prefix_match);
   RUN_TEST(test_matchCamerasByPrefix_is_case_insensitive);
   RUN_TEST(test_matchCamerasByPrefix_exact_name_matches_itself);
