@@ -562,10 +562,14 @@ static String renderTelegramUserForm(const TelegramUser& v, const std::vector<Ca
   html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"systemMessages\"" +
           String(v.systemMessages ? " checked" : "") + "> Receive heartbeat and boot-online messages</label>";
   html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"canCommand\"" +
-          String(v.canCommand ? " checked" : "") + "> May send /on, /off, /status commands</label>";
+          String(v.canCommand ? " checked" : "") + "> May send /on, /off, /status, /uptime commands</label>";
   html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"canSnap\"" +
           String(v.canSnap ? " checked" : "") +
           "> May send /snap (on-demand photo) - independent of the commands above</label>";
+  html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"canReset\"" +
+          String(v.canReset ? " checked" : "") +
+          "> May send /reset (reboots the board immediately) - independent of the permissions "
+          "above, off by default even for a new user</label>";
   html += "<p><button type=\"submit\">" + String(isEdit ? "Save changes" : "Add user") + "</button>";
   if (isEdit) html += " <a href=\"/users\">Cancel</a>";
   html += "</p></form></fieldset>";
@@ -580,7 +584,7 @@ static String renderUsersPanel(const TelegramUser* prefill, bool isEdit) {
 
   String html = "<h1>Telegram Users</h1>";
   html += "<table><tr><th>Name</th><th>Chat ID</th><th>Cameras</th>"
-          "<th>System Messages</th><th>Can Command</th><th>Can Snap</th><th></th></tr>";
+          "<th>System Messages</th><th>Can Command</th><th>Can Snap</th><th>Can Reset</th><th></th></tr>";
   for (auto& u : users) {
     String camerasCol;
     if (u.allCameras) {
@@ -596,7 +600,8 @@ static String renderUsersPanel(const TelegramUser* prefill, bool isEdit) {
 
     html += "<tr><td>" + htmlEscape(u.name) + "</td><td>" + htmlEscape(u.chatId) + "</td><td>" +
             camerasCol + "</td><td>" + (u.systemMessages ? "yes" : "no") + "</td><td>" +
-            (u.canCommand ? "yes" : "no") + "</td><td>" + (u.canSnap ? "yes" : "no") + "</td><td>";
+            (u.canCommand ? "yes" : "no") + "</td><td>" + (u.canSnap ? "yes" : "no") + "</td><td>" +
+            (u.canReset ? "yes" : "no") + "</td><td>";
     html += "<a href=\"/users/edit?name=" + urlEncode(u.name) + "\">Edit</a> ";
     html += "<form class=\"inline\" method=\"POST\" action=\"/users/delete\" "
             "onsubmit=\"return confirm('Delete " + htmlEscape(u.name) + "?');\">";
@@ -625,6 +630,7 @@ static TelegramUser parseUserForm(PsychicRequest* request) {
   u.systemMessages = request->hasParam("systemMessages");
   u.canCommand     = request->hasParam("canCommand");
   u.canSnap        = request->hasParam("canSnap");
+  u.canReset       = request->hasParam("canReset");
   u.name.trim();
   u.chatId.trim();
 

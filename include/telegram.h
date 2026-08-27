@@ -30,5 +30,9 @@ bool loadAlertEnabledPref(size_t index);
 //   /on|/off <name/prefix>   - resume/mute alerts (subscription stays up)
 //   /snap <name/prefix>      - fresh snapshot now, ignoring mute/cooldown
 //   /status                  - list every enabled camera's on/off state
-// /on, /off, /status require canCommand; /snap requires canSnap.
+//   /uptime                  - board uptime
+//   /reset                   - reboot the board immediately
+// /on, /off, /status, /uptime require canCommand; /snap requires canSnap;
+// /reset requires canReset (off by default, even for the seeded Admin user
+// - see TelegramUser::canReset).
 void pollTelegramCommands(const CameraConfig cameras[], CameraState states[], size_t numCameras);

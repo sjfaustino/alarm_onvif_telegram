@@ -3,6 +3,7 @@
 #include "telegram_users.h"
 #include "telegram_parse.h"
 #include "telegram_multipart.h"
+#include "format_utils.h"
 #include <ArduinoJson.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
@@ -476,6 +477,29 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
     return;
   }
 
+  if (text.equalsIgnoreCase("/uptime")) {
+    if (!sender.canCommand) {
+      sendTelegramMessageTo(sender.chatId, "You're not authorized to use /uptime.");
+      return;
+    }
+    Serial.println("[Telegram] Replying with uptime.");
+    sendTelegramMessageTo(sender.chatId, "Uptime: " + formatUptime(millis()));
+    return;
+  }
+
+  if (text.equalsIgnoreCase("/reset")) {
+    if (!sender.canReset) {
+      sendTelegramMessageTo(sender.chatId, "You're not authorized to use /reset.");
+      return;
+    }
+    Serial.printf("[Telegram] Reboot requested by chat %s via /reset.\n", sender.chatId.c_str());
+    // Reply before restarting - ESP.restart() never returns, so this is
+    // the last chance to confirm the command was actually received.
+    sendTelegramMessageTo(sender.chatId, "\xE2\x99\xBB\xEF\xB8\x8F Rebooting now...");
+    delay(500); // let the TLS send above finish flushing before the reboot tears down WiFi
+    ESP.restart();
+  }
+
   String lowerText = text;
   lowerText.toLowerCase();
 
@@ -580,11 +604,11 @@ void pollTelegramCommands(const CameraConfig cameras[], CameraState states[], si
     for (auto& u : users) {
       if (chatIdMatches(u.chatId, upd.chatId)) { sender = &u; break; }
     }
-    // canCommand and canSnap are independent permissions (see TelegramUser)
-    // - a sender needs at least one of them to reach handleTelegramCommand
-    // at all; which specific commands that actually unlocks is decided
-    // there, per-command.
-    if (!sender || !(sender->canCommand || sender->canSnap)) {
+    // canCommand, canSnap, and canReset are independent permissions (see
+    // TelegramUser) - a sender needs at least one of them to reach
+    // handleTelegramCommand at all; which specific commands that actually
+    // unlocks is decided there, per-command.
+    if (!sender || !(sender->canCommand || sender->canSnap || sender->canReset)) {
       Serial.printf("[Telegram] Ignored command from chat ID %lld (%s)\n", (long long)upd.chatId,
                     sender ? "not authorized to send commands" : "unknown chat");
       continue;

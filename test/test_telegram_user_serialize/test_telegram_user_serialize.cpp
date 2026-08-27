@@ -25,6 +25,7 @@ static TelegramUser sampleUser() {
   u.systemMessages = true;
   u.canCommand = true;
   u.canSnap = false;
+  u.canReset = true;
   return u;
 }
 
@@ -42,6 +43,7 @@ void test_round_trip_preserves_every_field(void) {
   TEST_ASSERT_EQUAL(original.systemMessages, restored.systemMessages);
   TEST_ASSERT_EQUAL(original.canCommand, restored.canCommand);
   TEST_ASSERT_EQUAL(original.canSnap, restored.canSnap);
+  TEST_ASSERT_EQUAL(original.canReset, restored.canReset);
   TEST_ASSERT_EQUAL_INT(2, (int)restored.cameraNames.size());
   TEST_ASSERT_EQUAL_STRING("D01-FrontDoor", restored.cameraNames[0].c_str());
   TEST_ASSERT_EQUAL_STRING("D02-BackGate", restored.cameraNames[1].c_str());
@@ -85,31 +87,47 @@ void test_v0_6_field_record_defaults_canSnap_false(void) {
   TEST_ASSERT_FALSE(restored.canSnap);
 }
 
+// ---- Version 1 (superseded by V2's canReset, still read for migration) ----
+
+// Historical schema-1 data (7 fields, no canReset field at all) must still
+// parse correctly when explicitly tagged as version 1 - canReset defaults
+// to false (TelegramUser's own default) since it didn't exist yet.
+void test_v1_record_parses_with_canReset_defaulted_false(void) {
+  String v1 = joinFields({"User", "42", "1", "", "1", "1", "0"}); // 7 fields
+  TelegramUser restored = deserializeUser(v1, 1);
+  TEST_ASSERT_EQUAL_STRING("User", restored.name.c_str());
+  TEST_ASSERT_TRUE(restored.canCommand);
+  TEST_ASSERT_FALSE(restored.canReset);
+}
+
 // ---- Version TELEGRAM_USER_SCHEMA_VERSION (current, strict) ----
 
-// The actual fix: a record tagged as the *current* schema version must
-// have exactly the current field count - a 6-field record explicitly
-// tagged as the current version is corruption, not "an older save" (that
-// interpretation is scoped to version 0 only now). See
-// test_camera_serialize's equivalent test for the full rationale.
-void test_v1_wrong_field_count_is_rejected_not_reinterpreted(void) {
-  String wrongCount = joinFields({"User", "42", "1", "", "1", "1"}); // 6 fields
-  TelegramUser restored = deserializeUser(wrongCount, TELEGRAM_USER_SCHEMA_VERSION);
+// The actual fix this versioning scheme exists for: a record tagged as the
+// *current* schema version must have exactly the current field count - the
+// old 7-field V1 layout, explicitly tagged as the current (V2) version, is
+// corruption, not "an older save" (that interpretation is scoped to
+// explicit older version numbers only). See test_camera_serialize's
+// equivalent test for the full rationale.
+void test_v2_wrong_field_count_is_rejected_not_reinterpreted(void) {
+  String sevenFields = joinFields({"User", "42", "1", "", "1", "1", "0"}); // missing canReset
+  TelegramUser restored = deserializeUser(sevenFields, TELEGRAM_USER_SCHEMA_VERSION);
   TEST_ASSERT_EQUAL_STRING("", restored.name.c_str());
 }
 
-void test_v1_exact_field_count_is_accepted(void) {
-  String exact = joinFields({"User", "42", "1", "", "1", "1", "0"}); // 7 fields
+void test_v2_exact_field_count_is_accepted(void) {
+  String exact = joinFields({"User", "42", "1", "", "1", "1", "0", "1"}); // 8 fields
   TelegramUser restored = deserializeUser(exact, TELEGRAM_USER_SCHEMA_VERSION);
   TEST_ASSERT_EQUAL_STRING("User", restored.name.c_str());
   TEST_ASSERT_FALSE(restored.canSnap);
+  TEST_ASSERT_TRUE(restored.canReset);
 }
 
 void test_unknown_future_version_falls_back_to_newest_known_layout(void) {
-  String record = joinFields({"User", "42", "1", "", "1", "1", "1"});
+  String record = joinFields({"User", "42", "1", "", "1", "1", "1", "1"}); // 8 fields
   TelegramUser restored = deserializeUser(record, (uint16_t)(TELEGRAM_USER_SCHEMA_VERSION + 1));
   TEST_ASSERT_EQUAL_STRING("User", restored.name.c_str());
   TEST_ASSERT_TRUE(restored.canSnap);
+  TEST_ASSERT_TRUE(restored.canReset);
 }
 
 // ---- telegramUserWantsCamera ----
@@ -141,8 +159,9 @@ int main(int argc, char** argv) {
   RUN_TEST(test_malformed_record_returns_empty_name_v0);
   RUN_TEST(test_malformed_record_returns_empty_name_current_version);
   RUN_TEST(test_v0_6_field_record_defaults_canSnap_false);
-  RUN_TEST(test_v1_wrong_field_count_is_rejected_not_reinterpreted);
-  RUN_TEST(test_v1_exact_field_count_is_accepted);
+  RUN_TEST(test_v1_record_parses_with_canReset_defaulted_false);
+  RUN_TEST(test_v2_wrong_field_count_is_rejected_not_reinterpreted);
+  RUN_TEST(test_v2_exact_field_count_is_accepted);
   RUN_TEST(test_unknown_future_version_falls_back_to_newest_known_layout);
   RUN_TEST(test_wantsCamera_true_when_allCameras);
   RUN_TEST(test_wantsCamera_true_for_listed_camera_case_insensitive);

@@ -23,6 +23,14 @@ struct TelegramUser {
   // it's a different kind of trust (check in on a camera right now vs.
   // silence its alerts). See telegram.cpp for how each command is gated.
   bool canSnap = false;
+
+  // May send /reset (reboots the board immediately - drops every camera's
+  // active subscription and stops monitoring until it comes back up).
+  // Independent of canCommand/canSnap and, unlike them, NOT granted to the
+  // auto-seeded Admin user by default (see loadTelegramUsers()) - this one
+  // has to be turned on deliberately from the dashboard even for the first
+  // user, since it's disruptive rather than just informational/control.
+  bool canReset = false;
 };
 
 // True if this user should receive alerts for camera `cameraName`.

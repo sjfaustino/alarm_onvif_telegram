@@ -63,7 +63,8 @@ String serializeUser(const TelegramUser& u) {
   s += cameras;                        s += FIELD_SEP;
   s += (u.systemMessages ? "1" : "0"); s += FIELD_SEP;
   s += (u.canCommand ? "1" : "0");     s += FIELD_SEP;
-  s += (u.canSnap ? "1" : "0");
+  s += (u.canSnap ? "1" : "0");        s += FIELD_SEP;
+  s += (u.canReset ? "1" : "0");
   return s;
 }
 
@@ -89,9 +90,9 @@ static TelegramUser deserializeUserV0(const std::vector<String>& fields) {
   return u;
 }
 
-// Version 1 (TELEGRAM_USER_SCHEMA_VERSION): the current, fixed 7-field
-// layout. Requires an exact field count - see camera_serialize.cpp's
-// deserializeCameraV1 for the same reasoning.
+// Version 1: fixed 7-field layout, superseded by V2's addition of
+// canReset. Kept exactly as it was (exact-7-field, never edited in place)
+// so existing schema-1 data still parses correctly until it's migrated.
 static TelegramUser deserializeUserV1(const std::vector<String>& fields) {
   TelegramUser u;
   if (fields.size() != 7) return u; // malformed - caller skips entries with an empty name
@@ -106,15 +107,34 @@ static TelegramUser deserializeUserV1(const std::vector<String>& fields) {
   return u;
 }
 
+// Version 2 (TELEGRAM_USER_SCHEMA_VERSION): adds canReset, appended at the
+// end. Requires an exact field count - see camera_serialize.cpp's
+// deserializeCameraV1 for the same reasoning.
+static TelegramUser deserializeUserV2(const std::vector<String>& fields) {
+  TelegramUser u;
+  if (fields.size() != 8) return u; // malformed - caller skips entries with an empty name
+
+  u.name           = fields[0];
+  u.chatId         = fields[1];
+  u.allCameras     = fields[2] == "1";
+  u.systemMessages = fields[4] == "1";
+  u.canCommand     = fields[5] == "1";
+  u.canSnap        = fields[6] == "1";
+  u.canReset       = fields[7] == "1";
+  u.cameraNames    = splitCameraList(fields[3]);
+  return u;
+}
+
 TelegramUser deserializeUser(const String& record, uint16_t recordVersion) {
   std::vector<String> fields = splitFields(record);
 
   if (recordVersion == 0) return deserializeUserV0(fields);
-  if (recordVersion == TELEGRAM_USER_SCHEMA_VERSION) return deserializeUserV1(fields);
+  if (recordVersion == 1) return deserializeUserV1(fields);
+  if (recordVersion == TELEGRAM_USER_SCHEMA_VERSION) return deserializeUserV2(fields);
 
   // Unknown/future version - best-effort fall through to the newest known
   // layout; telegram_users.cpp logs a warning when this happens.
-  return deserializeUserV1(fields);
+  return deserializeUserV2(fields);
 }
 
 size_t telegramUserRecordFieldCount(const String& record) {
