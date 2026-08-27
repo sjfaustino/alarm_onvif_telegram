@@ -23,6 +23,12 @@ static const unsigned long TELEGRAM_COMMAND_POLL_MS = 5000UL;        // /on, /of
 static const size_t        SNAPSHOT_MAX_BYTES       = 100000;        // internal-RAM fallback cap - see note below
 static const size_t        SNAPSHOT_MAX_BYTES_PSRAM = 2000000UL;     // PSRAM buffer cap - generous; real snapshots are far smaller
 static const bool          VERBOSE_SOAP_LOG         = false;         // flip true to debug one camera at a time
+// Hides the routine "[camera] [SOAP] Action HTTP=200 len=N" line for a
+// call that succeeded and wasn't a SOAP fault - most of the serial
+// output during steady-state polling. Faults and non-200/negative codes
+// always print regardless, so nothing actionable gets hidden. Flip to
+// false to see every call again (e.g. while troubleshooting timing).
+static const bool          SUPPRESS_SOAP_SUCCESS_LOG = true;
 
 // PSRAM is a hard requirement - setup() refuses to start if
 // ESP.getPsramSize() is 0, since a snapshot alert going to multiple

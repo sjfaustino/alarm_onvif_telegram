@@ -193,9 +193,12 @@ String soapPost(const char* cameraName, const String& url, const String& action,
   String response = (code > 0) ? http.getString() : "";
   bool isFault = responseHasFault(response);
 
-  Serial.printf("[%s] [SOAP] %-30s HTTP=%-4d len=%-5u%s\n",
-                cameraName, shortAction(action).c_str(), code, (unsigned)response.length(),
-                isFault ? "  <-- FAULT" : "");
+  bool suppress = SUPPRESS_SOAP_SUCCESS_LOG && code == 200 && !isFault;
+  if (!suppress) {
+    Serial.printf("[%s] [SOAP] %-30s HTTP=%-4d len=%-5u%s\n",
+                  cameraName, shortAction(action).c_str(), code, (unsigned)response.length(),
+                  isFault ? "  <-- FAULT" : "");
+  }
 
   // Negative codes never reach a server at all (TCP/DNS/timeout-level
   // failure) - HTTPClient::errorToString turns e.g. -1 into "connection
