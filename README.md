@@ -178,6 +178,8 @@ include/
   network_store.h    # WiFi credentials, NVS load/save (editable from the dashboard)
   auth_store.h       # dashboard Basic Auth username/password, NVS load/save
   webserver.h       # sidebar dashboard - Network/Cameras/Users/Firmware/Security (PsychicHttp)
+  webserver_network.h, webserver_cameras.h, webserver_users.h,
+  webserver_firmware.h, webserver_security.h # each panel's own rendering/form-handling
   secrets.h.example # template for secrets.h (copy, fill in, gitignored)
   telegram_ca.h      # Telegram's root CA for TLS pinning (committed, not secret)
   camera.h, telegram.h, onvif_soap.h
@@ -188,7 +190,10 @@ src/
   telegram_users.cpp # NVS-backed Telegram user list (load/save/add/delete, one-time seed)
   network_store.cpp  # NVS-backed WiFi credentials (load/save, one-time seed)
   auth_store.cpp      # NVS-backed dashboard login (load/save)
-  webserver.cpp      # dashboard HTML pages and form handlers
+  webserver.cpp      # routing table, dashboard shell, OTA upload state - see webserver_*.cpp for panels
+  webserver_network.cpp, webserver_cameras.cpp, webserver_users.cpp,
+  webserver_firmware.cpp, webserver_security.cpp # each panel's rendering/form-handling, split out of
+                                                   # what used to be one 946-line webserver.cpp
   telegram.cpp       # photo/message send paths, multi-recipient fan-out, remote commands
   onvif_soap.cpp     # SOAP envelope building, WS-Security digest
 lib/                 # pure-logic modules with no hardware dependencies, split out of the
