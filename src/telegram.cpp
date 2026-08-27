@@ -416,10 +416,18 @@ void checkCameraOnlineStatus(const CameraConfig& cfg, CameraState& st) {
 // messages would have forced an NVS write per message with zero
 // permission check. pollTelegramCommands() below persists once per poll
 // instead (bounded, matches the original harmless-redelivery assumption
-// for everything except /reset), with one exception: an already-
-// authorized /reset gets its own immediate, synchronous persist right
-// before it's acted on, since ESP.restart() means the code would never
-// reach the end-of-poll persist otherwise.
+// for everything except /reset).
+//
+// /reset is the one command that can't wait for that end-of-poll persist -
+// ESP.restart() never returns, so the code would never get back around to
+// it. That's handled inside handleTelegramCommand's own /reset branch, not
+// guessed at here: pollTelegramCommands has no special-cased knowledge of
+// which commands are "dangerous" (an earlier version tried that, checking
+// canReset and the command text here before dispatching - two places
+// having to agree on what /reset is turned out to be exactly the kind of
+// thing that drifts out of sync). handleTelegramCommand persists
+// immediately, right before the action that actually needs it, which is
+// also the right place for any future command that needs the same thing.
 // ============================================================
 
 static const char* TELEGRAM_STATE_NAMESPACE = "tgstate";
@@ -490,15 +498,39 @@ static void sendOnDemandSnapshot(const CameraConfig& cfg, CameraState& st, const
   free(jpg);
 }
 
+// lastUpdateId is the highest Telegram update_id seen so far this poll
+// (pollTelegramCommands' own running value, already advanced past `text`'s
+// update) - used only by /reset below, to persist it before doing anything
+// irreversible. Passed in rather than having pollTelegramCommands guess
+// from outside which commands are dangerous and need an early persist:
+// that guesswork is exactly what caused the /reset reboot loop in the
+// first place (the guess and the actual command handling drifted out of
+// sync). A future command that also needs to persist before acting should
+// do the same thing /reset does below - call saveLastUpdateId(lastUpdateId)
+// right before it - rather than adding another external guess.
 static void handleTelegramCommand(const TelegramUser& sender, const String& text, const CameraConfig cameras[],
-                                   CameraState states[], size_t numCameras) {
+                                   CameraState states[], size_t numCameras, long lastUpdateId) {
   Serial.printf("[Telegram] Command from user \"%s\": \"%s\"\n", sender.name.c_str(), text.c_str());
 
+  // Single authorization check for every command, built from
+  // requiredPermissionForCommand's table (telegram_parse.h) instead of a
+  // separate "if (!sender.canX)" scattered per command - that scattering
+  // is exactly how a new command's permission check gets forgotten.
+  TelegramCommandPermission required = requiredPermissionForCommand(text);
+  bool authorized = (required == TelegramCommandPermission::Command && sender.canCommand) ||
+                     (required == TelegramCommandPermission::Snap && sender.canSnap) ||
+                     (required == TelegramCommandPermission::Reset && sender.canReset);
+  if (required != TelegramCommandPermission::Unknown && !authorized) {
+    String cmdWord = text;
+    int sp = cmdWord.indexOf(' ');
+    if (sp >= 0) cmdWord = cmdWord.substring(0, sp);
+    cmdWord.toLowerCase();
+    Serial.printf("[Telegram] User \"%s\" not authorized for %s.\n", sender.name.c_str(), cmdWord.c_str());
+    sendTelegramMessageTo(sender.chatId, "You're not authorized to use " + cmdWord + ".");
+    return;
+  }
+
   if (text.equalsIgnoreCase("/status")) {
-    if (!sender.canCommand) {
-      sendTelegramMessageTo(sender.chatId, "You're not authorized to use /status.");
-      return;
-    }
     // alertsEnabled is only ever written from this same task (below, and
     // main.cpp's boot-time restore), so this self-read needs no lock.
     String msg = "Camera alert status:\n";
@@ -512,21 +544,18 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
   }
 
   if (text.equalsIgnoreCase("/uptime")) {
-    if (!sender.canCommand) {
-      sendTelegramMessageTo(sender.chatId, "You're not authorized to use /uptime.");
-      return;
-    }
     Serial.printf("[Telegram] Replying to user \"%s\" with uptime.\n", sender.name.c_str());
     sendTelegramMessageTo(sender.chatId, "Uptime: " + formatUptime(millis()));
     return;
   }
 
   if (text.equalsIgnoreCase("/reset")) {
-    if (!sender.canReset) {
-      sendTelegramMessageTo(sender.chatId, "You're not authorized to use /reset.");
-      return;
-    }
     Serial.printf("[Telegram] Reboot requested by user \"%s\" via /reset.\n", sender.name.c_str());
+    // Persisted here, immediately before the irreversible action, rather
+    // than by pollTelegramCommands ahead of time - see this function's own
+    // top comment. Without this, the reboot below would redeliver this
+    // same update and re-execute /reset forever.
+    saveLastUpdateId(lastUpdateId);
     // Reply before restarting - ESP.restart() never returns, so this is
     // the last chance to confirm the command was actually received.
     sendTelegramMessageTo(sender.chatId, "\xE2\x99\xBB\xEF\xB8\x8F Rebooting now...");
@@ -549,15 +578,6 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
   }
 
   const char* verb = (cmd == Cmd::On) ? "on" : (cmd == Cmd::Off) ? "off" : "snap";
-  // canSnap is independent of canCommand - see TelegramUser's comment for
-  // why (different kind of trust: pulling a live photo vs. toggling alerts).
-  bool authorized = (cmd == Cmd::Snap) ? sender.canSnap : sender.canCommand;
-  if (!authorized) {
-    Serial.printf("[Telegram] User \"%s\" not authorized for /%s.\n", sender.name.c_str(), verb);
-    sendTelegramMessageTo(sender.chatId, "You're not authorized to use /" + String(verb) + ".");
-    return;
-  }
-
   cameraName.trim();
 
   // Matched by prefix ("D01" matches "D01-FDir") - ambiguous matches get
@@ -674,15 +694,10 @@ void pollTelegramCommands(const CameraConfig cameras[], CameraState states[], si
 
     if (upd.text.length() == 0) continue; // e.g. a sticker or photo with no caption - nothing to act on
 
-    // The one exception to "persist once at the end": /reset doesn't
-    // return here (ESP.restart()), so the end-of-loop persist below would
-    // never run - without this, the reboot it causes would redeliver this
-    // same update and re-execute /reset forever. Gated behind sender being
-    // authorized (not just the text matching) so this extra write path
-    // isn't itself something an unauthenticated message can trigger.
-    if (sender->canReset && upd.text.equalsIgnoreCase("/reset")) saveLastUpdateId(lastUpdateId);
-
-    handleTelegramCommand(*sender, upd.text, cameras, states, numCameras);
+    // lastUpdateId passed through so handleTelegramCommand's /reset branch
+    // can persist it immediately, before doing anything irreversible - see
+    // that function's own top comment for why this isn't decided here.
+    handleTelegramCommand(*sender, upd.text, cameras, states, numCameras, lastUpdateId);
   }
   if (lastUpdateId != startingUpdateId) saveLastUpdateId(lastUpdateId);
 }

@@ -188,6 +188,51 @@ void test_matchCamerasByPrefix_excludes_disabled_cameras(void) {
   TEST_ASSERT_TRUE(matches.empty());
 }
 
+// ---- requiredPermissionForCommand ----
+// The single source of truth for "which permission does this command
+// need" - handleTelegramCommand's authorization check is built from this,
+// so this table is the one place a new command's permission requirement
+// has to be declared, instead of a separate easy-to-forget check per
+// command (the exact class of bug that caused the /reset reboot loop).
+
+void test_requiredPermissionForCommand_status_needs_command(void) {
+  TEST_ASSERT_TRUE(TelegramCommandPermission::Command == requiredPermissionForCommand("/status"));
+}
+
+void test_requiredPermissionForCommand_uptime_needs_command(void) {
+  TEST_ASSERT_TRUE(TelegramCommandPermission::Command == requiredPermissionForCommand("/uptime"));
+}
+
+void test_requiredPermissionForCommand_reset_needs_reset(void) {
+  TEST_ASSERT_TRUE(TelegramCommandPermission::Reset == requiredPermissionForCommand("/reset"));
+}
+
+void test_requiredPermissionForCommand_on_off_need_command(void) {
+  TEST_ASSERT_TRUE(TelegramCommandPermission::Command == requiredPermissionForCommand("/on D01"));
+  TEST_ASSERT_TRUE(TelegramCommandPermission::Command == requiredPermissionForCommand("/off D01"));
+}
+
+void test_requiredPermissionForCommand_snap_needs_snap(void) {
+  TEST_ASSERT_TRUE(TelegramCommandPermission::Snap == requiredPermissionForCommand("/snap D01"));
+}
+
+void test_requiredPermissionForCommand_is_case_insensitive(void) {
+  TEST_ASSERT_TRUE(TelegramCommandPermission::Reset == requiredPermissionForCommand("/RESET"));
+  TEST_ASSERT_TRUE(TelegramCommandPermission::Snap == requiredPermissionForCommand("/SNAP D01"));
+}
+
+// Bare "/on" with no trailing space and camera name isn't a recognized
+// command at all (matches how handleTelegramCommand's own parsing - which
+// requires "/on " with a trailing space - falls through to "unrecognized,
+// ignored" for it) - it must not be treated as an unauthorized /on attempt.
+void test_requiredPermissionForCommand_on_without_target_is_unknown(void) {
+  TEST_ASSERT_TRUE(TelegramCommandPermission::Unknown == requiredPermissionForCommand("/on"));
+}
+
+void test_requiredPermissionForCommand_unrecognized_text_is_unknown(void) {
+  TEST_ASSERT_TRUE(TelegramCommandPermission::Unknown == requiredPermissionForCommand("hello"));
+}
+
 int main(int argc, char** argv) {
   UNITY_BEGIN();
   RUN_TEST(test_parseTelegramUpdates_single_update);
@@ -209,5 +254,13 @@ int main(int argc, char** argv) {
   RUN_TEST(test_matchCamerasByPrefix_ambiguous_prefix_returns_all_matches);
   RUN_TEST(test_matchCamerasByPrefix_no_match_returns_empty);
   RUN_TEST(test_matchCamerasByPrefix_excludes_disabled_cameras);
+  RUN_TEST(test_requiredPermissionForCommand_status_needs_command);
+  RUN_TEST(test_requiredPermissionForCommand_uptime_needs_command);
+  RUN_TEST(test_requiredPermissionForCommand_reset_needs_reset);
+  RUN_TEST(test_requiredPermissionForCommand_on_off_need_command);
+  RUN_TEST(test_requiredPermissionForCommand_snap_needs_snap);
+  RUN_TEST(test_requiredPermissionForCommand_is_case_insensitive);
+  RUN_TEST(test_requiredPermissionForCommand_on_without_target_is_unknown);
+  RUN_TEST(test_requiredPermissionForCommand_unrecognized_text_is_unknown);
   return UNITY_END();
 }

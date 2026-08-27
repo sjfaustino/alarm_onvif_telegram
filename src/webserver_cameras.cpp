@@ -1,5 +1,6 @@
 #include "webserver_cameras.h"
 #include "format_utils.h"
+#include "webserver_html.h"
 
 // Finds cfg's matching live (currently-running) index by name, or -1 if
 // this camera was added since the last reboot and isn't running yet, or was
@@ -113,11 +114,7 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
             "</td><td>" + (c.enabled ? "yes" : "no") + "</td><td>" + liveStatus + "</td><td>" +
             lastAlertStr + "</td><td>" +
             notesCell + "</td><td>";
-    html += "<a href=\"/cameras/edit?name=" + urlEncode(c.name) + "\">Edit</a> ";
-    html += "<form class=\"inline\" method=\"POST\" action=\"/delete\" "
-            "onsubmit=\"return confirm('Delete " + htmlEscape(c.name) + "?');\">";
-    html += "<input type=\"hidden\" name=\"name\" value=\"" + htmlEscape(c.name) + "\">";
-    html += "<button type=\"submit\">Delete</button></form></td></tr>";
+    html += renderEditDeleteActions("/cameras/edit?name=", "/delete", c.name) + "</td></tr>";
   }
   html += "</table>";
 

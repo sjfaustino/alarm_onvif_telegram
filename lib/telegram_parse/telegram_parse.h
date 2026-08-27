@@ -45,3 +45,16 @@ bool chatIdMatches(const String& storedChatId, int64_t updateChatId);
 // (handleTelegramCommand replies with the ambiguity list on >1, "unknown"
 // on 0).
 std::vector<size_t> matchCamerasByPrefix(const CameraConfig cameras[], size_t numCameras, const String& needle);
+
+// Which TelegramUser permission a command's text requires - the single
+// source of truth handleTelegramCommand's authorization check is built
+// from, so a new command can't be added there without this table knowing
+// what it needs (previously each command had its own separate, easy-to-
+// forget "if (!sender.canX)" check scattered through the function).
+// Unknown means the text isn't a recognized command at all. Case-
+// insensitive; /on, /off, /snap specifically require a trailing space and
+// target (matching how handleTelegramCommand actually parses them) - bare
+// "/on" with nothing after it is Unknown, same as any other unrecognized
+// text, not a permission question.
+enum class TelegramCommandPermission { Unknown, Command, Snap, Reset };
+TelegramCommandPermission requiredPermissionForCommand(const String& text);

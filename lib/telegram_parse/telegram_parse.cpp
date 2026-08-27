@@ -70,3 +70,13 @@ std::vector<size_t> matchCamerasByPrefix(const CameraConfig cameras[], size_t nu
   }
   return matches;
 }
+
+TelegramCommandPermission requiredPermissionForCommand(const String& text) {
+  String lower = text;
+  lower.toLowerCase();
+  if (lower == "/status" || lower == "/uptime") return TelegramCommandPermission::Command;
+  if (lower == "/reset") return TelegramCommandPermission::Reset;
+  if (lower.startsWith("/on ") || lower.startsWith("/off ")) return TelegramCommandPermission::Command;
+  if (lower.startsWith("/snap ")) return TelegramCommandPermission::Snap;
+  return TelegramCommandPermission::Unknown;
+}

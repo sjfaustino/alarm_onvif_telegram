@@ -1,6 +1,7 @@
 #include "webserver_users.h"
 #include "camera_store.h"
 #include "format_utils.h"
+#include "webserver_html.h"
 
 // Shared by "Add Telegram user" (v = a fresh TelegramUser with allCameras
 // forced true, a friendlier default than the struct's own false), "Edit
@@ -74,11 +75,7 @@ String renderUsersPanel(const TelegramUser* prefill, bool isEdit) {
             camerasCol + "</td><td>" + (u.systemMessages ? "yes" : "no") + "</td><td>" +
             (u.canCommand ? "yes" : "no") + "</td><td>" + (u.canSnap ? "yes" : "no") + "</td><td>" +
             (u.canReset ? "yes" : "no") + "</td><td>";
-    html += "<a href=\"/users/edit?name=" + urlEncode(u.name) + "\">Edit</a> ";
-    html += "<form class=\"inline\" method=\"POST\" action=\"/users/delete\" "
-            "onsubmit=\"return confirm('Delete " + htmlEscape(u.name) + "?');\">";
-    html += "<input type=\"hidden\" name=\"name\" value=\"" + htmlEscape(u.name) + "\">";
-    html += "<button type=\"submit\">Delete</button></form></td></tr>";
+    html += renderEditDeleteActions("/users/edit?name=", "/users/delete", u.name) + "</td></tr>";
   }
   html += "</table>";
 
