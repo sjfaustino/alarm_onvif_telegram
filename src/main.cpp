@@ -335,6 +335,12 @@ void setup() {
 
   g_wifiCredentials = loadWifiCredentials();
 
+  // One-time recovery for cameras lost to the NVS migration bug fixed in
+  // camera_store.cpp - adds back any secrets.h CAMERA_SEED entry missing
+  // from the stored list, by name. Self-gating (see its own comment), so
+  // safe to leave in permanently rather than reverting after this recovery.
+  restoreMissingCamerasFromSeed();
+
   // Loaded once and never resized/reallocated afterward - CameraState::user/pass
   // and every CameraTaskContext hold raw pointers into these vectors' elements.
   g_cameras = loadCameras();

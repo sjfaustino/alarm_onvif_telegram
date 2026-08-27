@@ -70,3 +70,13 @@ bool deleteCamera(const String& name);
 // match, so this also handles renames). Fails if originalName isn't
 // found, or cam.name collides with a different existing camera.
 bool updateCamera(const String& originalName, const CameraConfig& cam);
+
+// One-time recovery path: adds any CAMERA_SEED (secrets.h) entry whose
+// name doesn't already exist in the persisted list - unlike the
+// first-boot seed in loadCameras(), this runs even when the store is
+// already initialized, so it can restore cameras lost to a bug without
+// touching whatever's already there or duplicating by name. Gated by its
+// own NVS flag so it only ever actually does something once, even across
+// reboots - safe to call unconditionally from setup(). Returns how many
+// cameras it added.
+size_t restoreMissingCamerasFromSeed();

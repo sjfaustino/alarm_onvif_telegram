@@ -6,6 +6,7 @@
 static const char* NVS_NAMESPACE  = "camstore";
 static const char* NVS_KEY_LIST   = "list";
 static const char* NVS_KEY_SCHEMA = "schema"; // see camera_serialize.h's CAMERA_SCHEMA_VERSION comment
+static const char* NVS_KEY_SEED_RESTORED = "seedRestored"; // see restoreMissingCamerasFromSeed()
 
 // Separates whole camera records within the NVS blob (distinct from
 // camera_serialize.cpp's own FIELD_SEP, which separates one record's
@@ -158,4 +159,39 @@ bool updateCamera(const String& originalName, const CameraConfig& cam) {
 
   cams[idx] = cam;
   return saveCameras(cams);
+}
+
+size_t restoreMissingCamerasFromSeed() {
+  Preferences prefs;
+  prefs.begin(NVS_NAMESPACE, true); // read-only
+  bool alreadyRestored = prefs.getBool(NVS_KEY_SEED_RESTORED, false);
+  prefs.end();
+  if (alreadyRestored) return 0;
+
+  std::vector<CameraConfig> existing = loadCameras();
+  std::vector<CameraConfig> seed = seedFromSecrets();
+
+  size_t added = 0;
+  for (auto& s : seed) {
+    bool found = false;
+    for (auto& e : existing) {
+      if (e.name.equalsIgnoreCase(s.name)) { found = true; break; }
+    }
+    if (!found && addCamera(s)) {
+      added++;
+      Serial.printf("[camera_store] Restored camera \"%s\" from secrets.h's CAMERA_SEED.\n", s.name.c_str());
+    }
+  }
+
+  Preferences writePrefs;
+  if (writePrefs.begin(NVS_NAMESPACE, false)) {
+    writePrefs.putBool(NVS_KEY_SEED_RESTORED, true);
+    writePrefs.end();
+  }
+
+  if (added > 0) {
+    Serial.printf("[camera_store] Restored %u camera(s) from CAMERA_SEED that were missing from the "
+                  "stored list - review/rename/delete as needed via the dashboard.\n", (unsigned)added);
+  }
+  return added;
 }
