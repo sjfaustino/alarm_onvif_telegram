@@ -402,10 +402,34 @@ void checkCameraOnlineStatus(const CameraConfig& cfg, CameraState& st) {
 // Remote on/off control (Telegram commands)
 //
 // pollTelegramCommands() is called periodically from loop() and does a
-// short (timeout=0, not long-poll) getUpdates round trip. lastUpdateId
-// isn't persisted - after a reboot the next poll may redeliver a couple of
-// already-applied commands, harmless since /on and /off are idempotent.
+// short (timeout=0, not long-poll) getUpdates round trip. lastUpdateId is
+// persisted in NVS (see loadLastUpdateId/saveLastUpdateId below) - it used
+// not to be, on the theory that redelivering a couple of already-applied
+// commands after a reboot is harmless since /on/off/snap are idempotent.
+// /reset broke that assumption: redelivering it after the reboot it
+// itself caused re-executes /reset again, forever - an infinite reboot
+// loop hit in the field the very first time /reset was used. Persisting
+// the offset is what actually stops a command from being seen twice.
 // ============================================================
+
+static const char* TELEGRAM_STATE_NAMESPACE = "tgstate";
+static const char* TELEGRAM_STATE_KEY_LAST_UPDATE_ID = "lastUpdateId";
+
+static long loadLastUpdateId() {
+  Preferences prefs;
+  prefs.begin(TELEGRAM_STATE_NAMESPACE, true); // read-only
+  long id = prefs.getLong(TELEGRAM_STATE_KEY_LAST_UPDATE_ID, 0);
+  prefs.end();
+  return id;
+}
+
+static void saveLastUpdateId(long id) {
+  Preferences prefs;
+  if (prefs.begin(TELEGRAM_STATE_NAMESPACE, false)) {
+    prefs.putLong(TELEGRAM_STATE_KEY_LAST_UPDATE_ID, id);
+    prefs.end();
+  }
+}
 
 static const char* ALERT_PREF_NAMESPACE = "camctl";
 
@@ -458,7 +482,7 @@ static void sendOnDemandSnapshot(const CameraConfig& cfg, CameraState& st, const
 
 static void handleTelegramCommand(const TelegramUser& sender, const String& text, const CameraConfig cameras[],
                                    CameraState states[], size_t numCameras) {
-  Serial.printf("[Telegram] Command from chat %s: \"%s\"\n", sender.chatId.c_str(), text.c_str());
+  Serial.printf("[Telegram] Command from %s: \"%s\"\n", sender.name.c_str(), text.c_str());
 
   if (text.equalsIgnoreCase("/status")) {
     if (!sender.canCommand) {
@@ -492,7 +516,7 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
       sendTelegramMessageTo(sender.chatId, "You're not authorized to use /reset.");
       return;
     }
-    Serial.printf("[Telegram] Reboot requested by chat %s via /reset.\n", sender.chatId.c_str());
+    Serial.printf("[Telegram] Reboot requested by %s via /reset.\n", sender.name.c_str());
     // Reply before restarting - ESP.restart() never returns, so this is
     // the last chance to confirm the command was actually received.
     sendTelegramMessageTo(sender.chatId, "\xE2\x99\xBB\xEF\xB8\x8F Rebooting now...");
@@ -519,7 +543,7 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
   // why (different kind of trust: pulling a live photo vs. toggling alerts).
   bool authorized = (cmd == Cmd::Snap) ? sender.canSnap : sender.canCommand;
   if (!authorized) {
-    Serial.printf("[Telegram] Chat %s not authorized for /%s.\n", sender.chatId.c_str(), verb);
+    Serial.printf("[Telegram] %s not authorized for /%s.\n", sender.name.c_str(), verb);
     sendTelegramMessageTo(sender.chatId, "You're not authorized to use /" + String(verb) + ".");
     return;
   }
@@ -561,7 +585,12 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
 }
 
 void pollTelegramCommands(const CameraConfig cameras[], CameraState states[], size_t numCameras) {
-  static long lastUpdateId = 0;
+  // -1 sentinel: load the real value from NVS on this function's first
+  // call only, rather than starting at 0 every boot - see this section's
+  // top comment for why a reboot redelivering old updates is dangerous
+  // now that /reset exists. Real Telegram update_ids are always >= 0.
+  static long lastUpdateId = -1;
+  if (lastUpdateId < 0) lastUpdateId = loadLastUpdateId();
 
   // HTTPClient rather than a raw socket + hand-rolled "\r\n\r\n" body split
   // (see sendTelegramMessageTo's comment) - that split silently mis-parses
@@ -597,7 +626,14 @@ void pollTelegramCommands(const CameraConfig cameras[], CameraState states[], si
 
   std::vector<TelegramUser> users = loadTelegramUsers();
   for (auto& upd : updates) {
-    if (upd.updateId > lastUpdateId) lastUpdateId = upd.updateId;
+    // Persisted (not just updated in RAM) before this update is acted on -
+    // see this section's top comment. Written once per new update rather
+    // than once per poll so a mid-batch reboot (e.g. this very update
+    // being /reset) still can't cause a redelivery loop.
+    if (upd.updateId > lastUpdateId) {
+      lastUpdateId = upd.updateId;
+      saveLastUpdateId(lastUpdateId);
+    }
     if (!upd.hasChatId) continue; // no message on this update (edited_message, channel_post, ...)
 
     const TelegramUser* sender = nullptr;
@@ -609,8 +645,12 @@ void pollTelegramCommands(const CameraConfig cameras[], CameraState states[], si
     // handleTelegramCommand at all; which specific commands that actually
     // unlocks is decided there, per-command.
     if (!sender || !(sender->canCommand || sender->canSnap || sender->canReset)) {
-      Serial.printf("[Telegram] Ignored command from chat ID %lld (%s)\n", (long long)upd.chatId,
-                    sender ? "not authorized to send commands" : "unknown chat");
+      if (sender) {
+        Serial.printf("[Telegram] Ignored command from %s (not authorized to send commands)\n",
+                      sender->name.c_str());
+      } else {
+        Serial.printf("[Telegram] Ignored command from unknown chat ID %lld\n", (long long)upd.chatId);
+      }
       continue;
     }
 
