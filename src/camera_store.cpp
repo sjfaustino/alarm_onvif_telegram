@@ -7,7 +7,12 @@
 static const char* NVS_NAMESPACE  = "camstore";
 static const char* NVS_KEY_LIST   = "list";
 static const char* NVS_KEY_SCHEMA = "schema"; // see camera_serialize.h's CAMERA_SCHEMA_VERSION comment
-static const char* NVS_KEY_SEED_RESTORED = "seedRestored"; // see restoreMissingCamerasFromSeed()
+// Deliberately a new key name (not "seedRestored") - a board that already
+// ran the old, less-diagnostic version of restoreMissingCamerasFromSeed()
+// has that old flag set, but never saw why 3 of its cameras silently
+// failed to restore. This makes the next boot re-run the whole thing once
+// more, with full logging this time, rather than skipping on sight.
+static const char* NVS_KEY_SEED_RESTORED = "seedRestore2"; // see restoreMissingCamerasFromSeed()
 
 // Separates whole camera records within the NVS blob (distinct from
 // camera_serialize.cpp's own FIELD_SEP, which separates one record's
