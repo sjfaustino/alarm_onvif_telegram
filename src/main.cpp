@@ -296,7 +296,7 @@ static void startMonitoring() {
 
 void setup() {
   Serial.begin(115200);
-  delay(1000);
+  delay(5000); // time to open the serial terminal before the boot log starts scrolling
   Serial.println("\n========================================");
   Serial.println("MULTI-CAMERA ONVIF MOTION MONITOR");
   Serial.println("========================================");

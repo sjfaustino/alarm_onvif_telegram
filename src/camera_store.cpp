@@ -1,18 +1,28 @@
 #include "camera_store.h"
 #include "camera_serialize.h"
+#include "nvs_chunk.h"
 #include "secrets.h"
 #include <Preferences.h>
 #include <esp_task_wdt.h>
 
 static const char* NVS_NAMESPACE  = "camstore";
-static const char* NVS_KEY_LIST   = "list";
+// Legacy: the whole record list used to live under this one key, as a
+// single NVS string value - read as a fallback if NVS_KEY_LIST_CHUNKS
+// isn't present yet, but no longer written. See nvs_chunk.h for why: a
+// verbose ~10-camera list is large enough to plausibly hit NVS's practical
+// per-entry size ceiling, which happened in the field (some records
+// silently failed to persist, only visible once the write's return value
+// was actually checked).
+static const char* NVS_KEY_LIST_LEGACY = "list";
+static const char* NVS_KEY_LIST_CHUNKS = "listChunks"; // uint16_t chunk count
+static const size_t NVS_CHUNK_MAX_BYTES = 1500;
 static const char* NVS_KEY_SCHEMA = "schema"; // see camera_serialize.h's CAMERA_SCHEMA_VERSION comment
-// Deliberately a new key name (not "seedRestored") - a board that already
-// ran the old, less-diagnostic version of restoreMissingCamerasFromSeed()
-// has that old flag set, but never saw why 3 of its cameras silently
-// failed to restore. This makes the next boot re-run the whole thing once
-// more, with full logging this time, rather than skipping on sight.
-static const char* NVS_KEY_SEED_RESTORED = "seedRestore2"; // see restoreMissingCamerasFromSeed()
+// Bumped again (was "seedRestore2") - the root cause of the last 2-3
+// missing cameras was saveCameras() silently hitting NVS's per-entry size
+// ceiling on a large camera list (see NVS_KEY_LIST_LEGACY's comment,
+// fixed by chunking above), not a name collision. That fix needs one more
+// full restore pass to actually land the previously-failed cameras.
+static const char* NVS_KEY_SEED_RESTORED = "seedRestore3"; // see restoreMissingCamerasFromSeed()
 
 // Separates whole camera records within the NVS blob (distinct from
 // camera_serialize.cpp's own FIELD_SEP, which separates one record's
@@ -41,11 +51,29 @@ static std::vector<CameraConfig> seedFromSecrets() {
   return cams;
 }
 
+static String chunkKey(uint16_t index) {
+  char key[16];
+  snprintf(key, sizeof(key), "list%u", (unsigned)index);
+  return String(key);
+}
+
 std::vector<CameraConfig> loadCameras() {
   Preferences prefs;
   prefs.begin(NVS_NAMESPACE, true); // read-only
-  bool alreadyInitialized = prefs.isKey(NVS_KEY_LIST);
-  String blob = alreadyInitialized ? prefs.getString(NVS_KEY_LIST, "") : "";
+  bool hasChunkedList = prefs.isKey(NVS_KEY_LIST_CHUNKS);
+  bool hasLegacyList  = prefs.isKey(NVS_KEY_LIST_LEGACY);
+  bool alreadyInitialized = hasChunkedList || hasLegacyList;
+
+  String blob;
+  if (hasChunkedList) {
+    uint16_t chunkCount = prefs.getUShort(NVS_KEY_LIST_CHUNKS, 0);
+    std::vector<String> chunks;
+    chunks.reserve(chunkCount);
+    for (uint16_t i = 0; i < chunkCount; i++) chunks.push_back(prefs.getString(chunkKey(i).c_str(), ""));
+    blob = joinChunks(chunks);
+  } else if (hasLegacyList) {
+    blob = prefs.getString(NVS_KEY_LIST_LEGACY, ""); // pre-chunking format - see its declaration comment
+  }
   // 0 = written before schema versioning existed - see
   // camera_serialize.h's CAMERA_SCHEMA_VERSION comment for what that means
   // for how the records below get parsed.
@@ -122,23 +150,36 @@ bool saveCameras(const std::vector<CameraConfig>& cameras) {
     if (i > 0) blob += RECORD_SEP;
     blob += serializeCamera(cameras[i]);
   }
+  // Chunked across several keys rather than one - see NVS_KEY_LIST_LEGACY's
+  // declaration comment for why a single value doesn't scale.
+  std::vector<String> chunks = splitIntoChunks(blob, NVS_CHUNK_MAX_BYTES);
 
   Preferences prefs;
   if (!prefs.begin(NVS_NAMESPACE, false)) return false;
-  // putString/putUShort return 0 on failure (NVS full, value too large for
-  // one entry, etc.) - previously ignored, so a failed write here would
-  // silently report success to every caller (addCamera/updateCamera/
-  // deleteCamera) while NVS quietly kept its old value.
-  size_t written = prefs.putString(NVS_KEY_LIST, blob);
+
+  bool chunksOk = true;
+  for (size_t i = 0; i < chunks.size(); i++) {
+    // putString returns 0 on failure (NVS full, value too large for one
+    // entry, etc.) - previously ignored here, so a failed write would
+    // silently report success to every caller (addCamera/updateCamera/
+    // deleteCamera) while NVS quietly kept its old value.
+    if (prefs.putString(chunkKey((uint16_t)i).c_str(), chunks[i]) == 0) chunksOk = false;
+  }
+  // Drop leftover chunk keys from a previous, larger save (fewer cameras
+  // now, or the same data landing in fewer chunks).
+  uint16_t oldChunkCount = prefs.getUShort(NVS_KEY_LIST_CHUNKS, 0);
+  for (uint16_t i = (uint16_t)chunks.size(); i < oldChunkCount; i++) prefs.remove(chunkKey(i).c_str());
+  if (prefs.isKey(NVS_KEY_LIST_LEGACY)) prefs.remove(NVS_KEY_LIST_LEGACY); // done with the pre-chunking format
+
+  bool countOk = prefs.putUShort(NVS_KEY_LIST_CHUNKS, (uint16_t)chunks.size()) > 0;
   bool schemaOk = prefs.putUShort(NVS_KEY_SCHEMA, CAMERA_SCHEMA_VERSION) > 0;
   prefs.end();
 
-  bool listOk = (blob.length() == 0) || (written > 0);
-  if (!listOk || !schemaOk) {
-    Serial.printf("[camera_store] ERROR: saveCameras failed to persist %u camera(s) (wrote %u of %u "
-                  "bytes) - NVS may be full. The in-memory list changed but NVS still has the old "
-                  "data; this WILL be lost on reboot.\n",
-                  (unsigned)cameras.size(), (unsigned)written, (unsigned)blob.length());
+  if (!chunksOk || !countOk || !schemaOk) {
+    Serial.printf("[camera_store] ERROR: saveCameras failed to persist %u camera(s) across %u "
+                  "chunk(s), %u bytes total - NVS may be full. The in-memory list changed but NVS "
+                  "still has the old data; this WILL be lost on reboot.\n",
+                  (unsigned)cameras.size(), (unsigned)chunks.size(), (unsigned)blob.length());
     return false;
   }
   return true;

@@ -1,10 +1,15 @@
 #include "telegram_users.h"
 #include "telegram_user_serialize.h"
+#include "nvs_chunk.h"
 #include "secrets.h"
 #include <Preferences.h>
 
 static const char* NVS_NAMESPACE  = "tgusers";
-static const char* NVS_KEY_LIST   = "list";
+// Legacy single-key format - see camera_store.cpp's identical
+// NVS_KEY_LIST_LEGACY comment for why this is now chunked instead.
+static const char* NVS_KEY_LIST_LEGACY = "list";
+static const char* NVS_KEY_LIST_CHUNKS = "listChunks"; // uint16_t chunk count
+static const size_t NVS_CHUNK_MAX_BYTES = 1500;
 static const char* NVS_KEY_SCHEMA = "schema"; // see telegram_user_serialize.h's *_SCHEMA_VERSION comment
 
 // Separates whole user records within the NVS blob (distinct from
@@ -12,11 +17,29 @@ static const char* NVS_KEY_SCHEMA = "schema"; // see telegram_user_serialize.h's
 // file - this file only ever joins/splits on RECORD_SEP).
 static const char RECORD_SEP = '\x1E';
 
+static String chunkKey(uint16_t index) {
+  char key[16];
+  snprintf(key, sizeof(key), "list%u", (unsigned)index);
+  return String(key);
+}
+
 std::vector<TelegramUser> loadTelegramUsers() {
   Preferences prefs;
   prefs.begin(NVS_NAMESPACE, true); // read-only
-  bool alreadyInitialized = prefs.isKey(NVS_KEY_LIST);
-  String blob = alreadyInitialized ? prefs.getString(NVS_KEY_LIST, "") : "";
+  bool hasChunkedList = prefs.isKey(NVS_KEY_LIST_CHUNKS);
+  bool hasLegacyList  = prefs.isKey(NVS_KEY_LIST_LEGACY);
+  bool alreadyInitialized = hasChunkedList || hasLegacyList;
+
+  String blob;
+  if (hasChunkedList) {
+    uint16_t chunkCount = prefs.getUShort(NVS_KEY_LIST_CHUNKS, 0);
+    std::vector<String> chunks;
+    chunks.reserve(chunkCount);
+    for (uint16_t i = 0; i < chunkCount; i++) chunks.push_back(prefs.getString(chunkKey(i).c_str(), ""));
+    blob = joinChunks(chunks);
+  } else if (hasLegacyList) {
+    blob = prefs.getString(NVS_KEY_LIST_LEGACY, "");
+  }
   // 0 = written before schema versioning existed.
   uint16_t storedVersion = prefs.getUShort(NVS_KEY_SCHEMA, 0);
   prefs.end();
@@ -91,21 +114,30 @@ bool saveTelegramUsers(const std::vector<TelegramUser>& users) {
     if (i > 0) blob += RECORD_SEP;
     blob += serializeUser(users[i]);
   }
+  std::vector<String> chunks = splitIntoChunks(blob, NVS_CHUNK_MAX_BYTES);
 
   Preferences prefs;
   if (!prefs.begin(NVS_NAMESPACE, false)) return false;
+
   // See camera_store.cpp's saveCameras() for why these return values are
   // checked - an unnoticed write failure here used to look identical to a
   // successful save.
-  size_t written = prefs.putString(NVS_KEY_LIST, blob);
+  bool chunksOk = true;
+  for (size_t i = 0; i < chunks.size(); i++) {
+    if (prefs.putString(chunkKey((uint16_t)i).c_str(), chunks[i]) == 0) chunksOk = false;
+  }
+  uint16_t oldChunkCount = prefs.getUShort(NVS_KEY_LIST_CHUNKS, 0);
+  for (uint16_t i = (uint16_t)chunks.size(); i < oldChunkCount; i++) prefs.remove(chunkKey(i).c_str());
+  if (prefs.isKey(NVS_KEY_LIST_LEGACY)) prefs.remove(NVS_KEY_LIST_LEGACY);
+
+  bool countOk = prefs.putUShort(NVS_KEY_LIST_CHUNKS, (uint16_t)chunks.size()) > 0;
   bool schemaOk = prefs.putUShort(NVS_KEY_SCHEMA, TELEGRAM_USER_SCHEMA_VERSION) > 0;
   prefs.end();
 
-  bool listOk = (blob.length() == 0) || (written > 0);
-  if (!listOk || !schemaOk) {
-    Serial.printf("[telegram_users] ERROR: saveTelegramUsers failed to persist %u user(s) (wrote %u "
-                  "of %u bytes) - NVS may be full. This WILL be lost on reboot.\n",
-                  (unsigned)users.size(), (unsigned)written, (unsigned)blob.length());
+  if (!chunksOk || !countOk || !schemaOk) {
+    Serial.printf("[telegram_users] ERROR: saveTelegramUsers failed to persist %u user(s) across %u "
+                  "chunk(s), %u bytes total - NVS may be full. This WILL be lost on reboot.\n",
+                  (unsigned)users.size(), (unsigned)chunks.size(), (unsigned)blob.length());
     return false;
   }
   return true;
