@@ -3,8 +3,9 @@
 #include "secrets.h"
 #include <Preferences.h>
 
-static const char* NVS_NAMESPACE = "tgusers";
-static const char* NVS_KEY_LIST  = "list";
+static const char* NVS_NAMESPACE  = "tgusers";
+static const char* NVS_KEY_LIST   = "list";
+static const char* NVS_KEY_SCHEMA = "schema"; // see telegram_user_serialize.h's *_SCHEMA_VERSION comment
 
 // Separates whole user records within the NVS blob (distinct from
 // telegram_user_serialize.cpp's own FIELD_SEP/LIST_SEP, private to that
@@ -16,6 +17,8 @@ std::vector<TelegramUser> loadTelegramUsers() {
   prefs.begin(NVS_NAMESPACE, true); // read-only
   bool alreadyInitialized = prefs.isKey(NVS_KEY_LIST);
   String blob = alreadyInitialized ? prefs.getString(NVS_KEY_LIST, "") : "";
+  // 0 = written before schema versioning existed.
+  uint16_t storedVersion = prefs.getUShort(NVS_KEY_SCHEMA, 0);
   prefs.end();
 
   if (!alreadyInitialized) {
@@ -35,17 +38,38 @@ std::vector<TelegramUser> loadTelegramUsers() {
     return users;
   }
 
+  if (storedVersion > TELEGRAM_USER_SCHEMA_VERSION) {
+    Serial.printf("[telegram_users] WARNING: stored user schema (%u) is newer than this firmware "
+                  "understands (%u) - was this board previously running newer firmware? Parsing "
+                  "with the newest layout this build knows; some fields may come back wrong.\n",
+                  (unsigned)storedVersion, (unsigned)TELEGRAM_USER_SCHEMA_VERSION);
+  }
+
   std::vector<TelegramUser> users;
   int recStart = 0;
   for (int i = 0; i <= (int)blob.length(); i++) {
     if (i == (int)blob.length() || blob[i] == RECORD_SEP) {
       if (i > recStart) {
-        TelegramUser u = deserializeUser(blob.substring(recStart, i));
-        if (u.name.length() > 0) users.push_back(u);
+        TelegramUser u = deserializeUser(blob.substring(recStart, i), storedVersion);
+        if (u.name.length() > 0) {
+          users.push_back(u);
+        } else {
+          Serial.println("[telegram_users] WARNING: dropped a Telegram user record that failed to "
+                          "parse (wrong field count for its schema version) - it will be lost the "
+                          "next time users are saved from this dashboard.");
+        }
       }
       recStart = i + 1;
     }
   }
+
+  // One-time migration, same reasoning as camera_store.cpp's loadCameras().
+  if (storedVersion != TELEGRAM_USER_SCHEMA_VERSION) {
+    Serial.printf("[telegram_users] Migrating %u user record(s) from schema %u to %u.\n",
+                  (unsigned)users.size(), (unsigned)storedVersion, (unsigned)TELEGRAM_USER_SCHEMA_VERSION);
+    saveTelegramUsers(users);
+  }
+
   return users;
 }
 
@@ -59,6 +83,7 @@ bool saveTelegramUsers(const std::vector<TelegramUser>& users) {
   Preferences prefs;
   if (!prefs.begin(NVS_NAMESPACE, false)) return false;
   prefs.putString(NVS_KEY_LIST, blob);
+  prefs.putUShort(NVS_KEY_SCHEMA, TELEGRAM_USER_SCHEMA_VERSION);
   prefs.end();
   return true;
 }

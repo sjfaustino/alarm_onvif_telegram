@@ -3,8 +3,9 @@
 #include "secrets.h"
 #include <Preferences.h>
 
-static const char* NVS_NAMESPACE = "camstore";
-static const char* NVS_KEY_LIST  = "list";
+static const char* NVS_NAMESPACE  = "camstore";
+static const char* NVS_KEY_LIST   = "list";
+static const char* NVS_KEY_SCHEMA = "schema"; // see camera_serialize.h's CAMERA_SCHEMA_VERSION comment
 
 // Separates whole camera records within the NVS blob (distinct from
 // camera_serialize.cpp's own FIELD_SEP, which separates one record's
@@ -38,6 +39,10 @@ std::vector<CameraConfig> loadCameras() {
   prefs.begin(NVS_NAMESPACE, true); // read-only
   bool alreadyInitialized = prefs.isKey(NVS_KEY_LIST);
   String blob = alreadyInitialized ? prefs.getString(NVS_KEY_LIST, "") : "";
+  // 0 = written before schema versioning existed - see
+  // camera_serialize.h's CAMERA_SCHEMA_VERSION comment for what that means
+  // for how the records below get parsed.
+  uint16_t storedVersion = prefs.getUShort(NVS_KEY_SCHEMA, 0);
   prefs.end();
 
   if (!alreadyInitialized) {
@@ -48,17 +53,40 @@ std::vector<CameraConfig> loadCameras() {
     return cams;
   }
 
+  if (storedVersion > CAMERA_SCHEMA_VERSION) {
+    Serial.printf("[camera_store] WARNING: stored camera schema (%u) is newer than this firmware "
+                  "understands (%u) - was this board previously running newer firmware? Parsing "
+                  "with the newest layout this build knows; some fields may come back wrong.\n",
+                  (unsigned)storedVersion, (unsigned)CAMERA_SCHEMA_VERSION);
+  }
+
   std::vector<CameraConfig> cams;
   int recStart = 0;
   for (int i = 0; i <= (int)blob.length(); i++) {
     if (i == (int)blob.length() || blob[i] == RECORD_SEP) {
       if (i > recStart) {
-        CameraConfig c = deserializeCamera(blob.substring(recStart, i));
-        if (c.name.length() > 0) cams.push_back(c);
+        CameraConfig c = deserializeCamera(blob.substring(recStart, i), storedVersion);
+        if (c.name.length() > 0) {
+          cams.push_back(c);
+        } else {
+          Serial.println("[camera_store] WARNING: dropped a camera record that failed to parse "
+                          "(wrong field count for its schema version) - it will be lost the next "
+                          "time cameras are saved from this dashboard.");
+        }
       }
       recStart = i + 1;
     }
   }
+
+  // One-time migration: anything not already on the current schema gets
+  // rewritten in the current layout immediately, so every subsequent load
+  // this boot (and every boot after) sees storedVersion == CAMERA_SCHEMA_VERSION.
+  if (storedVersion != CAMERA_SCHEMA_VERSION) {
+    Serial.printf("[camera_store] Migrating %u camera record(s) from schema %u to %u.\n",
+                  (unsigned)cams.size(), (unsigned)storedVersion, (unsigned)CAMERA_SCHEMA_VERSION);
+    saveCameras(cams);
+  }
+
   return cams;
 }
 
@@ -72,6 +100,7 @@ bool saveCameras(const std::vector<CameraConfig>& cameras) {
   Preferences prefs;
   if (!prefs.begin(NVS_NAMESPACE, false)) return false;
   prefs.putString(NVS_KEY_LIST, blob);
+  prefs.putUShort(NVS_KEY_SCHEMA, CAMERA_SCHEMA_VERSION);
   prefs.end();
   return true;
 }

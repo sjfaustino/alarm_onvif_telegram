@@ -194,8 +194,8 @@ src/
 lib/                 # pure-logic modules with no hardware dependencies, split out of the
                       # files above specifically so they're unit-testable - see test/README.md
   xml_helpers/            # ONVIF response substring parsing + XML escaping
-  camera_serialize/       # CameraConfig <-> NVS blob (de)serialization
-  telegram_user_serialize/ # TelegramUser <-> NVS blob (de)serialization
+  camera_serialize/       # CameraConfig <-> NVS blob (de)serialization, schema-versioned
+  telegram_user_serialize/ # TelegramUser <-> NVS blob (de)serialization, schema-versioned
   telegram_parse/         # Telegram JSON escaping + /on,/off,/snap camera-name matching
   backoff/                # the doubling-with-a-cap retry delay formula (shared by main.cpp
                            # and camera.cpp, previously duplicated)

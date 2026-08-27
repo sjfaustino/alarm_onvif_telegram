@@ -24,18 +24,38 @@ this way:
 | Module (`lib/`)             | Extracted from                         | Covers |
 |---|---|---|
 | `xml_helpers`                | `onvif_soap.cpp`                       | ONVIF response substring parsing (`findElementByLocalName`, `findAttributeValue`, `responseHasFault`) and `xmlEscape` |
-| `camera_serialize`           | `camera_store.cpp`                     | `CameraConfig` <-> NVS blob (de)serialization, including the backward-compat field-count handling |
-| `telegram_user_serialize`    | `telegram_users.cpp`                   | `TelegramUser` <-> NVS blob (de)serialization, and `telegramUserWantsCamera` |
+| `camera_serialize`           | `camera_store.cpp`                     | `CameraConfig` <-> NVS blob (de)serialization, schema-versioned (see below) |
+| `telegram_user_serialize`    | `telegram_users.cpp`                   | `TelegramUser` <-> NVS blob (de)serialization (also schema-versioned), and `telegramUserWantsCamera` |
 | `telegram_parse`             | `telegram.cpp`                         | JSON string escaping for Telegram's API, and the `/on`/`/off`/`/snap` camera-name prefix matching |
 | `backoff`                    | `main.cpp` + `camera.cpp` (duplicated) | The doubling-with-a-cap retry delay formula, previously hand-written twice and prone to drifting apart |
 
-The round-trip serialization tests exist specifically to catch the failure
-mode a NVS blob format is most at risk of: someone adds a new
-`CameraConfig`/`TelegramUser` field in the middle of the list instead of
-appending it at the end, and every existing saved record silently
-misparses into the wrong values on the next boot - no crash, no error, just
-wrong data. A failing test here is much cheaper than that happening on a
-board in someone's attic.
+### Why the serialization modules are schema-versioned
+
+`camera_serialize`/`telegram_user_serialize` each store a `CAMERA_SCHEMA_VERSION`/
+`TELEGRAM_USER_SCHEMA_VERSION` alongside their NVS blob (`camera_store.cpp`/
+`telegram_users.cpp` read+write a separate `"schema"` key next to `"list"`).
+This exists to close a real gap: a purely positional, pipe-delimited format
+can't tell "an old record that's missing some trailing fields" apart from
+"a record whose fields just moved" - both just look like a different field
+count. Before versioning, deserializing leaned on `fields.size()` tolerance
+to handle the former case, which happened to be safe *only* because every
+historical field change in this project was, in fact, a pure append. That
+was an assumption sitting on the honor system, not something enforced -
+nothing would have caught a future field getting inserted in the middle of
+the layout instead of appended at the end, and the result would have been
+every existing saved camera/user silently misparsing into the wrong values
+on the next boot, with no crash and no error.
+
+Versioning turns that from an assumption into a rule: the *current* schema
+version's parser now requires an *exact* field count (a mismatch is treated
+as corruption, not guessed at), and any future layout change must add a new
+explicitly-numbered version branch rather than editing the current one in
+place. Old data (schema 0 - "written before this existed") still parses via
+the original tolerant logic, and gets transparently rewritten in the
+current format + version the next time it's loaded. `test_v1_wrong_field_count_is_rejected_not_reinterpreted`
+in both test files is what demonstrates the fix directly: the exact same
+malformed input that a pre-versioning build would have silently accepted
+now comes back empty instead.
 
 ## What's *not* covered, and what it would take
 

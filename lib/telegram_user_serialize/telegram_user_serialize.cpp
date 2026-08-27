@@ -24,6 +24,31 @@ static String stripSeparators(const String& s) {
   return out;
 }
 
+static std::vector<String> splitFields(const String& record) {
+  std::vector<String> fields;
+  int fieldStart = 0;
+  for (int i = 0; i <= (int)record.length(); i++) {
+    if (i == (int)record.length() || record[i] == FIELD_SEP) {
+      fields.push_back(record.substring(fieldStart, i));
+      fieldStart = i + 1;
+    }
+  }
+  return fields;
+}
+
+static std::vector<String> splitCameraList(const String& camerasField) {
+  std::vector<String> names;
+  int start = 0;
+  for (int i = 0; i <= (int)camerasField.length(); i++) {
+    if (i == (int)camerasField.length() || camerasField[i] == LIST_SEP) {
+      if (i > start) names.push_back(camerasField.substring(start, i));
+      start = i + 1;
+    }
+  }
+  return names;
+}
+
+// Always emits TELEGRAM_USER_SCHEMA_VERSION's layout.
 String serializeUser(const TelegramUser& u) {
   String cameras;
   for (size_t i = 0; i < u.cameraNames.size(); i++) {
@@ -42,16 +67,14 @@ String serializeUser(const TelegramUser& u) {
   return s;
 }
 
-TelegramUser deserializeUser(const String& record) {
+// Version 0: pre-versioning format. Tolerant of the trailing canSnap
+// field being absent (6 fields, in addition to the full 7) because it was,
+// as a matter of historical fact, only ever appended - never inserted or
+// reordered. See camera_serialize.cpp's deserializeCameraV0 for why that
+// assumption is safe *only* for genuinely historical data, not something
+// to lean on again going forward.
+static TelegramUser deserializeUserV0(const std::vector<String>& fields) {
   TelegramUser u;
-  std::vector<String> fields;
-  int fieldStart = 0;
-  for (int i = 0; i <= (int)record.length(); i++) {
-    if (i == (int)record.length() || record[i] == FIELD_SEP) {
-      fields.push_back(record.substring(fieldStart, i));
-      fieldStart = i + 1;
-    }
-  }
   if (fields.size() < 6) return u; // malformed - caller skips entries with an empty name
 
   u.name           = fields[0];
@@ -59,19 +82,37 @@ TelegramUser deserializeUser(const String& record) {
   u.allCameras     = fields[2] == "1";
   u.systemMessages = fields[4] == "1";
   u.canCommand     = fields[5] == "1";
-  // canSnap was added after the original 6-field format - records saved
-  // before it existed keep TelegramUser's default (false) via fields.size().
   if (fields.size() >= 7) {
     u.canSnap = fields[6] == "1";
   }
-
-  String camerasField = fields[3];
-  int start = 0;
-  for (int i = 0; i <= (int)camerasField.length(); i++) {
-    if (i == (int)camerasField.length() || camerasField[i] == LIST_SEP) {
-      if (i > start) u.cameraNames.push_back(camerasField.substring(start, i));
-      start = i + 1;
-    }
-  }
+  u.cameraNames = splitCameraList(fields[3]);
   return u;
+}
+
+// Version 1 (TELEGRAM_USER_SCHEMA_VERSION): the current, fixed 7-field
+// layout. Requires an exact field count - see camera_serialize.cpp's
+// deserializeCameraV1 for the same reasoning.
+static TelegramUser deserializeUserV1(const std::vector<String>& fields) {
+  TelegramUser u;
+  if (fields.size() != 7) return u; // malformed - caller skips entries with an empty name
+
+  u.name           = fields[0];
+  u.chatId         = fields[1];
+  u.allCameras     = fields[2] == "1";
+  u.systemMessages = fields[4] == "1";
+  u.canCommand     = fields[5] == "1";
+  u.canSnap        = fields[6] == "1";
+  u.cameraNames    = splitCameraList(fields[3]);
+  return u;
+}
+
+TelegramUser deserializeUser(const String& record, uint16_t recordVersion) {
+  std::vector<String> fields = splitFields(record);
+
+  if (recordVersion == 0) return deserializeUserV0(fields);
+  if (recordVersion == TELEGRAM_USER_SCHEMA_VERSION) return deserializeUserV1(fields);
+
+  // Unknown/future version - best-effort fall through to the newest known
+  // layout; telegram_users.cpp logs a warning when this happens.
+  return deserializeUserV1(fields);
 }
