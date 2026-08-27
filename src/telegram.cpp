@@ -2,6 +2,7 @@
 #include "telegram_ca.h"
 #include "telegram_users.h"
 #include "telegram_parse.h"
+#include <ArduinoJson.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <NetworkClient.h> // HTTPClient::getStreamPtr() returns NetworkClient* on Arduino-ESP32 3.x cores
@@ -232,8 +233,7 @@ static String nowTimestampString() {
 // Sends a plain text message via Telegram's sendMessage endpoint (JSON
 // body, not multipart - there's no photo). Shares writeAllBytes and
 // readTelegramResponse with the photo-send paths above so all three stay
-// consistent about what counts as success. jsonEscape() itself now lives
-// in telegram_parse.h/cpp (see that module's comment).
+// consistent about what counts as success.
 
 // Low-level single-recipient send - the actual HTTPS round trip. Used both
 // directly (command replies, which must go back to whoever sent the
@@ -252,7 +252,14 @@ static bool sendTelegramMessageTo(const String& chatId, const String& text) {
     return false;
   }
 
-  String body = "{\"chat_id\":\"" + chatId + "\",\"text\":\"" + jsonEscape(text) + "\"}";
+  // ArduinoJson handles the escaping (quotes, backslashes, control chars,
+  // unicode) instead of a hand-rolled jsonEscape() - see telegram_parse.cpp
+  // for the equivalent on the receiving side (parseTelegramUpdates).
+  JsonDocument outDoc;
+  outDoc["chat_id"] = chatId;
+  outDoc["text"] = text;
+  String body;
+  serializeJson(outDoc, body);
 
   String requestLine;
   requestLine.reserve(96 + strlen(TELEGRAM_BOT_TOKEN));
@@ -593,65 +600,32 @@ void pollTelegramCommands(const CameraConfig cameras[], CameraState states[], si
   }
   body = body.substring(bodyStart + 4);
 
-  // Each update is a JSON object in the "result" array; scan for
-  // "update_id" (always its first key) to find each object's start, then
-  // brace-count to find its end - cheaper and more robust than string-
-  // searching for keys across the whole response, since nested objects
-  // (message/from/chat) can't confuse where one update ends and the next
-  // begins.
+  String parseError;
+  std::vector<TelegramUpdate> updates = parseTelegramUpdates(body, &parseError);
+  if (parseError.length() > 0) {
+    Serial.printf("[Telegram] pollTelegramCommands: %s\n", parseError.c_str());
+  }
+
   std::vector<TelegramUser> users = loadTelegramUsers();
-  int searchPos = 0;
-  while (true) {
-    int updateIdPos = body.indexOf("\"update_id\":", searchPos);
-    if (updateIdPos < 0) break;
-    long updateId = body.substring(updateIdPos + 12).toInt();
-
-    int objStart = body.lastIndexOf('{', updateIdPos);
-    if (objStart < 0) break;
-    int depth = 0, objEnd = -1;
-    for (int i = objStart; i < (int)body.length(); i++) {
-      if (body[i] == '{') depth++;
-      else if (body[i] == '}') { depth--; if (depth == 0) { objEnd = i; break; } }
-    }
-    if (objEnd < 0) break;
-
-    String block = body.substring(objStart, objEnd + 1);
-    searchPos = objEnd + 1;
-    if (updateId > lastUpdateId) lastUpdateId = updateId;
-
-    // chat.id, not message.from.id or message.message_id - both of which
-    // also match a bare "id": search, so this anchors on "chat" first.
-    int chatPos = block.indexOf("\"chat\":");
-    if (chatPos < 0) continue;
-    int chatIdPos = block.indexOf("\"id\":", chatPos);
-    if (chatIdPos < 0) continue;
-    // toInt() stops at the first non-numeric character, so this doesn't
-    // need to know whether a ',' or '}' ends the value.
-    long chatId = block.substring(chatIdPos + 5).toInt();
+  for (auto& upd : updates) {
+    if (upd.updateId > lastUpdateId) lastUpdateId = upd.updateId;
+    if (!upd.hasChatId) continue; // no message on this update (edited_message, channel_post, ...)
 
     const TelegramUser* sender = nullptr;
     for (auto& u : users) {
-      if (u.chatId.toInt() == chatId) { sender = &u; break; }
+      if (u.chatId.toInt() == upd.chatId) { sender = &u; break; }
     }
     // canCommand and canSnap are independent permissions (see TelegramUser)
     // - a sender needs at least one of them to reach handleTelegramCommand
     // at all; which specific commands that actually unlocks is decided
     // there, per-command.
     if (!sender || !(sender->canCommand || sender->canSnap)) {
-      Serial.printf("[Telegram] Ignored command from chat ID %ld (%s)\n", chatId,
+      Serial.printf("[Telegram] Ignored command from chat ID %ld (%s)\n", upd.chatId,
                     sender ? "not authorized to send commands" : "unknown chat");
       continue;
     }
 
-    int textPos = block.indexOf("\"text\":\"");
-    if (textPos < 0) continue;
-    textPos += 8;
-    String rawText;
-    for (int i = textPos; i < (int)block.length(); i++) {
-      char c = block[i];
-      if (c == '"' && block[i - 1] != '\\') break;
-      rawText += c;
-    }
-    handleTelegramCommand(*sender, jsonUnescape(rawText), cameras, states, numCameras);
+    if (upd.text.length() == 0) continue; // e.g. a sticker or photo with no caption - nothing to act on
+    handleTelegramCommand(*sender, upd.text, cameras, states, numCameras);
   }
 }

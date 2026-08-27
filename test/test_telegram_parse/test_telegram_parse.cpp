@@ -5,28 +5,107 @@
 void setUp(void) {}
 void tearDown(void) {}
 
-// ---- jsonEscape / jsonUnescape ----
+// ---- parseTelegramUpdates ----
+// Fixtures are trimmed but real shapes of Telegram's getUpdates response -
+// see https://core.telegram.org/bots/api#getupdates / #update / #message.
 
-void test_jsonEscape_escapes_quote_backslash_and_control_chars(void) {
-  TEST_ASSERT_EQUAL_STRING("say \\\"hi\\\"\\n\\ttab\\\\slash",
-                            jsonEscape("say \"hi\"\n\ttab\\slash").c_str());
+void test_parseTelegramUpdates_single_update(void) {
+  String body = R"({"ok":true,"result":[
+    {"update_id":100,"message":{"message_id":1,"chat":{"id":123456789,"type":"private"},
+     "date":1,"text":"/status"}}
+  ]})";
+  std::vector<TelegramUpdate> updates = parseTelegramUpdates(body);
+  TEST_ASSERT_EQUAL_INT(1, (int)updates.size());
+  TEST_ASSERT_EQUAL_INT32(100, updates[0].updateId);
+  TEST_ASSERT_TRUE(updates[0].hasChatId);
+  TEST_ASSERT_EQUAL_INT32(123456789, updates[0].chatId);
+  TEST_ASSERT_EQUAL_STRING("/status", updates[0].text.c_str());
 }
 
-void test_jsonEscape_leaves_plain_text_untouched(void) {
-  TEST_ASSERT_EQUAL_STRING("D01 alerts: ON", jsonEscape("D01 alerts: ON").c_str());
+void test_parseTelegramUpdates_multiple_updates_in_order(void) {
+  String body = R"({"ok":true,"result":[
+    {"update_id":1,"message":{"chat":{"id":10},"text":"/on D01"}},
+    {"update_id":2,"message":{"chat":{"id":10},"text":"/off D01"}},
+    {"update_id":3,"message":{"chat":{"id":20},"text":"/snap D02"}}
+  ]})";
+  std::vector<TelegramUpdate> updates = parseTelegramUpdates(body);
+  TEST_ASSERT_EQUAL_INT(3, (int)updates.size());
+  TEST_ASSERT_EQUAL_STRING("/on D01", updates[0].text.c_str());
+  TEST_ASSERT_EQUAL_STRING("/off D01", updates[1].text.c_str());
+  TEST_ASSERT_EQUAL_INT32(20, updates[2].chatId);
 }
 
-void test_jsonUnescape_is_the_inverse_of_jsonEscape(void) {
-  String original = "say \"hi\"\n\ttab\\slash";
-  TEST_ASSERT_EQUAL_STRING(original.c_str(), jsonUnescape(jsonEscape(original)).c_str());
+// A JSON-escaped quote/backslash/newline in the text field must come back
+// as the real character, not the escaped two-character sequence - this is
+// what the old hand-rolled jsonUnescape() used to be responsible for;
+// ArduinoJson does it as a normal part of deserializeJson().
+void test_parseTelegramUpdates_unescapes_text_field(void) {
+  String body = R"({"ok":true,"result":[
+    {"update_id":1,"message":{"chat":{"id":1},"text":"line one\nline \"two\"\\end"}}
+  ]})";
+  std::vector<TelegramUpdate> updates = parseTelegramUpdates(body);
+  TEST_ASSERT_EQUAL_STRING("line one\nline \"two\"\\end", updates[0].text.c_str());
 }
 
-// A trailing lone backslash (malformed/truncated input) must not read past
-// the end of the string - jsonUnescape's own bounds check
-// (i + 1 < in.length()) is what this exercises.
-void test_jsonUnescape_trailing_lone_backslash_does_not_crash(void) {
-  String r = jsonUnescape("abc\\");
-  TEST_ASSERT_EQUAL_STRING("abc\\", r.c_str());
+// An update with no "message" at all (edited_message, channel_post, ...)
+// still has its update_id returned so the caller can advance its offset
+// past it - only hasChatId/text signal "nothing to act on" here.
+void test_parseTelegramUpdates_update_without_message_still_returns_updateId(void) {
+  String body = R"({"ok":true,"result":[
+    {"update_id":5,"edited_message":{"chat":{"id":1},"text":"edited"}}
+  ]})";
+  std::vector<TelegramUpdate> updates = parseTelegramUpdates(body);
+  TEST_ASSERT_EQUAL_INT(1, (int)updates.size());
+  TEST_ASSERT_EQUAL_INT32(5, updates[0].updateId);
+  TEST_ASSERT_FALSE(updates[0].hasChatId);
+  TEST_ASSERT_EQUAL_STRING("", updates[0].text.c_str());
+}
+
+// A message with no text (a sticker, a photo with no caption) has a chat
+// id but no text - the caller treats an empty text as "nothing to act on"
+// too, but the chat id (and update id) are still real and usable.
+void test_parseTelegramUpdates_message_without_text(void) {
+  String body = R"({"ok":true,"result":[
+    {"update_id":7,"message":{"chat":{"id":42},"sticker":{"file_id":"abc"}}}
+  ]})";
+  std::vector<TelegramUpdate> updates = parseTelegramUpdates(body);
+  TEST_ASSERT_EQUAL_INT(1, (int)updates.size());
+  TEST_ASSERT_TRUE(updates[0].hasChatId);
+  TEST_ASSERT_EQUAL_STRING("", updates[0].text.c_str());
+}
+
+void test_parseTelegramUpdates_empty_result_array(void) {
+  std::vector<TelegramUpdate> updates = parseTelegramUpdates(R"({"ok":true,"result":[]})");
+  TEST_ASSERT_TRUE(updates.empty());
+}
+
+// Malformed JSON (truncated, not JSON at all, ...) must not crash - it's
+// reported via the optional `error` out-param and an empty result, not a
+// thrown exception (this project builds without C++ exceptions) or a
+// garbage partial parse.
+void test_parseTelegramUpdates_malformed_json_reports_error(void) {
+  String error;
+  std::vector<TelegramUpdate> updates = parseTelegramUpdates("{not valid json", &error);
+  TEST_ASSERT_TRUE(updates.empty());
+  TEST_ASSERT_TRUE(error.length() > 0);
+}
+
+// Telegram reports API-level failures (e.g. an invalid bot token) as
+// {"ok":false,...} with HTTP 200 - no exception, no malformed JSON, just a
+// false "ok". Must come back as an error, not silently as "zero updates".
+void test_parseTelegramUpdates_api_error_reports_description(void) {
+  String error;
+  std::vector<TelegramUpdate> updates =
+      parseTelegramUpdates(R"({"ok":false,"error_code":401,"description":"Unauthorized"})", &error);
+  TEST_ASSERT_TRUE(updates.empty());
+  TEST_ASSERT_TRUE(error.indexOf("Unauthorized") >= 0);
+}
+
+// error is optional - passing nullptr (the default) must not crash even
+// when there's something to report.
+void test_parseTelegramUpdates_null_error_param_is_optional(void) {
+  std::vector<TelegramUpdate> updates = parseTelegramUpdates("{not valid json");
+  TEST_ASSERT_TRUE(updates.empty());
 }
 
 // ---- matchCamerasByPrefix ----
@@ -80,10 +159,15 @@ void test_matchCamerasByPrefix_excludes_disabled_cameras(void) {
 
 int main(int argc, char** argv) {
   UNITY_BEGIN();
-  RUN_TEST(test_jsonEscape_escapes_quote_backslash_and_control_chars);
-  RUN_TEST(test_jsonEscape_leaves_plain_text_untouched);
-  RUN_TEST(test_jsonUnescape_is_the_inverse_of_jsonEscape);
-  RUN_TEST(test_jsonUnescape_trailing_lone_backslash_does_not_crash);
+  RUN_TEST(test_parseTelegramUpdates_single_update);
+  RUN_TEST(test_parseTelegramUpdates_multiple_updates_in_order);
+  RUN_TEST(test_parseTelegramUpdates_unescapes_text_field);
+  RUN_TEST(test_parseTelegramUpdates_update_without_message_still_returns_updateId);
+  RUN_TEST(test_parseTelegramUpdates_message_without_text);
+  RUN_TEST(test_parseTelegramUpdates_empty_result_array);
+  RUN_TEST(test_parseTelegramUpdates_malformed_json_reports_error);
+  RUN_TEST(test_parseTelegramUpdates_api_error_reports_description);
+  RUN_TEST(test_parseTelegramUpdates_null_error_param_is_optional);
   RUN_TEST(test_matchCamerasByPrefix_single_prefix_match);
   RUN_TEST(test_matchCamerasByPrefix_is_case_insensitive);
   RUN_TEST(test_matchCamerasByPrefix_exact_name_matches_itself);

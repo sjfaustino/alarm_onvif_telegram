@@ -124,13 +124,7 @@ static std::vector<ProfileInfo> parseProfiles(const String& xml) {
     if (tagEnd < 0) break;
     String tag = xml.substring(p, tagEnd);
 
-    String token;
-    int tPos = tag.indexOf("token=\"");
-    if (tPos >= 0) {
-      int vs = tPos + 7;
-      int ve = tag.indexOf("\"", vs);
-      if (ve > vs) token = tag.substring(vs, ve);
-    }
+    String token = findAttributeInTag(tag, "token"); // tolerates single- or double-quoted attributes
 
     String name;
     int namePos = xml.indexOf("Name>", tagEnd);
