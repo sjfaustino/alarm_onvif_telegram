@@ -25,6 +25,11 @@ String serializeUser(const TelegramUser& u);
 // any entry that comes back with an empty name.
 TelegramUser deserializeUser(const String& record, uint16_t recordVersion);
 
+// Number of fields `record` splits into on FIELD_SEP - for
+// telegram_users.cpp's diagnostic log when a record fails to parse, not
+// used by deserializeUser itself.
+size_t telegramUserRecordFieldCount(const String& record);
+
 // telegramUserWantsCamera() is declared in telegram_users.h (its natural
 // public-API home) even though it's implemented in this module's .cpp -
 // not (de)serialization, just plain business logic that happened to be

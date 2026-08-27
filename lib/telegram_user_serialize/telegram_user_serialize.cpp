@@ -116,3 +116,7 @@ TelegramUser deserializeUser(const String& record, uint16_t recordVersion) {
   // layout; telegram_users.cpp logs a warning when this happens.
   return deserializeUserV1(fields);
 }
+
+size_t telegramUserRecordFieldCount(const String& record) {
+  return splitFields(record).size();
+}

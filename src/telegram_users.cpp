@@ -46,25 +46,37 @@ std::vector<TelegramUser> loadTelegramUsers() {
   }
 
   std::vector<TelegramUser> users;
+  int totalRecords = 0;
+  int droppedRecords = 0;
   int recStart = 0;
   for (int i = 0; i <= (int)blob.length(); i++) {
     if (i == (int)blob.length() || blob[i] == RECORD_SEP) {
       if (i > recStart) {
-        TelegramUser u = deserializeUser(blob.substring(recStart, i), storedVersion);
+        totalRecords++;
+        String record = blob.substring(recStart, i);
+        TelegramUser u = deserializeUser(record, storedVersion);
         if (u.name.length() > 0) {
           users.push_back(u);
         } else {
-          Serial.println("[telegram_users] WARNING: dropped a Telegram user record that failed to "
-                          "parse (wrong field count for its schema version) - it will be lost the "
-                          "next time users are saved from this dashboard.");
+          droppedRecords++;
+          Serial.printf("[telegram_users] WARNING: dropped a Telegram user record that failed to "
+                        "parse under schema %u (found %u field(s)).\n", (unsigned)storedVersion,
+                        (unsigned)telegramUserRecordFieldCount(record));
         }
       }
       recStart = i + 1;
     }
   }
 
-  // One-time migration, same reasoning as camera_store.cpp's loadCameras().
-  if (storedVersion != TELEGRAM_USER_SCHEMA_VERSION) {
+  // One-time migration, same reasoning as camera_store.cpp's loadCameras() -
+  // skipped if anything was dropped, so a parse failure can't turn into a
+  // permanent NVS overwrite that deletes the unparsed records for good.
+  if (droppedRecords > 0) {
+    Serial.printf("[telegram_users] %d of %d user record(s) failed to parse - NOT migrating/rewriting "
+                  "NVS this boot so the raw data isn't lost. Only the %u that parsed are active for "
+                  "now; saving anything from this dashboard will overwrite the stored list, including "
+                  "the unparsed records.\n", droppedRecords, totalRecords, (unsigned)users.size());
+  } else if (storedVersion != TELEGRAM_USER_SCHEMA_VERSION) {
     Serial.printf("[telegram_users] Migrating %u user record(s) from schema %u to %u.\n",
                   (unsigned)users.size(), (unsigned)storedVersion, (unsigned)TELEGRAM_USER_SCHEMA_VERSION);
     saveTelegramUsers(users);

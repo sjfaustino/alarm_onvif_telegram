@@ -61,17 +61,23 @@ std::vector<CameraConfig> loadCameras() {
   }
 
   std::vector<CameraConfig> cams;
+  int totalRecords = 0;
+  int droppedRecords = 0;
   int recStart = 0;
   for (int i = 0; i <= (int)blob.length(); i++) {
     if (i == (int)blob.length() || blob[i] == RECORD_SEP) {
       if (i > recStart) {
-        CameraConfig c = deserializeCamera(blob.substring(recStart, i), storedVersion);
+        totalRecords++;
+        String record = blob.substring(recStart, i);
+        CameraConfig c = deserializeCamera(record, storedVersion);
         if (c.name.length() > 0) {
           cams.push_back(c);
         } else {
-          Serial.println("[camera_store] WARNING: dropped a camera record that failed to parse "
-                          "(wrong field count for its schema version) - it will be lost the next "
-                          "time cameras are saved from this dashboard.");
+          droppedRecords++;
+          Serial.printf("[camera_store] WARNING: dropped a camera record that failed to parse under "
+                        "schema %u (found %u field(s), expected %s).\n", (unsigned)storedVersion,
+                        (unsigned)cameraRecordFieldCount(record),
+                        (storedVersion == 0) ? "11-14" : "exactly 14");
         }
       }
       recStart = i + 1;
@@ -81,7 +87,20 @@ std::vector<CameraConfig> loadCameras() {
   // One-time migration: anything not already on the current schema gets
   // rewritten in the current layout immediately, so every subsequent load
   // this boot (and every boot after) sees storedVersion == CAMERA_SCHEMA_VERSION.
-  if (storedVersion != CAMERA_SCHEMA_VERSION) {
+  //
+  // Skipped entirely if any record was dropped above - saveCameras() would
+  // permanently overwrite the NVS blob with just the survivors (possibly
+  // zero cameras), destroying whatever's still in the raw, unparsed
+  // original. Safer to leave NVS untouched and keep re-attempting this
+  // same (non-destructive) parse every boot until the real problem - a
+  // firmware bug, or genuinely corrupt NVS - is fixed, than to "migrate"
+  // by quietly deleting the unparsed records.
+  if (droppedRecords > 0) {
+    Serial.printf("[camera_store] %d of %d camera record(s) failed to parse - NOT migrating/rewriting "
+                  "NVS this boot so the raw data isn't lost. Only the %u that parsed are active for "
+                  "now; saving anything from this dashboard will overwrite the stored list, including "
+                  "the unparsed records.\n", droppedRecords, totalRecords, (unsigned)cams.size());
+  } else if (storedVersion != CAMERA_SCHEMA_VERSION) {
     Serial.printf("[camera_store] Migrating %u camera record(s) from schema %u to %u.\n",
                   (unsigned)cams.size(), (unsigned)storedVersion, (unsigned)CAMERA_SCHEMA_VERSION);
     saveCameras(cams);

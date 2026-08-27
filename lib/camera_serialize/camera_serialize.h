@@ -38,3 +38,8 @@ String serializeCamera(const CameraConfig& c);
 // malformed *for that version* - camera_store.cpp's loadCameras() skips
 // (and logs) any entry that comes back with an empty name.
 CameraConfig deserializeCamera(const String& record, uint16_t recordVersion);
+
+// Number of fields `record` splits into on FIELD_SEP - for camera_store.cpp's
+// diagnostic log when a record fails to parse, not used by deserializeCamera
+// itself.
+size_t cameraRecordFieldCount(const String& record);

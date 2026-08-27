@@ -123,3 +123,7 @@ CameraConfig deserializeCamera(const String& record, uint16_t recordVersion) {
   // warning when this happens so it doesn't go unnoticed.
   return deserializeCameraV1(fields);
 }
+
+size_t cameraRecordFieldCount(const String& record) {
+  return splitFields(record).size();
+}
