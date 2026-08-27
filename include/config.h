@@ -2,16 +2,13 @@
 #include <Arduino.h>
 #include "secrets.h"
 
-// WiFi and Telegram credentials live in secrets.h (gitignored - see
-// secrets.h.example for the template). Nothing sensitive belongs in this
-// file, since this one IS meant to be committed.
+// WiFi and Telegram credentials live in secrets.h (gitignored). Nothing
+// sensitive belongs in this file, since this one IS meant to be committed.
 //
-// Camera definitions used to live here as a compile-time CAMERAS[] array,
-// matched to secrets.h's CAMERA_SECRETS[] by name. They're now managed at
-// runtime instead - see camera_store.h (the CameraConfig struct and NVS
-// load/save) and webserver.h (the add/delete/view web UI). secrets.h still
-// has a one-time CAMERA_SEED array for migrating already-tuned cameras into
-// NVS on first boot; after that, the web UI is the only way to change them.
+// Cameras are managed at runtime - see camera_store.h (CameraConfig, NVS
+// load/save) and webserver.h (the web UI). secrets.h's CAMERA_SEED only
+// seeds NVS on first boot; after that the web UI is the only way to
+// change them.
 
 // ============================================================
 // Timing (all in ms unless noted)
@@ -27,20 +24,12 @@ static const size_t        SNAPSHOT_MAX_BYTES       = 100000;        // internal
 static const size_t        SNAPSHOT_MAX_BYTES_PSRAM = 2000000UL;     // PSRAM buffer cap - generous; real snapshots are far smaller
 static const bool          VERBOSE_SOAP_LOG         = false;         // flip true to debug one camera at a time
 
-// NOTE ON HARDWARE: earlier in development this project also ran on a
-// couple of no-PSRAM boards (an ESP32-S2, a classic dual-core ESP32).
-// PSRAM is now a hard requirement instead - main.cpp's setup() refuses to
-// start at all if ESP.getPsramSize() is 0, rather than run degraded (see
-// its comment for why: a snapshot alert can go to multiple Telegram users,
-// so the JPEG has to be buffered in RAM once and resent per recipient).
-// SNAPSHOT_MAX_BYTES only still exists as telegram.cpp's fallback cap for
-// the rare case a PSRAM allocation itself fails (fragmentation) - see
-// allocateSnapshotBuffer() there.
+// PSRAM is a hard requirement - setup() refuses to start if
+// ESP.getPsramSize() is 0, since a snapshot alert going to multiple
+// Telegram users needs the JPEG buffered once in RAM and resent per
+// recipient. SNAPSHOT_MAX_BYTES is only telegram.cpp's fallback cap for
+// the rare case a PSRAM allocation itself fails (fragmentation).
 //
-// Core count: camera.cpp's per-camera FreeRTOS tasks are pinned to core 1
-// in main.cpp, which requires a genuine second core - every PSRAM-equipped
-// ESP32-S3 variant this targets is dual-core, so this hasn't come up as a
-// real constraint, but would need changing to plain xTaskCreate (no
-// pinning) if this were ever flashed to a single-core chip.
-// mbedTLS's ~16KB RX + 16KB TX TLS session buffers are fixed at build time
-// regardless of which ESP32 this is.
+// camera.cpp's per-camera FreeRTOS tasks are pinned to core 1, requiring a
+// genuine second core - would need plain xTaskCreate if ever flashed to a
+// single-core chip.

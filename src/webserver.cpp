@@ -14,13 +14,10 @@ static std::vector<CameraConfig>* g_liveCameras = nullptr;
 static std::vector<CameraState>*  g_liveStates  = nullptr;
 
 // Global middleware, applied to every request in startWebServer() below -
-// AuthenticationMiddleware::run() only actually requires a login once both
-// setUsername() and setPassword() have been given non-empty values (see
-// PsychicHttp's PsychicMiddlewares.cpp), so leaving it unconfigured is what
-// makes the board boot with no login required. renderSecurityPanel's save
-// handler updates it live via setUsername()/setPassword() the moment a
-// password is set or changed, so that takes effect on the very next
-// request - no reboot needed.
+// AuthenticationMiddleware::run() only requires a login once both
+// setUsername()/setPassword() are non-empty, so leaving it unconfigured is
+// what makes the board boot with no login required. The Security page's
+// save handler updates it live, taking effect on the very next request.
 static AuthenticationMiddleware g_authMiddleware;
 
 static String formatUptime(unsigned long ms) {
@@ -78,13 +75,9 @@ static String formatElapsedSince(unsigned long ms) {
 }
 
 // ============================================================
-// Dashboard shell - sidebar (Network / Cameras / Telegram Users) + content
-// panel. All three sections are separate server-rendered pages under plain
-// links (no client-side router/JS framework) - this project embeds
-// everything in the firmware binary rather than serving from a filesystem,
-// so the goal is a dashboard LOOK without the extra moving parts (LittleFS,
-// a JS router, fetch-based page loading) that a bigger multi-page app would
-// justify.
+// Dashboard shell - sidebar + content panel, plain server-rendered pages
+// with no client-side router/JS framework. Everything's embedded in the
+// firmware binary rather than served from a filesystem, on purpose.
 // ============================================================
 
 enum class Tab { None, Network, Cameras, Users, Firmware, Security };
@@ -213,11 +206,9 @@ static String renderNetworkPanel() {
   html += "<label>DNS server (optional - falls back to the gateway if left blank)"
           "<input type=\"text\" name=\"staticDNS\" id=\"staticDNS\"></label>";
 
-  // DHCP mode shows the board's current live-obtained settings (grayed
-  // out, informational only); Static mode shows the stored static values
-  // (editable). Disabled inputs don't get submitted with the form, so
-  // switching to DHCP and saving correctly omits the static fields -
-  // handleSaveNetwork keeps whatever static values were already stored.
+  // DHCP shows the board's live settings, grayed out; Static shows the
+  // stored values, editable. Disabled inputs don't submit, so switching to
+  // DHCP and saving correctly leaves the stored static values untouched.
   html += "<script>";
   html += "var netLive={ip:'" + WiFi.localIP().toString() + "',subnet:'" + WiFi.subnetMask().toString() +
           "',gateway:'" + WiFi.gatewayIP().toString() + "',dns:'" + WiFi.dnsIP().toString() + "'};";
@@ -280,10 +271,8 @@ static void handleSaveNetwork(PsychicRequest* request, String& banner) {
   String password = request->getParam("password", "");
   if (password.length() > 0) creds.primary.password = password;
 
-  // Backup SSID isn't "blank keeps current" like the passwords - clearing
-  // it is the only way to disable a configured backup, so an empty
-  // submission directly clears both backup fields instead of preserving
-  // whatever was there before.
+  // Backup SSID isn't "blank keeps current" like the passwords - it's the
+  // only way to disable a configured backup, so blank clears both fields.
   String backupSsid = request->getParam("backupSsid", "");
   backupSsid.trim();
   if (backupSsid.length() == 0) {
@@ -303,10 +292,8 @@ static void handleSaveNetwork(PsychicRequest* request, String& banner) {
     return;
   }
 
-  // Static fields are disabled (and so never submitted) when DHCP is
-  // selected - keep whatever was already stored so switching back to
-  // Static later doesn't lose it. Only touch/validate them when the form
-  // actually submitted ipMode=static.
+  // Static fields are disabled (never submitted) when DHCP is selected -
+  // only touch/validate them when the form actually submitted ipMode=static.
   String ipMode = request->getParam("ipMode", "dhcp");
   creds.useStaticIP = (ipMode == "static");
   if (creds.useStaticIP) {
@@ -352,12 +339,10 @@ static void handleSaveNetwork(PsychicRequest* request, String& banner) {
 // Cameras panel
 // ============================================================
 
-// Shared by the "Add camera" form (v = a fresh, default-valued CameraConfig),
-// "Edit camera" (v = the stored record, password blanked by the caller), and
-// a post-Test-Connection redisplay (v = whatever was just submitted, so a
-// test doesn't throw away what you typed). isEdit controls the legend/button
-// text and whether a hidden originalName field is emitted - see
-// saveCameraSubmission for what that's used for.
+// Shared by "Add camera" (v = a fresh default CameraConfig), "Edit camera"
+// (v = the stored record, password blanked), and a post-Test-Connection
+// redisplay (v = whatever was just submitted). isEdit picks the legend/
+// button text and whether a hidden originalName field is emitted.
 static String renderCameraForm(const CameraConfig& v, bool isEdit) {
   String html;
   String legend = isEdit ? ("Edit camera: " + htmlEscape(v.name)) : "Add camera";
@@ -408,9 +393,8 @@ static String renderCameraForm(const CameraConfig& v, bool isEdit) {
   return html;
 }
 
-// prefill/isEdit repopulate the Add/Edit form after an edit-link click, a
-// failed save, or a Test Connection round trip - null prefill is the normal
-// blank "Add camera" state.
+// prefill/isEdit repopulate the form after an edit link, a failed save, or
+// a Test Connection round trip - null prefill is the blank "Add" state.
 static String renderCamerasPanel(const CameraConfig* prefill, bool isEdit) {
   std::vector<CameraConfig> cams = loadCameras();
 
@@ -458,9 +442,8 @@ static String renderCamerasPanel(const CameraConfig* prefill, bool isEdit) {
   return html;
 }
 
-// Reads the Add/Edit camera form's fields into a CameraConfig - used both to
-// actually save (saveCameraSubmission) and to test a connection without
-// saving (testCameraConnection).
+// Reads the Add/Edit camera form into a CameraConfig - used both to save
+// (saveCameraSubmission) and to test a connection without saving.
 static CameraConfig parseCameraForm(PsychicRequest* request) {
   CameraConfig c;
   c.name                          = request->getParam("name", "");
@@ -485,10 +468,8 @@ static CameraConfig parseCameraForm(PsychicRequest* request) {
   c.offlineThresholdMs = offlineMin > 0 ? (unsigned long)offlineMin * 60000UL : CameraConfig().offlineThresholdMs;
 
   long burstCount = request->getParam("snapshotBurstCount", "1").toInt();
-  // Clamp to [1, 10] - a blank/zero/negative field falls back to 1 shot
-  // (today's plain behavior), and the upper bound keeps a fat-fingered
-  // large number from turning one motion event into a Telegram flood that
-  // risks hitting Telegram's per-chat rate limit.
+  // Clamp to [1, 10]: blank/zero/negative falls back to 1 shot, and the
+  // cap stops a fat-fingered number from flooding past Telegram's rate limit.
   if (burstCount < 1) burstCount = 1;
   if (burstCount > 10) burstCount = 10;
   c.snapshotBurstCount = (unsigned int)burstCount;
@@ -496,10 +477,9 @@ static CameraConfig parseCameraForm(PsychicRequest* request) {
   return c;
 }
 
-// originalName is "" for a brand-new camera (add), non-empty for an edit
-// (the name the camera had before this submission - cam.name may differ,
-// which is a rename). A blank password on an edit means "keep the current
-// one", same convention as the Network panel's WiFi password field.
+// originalName is "" for a new camera, non-empty for an edit (cam.name may
+// differ - a rename). A blank password on an edit keeps the current one,
+// same convention as the Network panel's WiFi password field.
 static bool saveCameraSubmission(CameraConfig cam, const String& originalName, String& banner) {
   if (cam.name.length() == 0 || cam.deviceServiceUrl.length() == 0) {
     banner = "Name and device service URL are required - camera not saved.";
@@ -528,10 +508,9 @@ static bool saveCameraSubmission(CameraConfig cam, const String& originalName, S
 }
 
 // Runs a live GetCapabilities -> GetServiceCapabilities/GetEventProperties
-// -> GetProfiles/GetSnapshotUri sequence against cfg without touching NVS or
-// any running camera task, and summarizes what worked. Reuses the exact
-// same calls cameraSetupSequence (camera.cpp) makes at boot, so a pass here
-// is a strong signal the real thing will work too.
+// -> GetProfiles/GetSnapshotUri sequence against cfg without touching NVS,
+// reusing the same calls cameraSetupSequence (camera.cpp) makes at boot -
+// a pass here is a strong signal the real thing will work too.
 static String testCameraConnection(CameraConfig cfg) {
   if (cfg.deviceServiceUrl.length() == 0) {
     return "Enter a device service URL first, then Test Connection.";
@@ -575,12 +554,9 @@ static String testCameraConnection(CameraConfig cfg) {
 // Telegram Users panel
 // ============================================================
 
-// Shared by the "Add Telegram user" form (v = a fresh TelegramUser with
-// allCameras forced true, matching the old hardcoded default), "Edit user"
-// (v = the stored record), and a failed-save redisplay (v = whatever was
-// just submitted). isEdit controls the legend/button text and whether a
-// hidden originalName field is emitted - see saveUserSubmission for what
-// that's used for.
+// Shared by "Add Telegram user" (v = a fresh TelegramUser with allCameras
+// forced true, a friendlier default than the struct's own false), "Edit
+// user" (v = the stored record), and a failed-save redisplay.
 static String renderTelegramUserForm(const TelegramUser& v, const std::vector<CameraConfig>& cams, bool isEdit) {
   String html;
   String legend = isEdit ? ("Edit Telegram user: " + htmlEscape(v.name)) : "Add Telegram user";
@@ -622,8 +598,8 @@ static String renderTelegramUserForm(const TelegramUser& v, const std::vector<Ca
   return html;
 }
 
-// prefill/isEdit repopulate the Add/Edit form after an edit-link click or a
-// failed save - null prefill is the normal blank "Add Telegram user" state.
+// prefill/isEdit repopulate the form after an edit link or a failed save -
+// null prefill is the blank "Add Telegram user" state.
 static String renderUsersPanel(const TelegramUser* prefill, bool isEdit) {
   std::vector<TelegramUser> users = loadTelegramUsers();
   std::vector<CameraConfig> cams = loadCameras();
@@ -664,9 +640,8 @@ static String renderUsersPanel(const TelegramUser* prefill, bool isEdit) {
   return html;
 }
 
-// PsychicRequest's public API doesn't expose "all values for a repeated
-// param name", so each camera gets its own uniquely-named checkbox
-// ("cam_<name>") instead of sharing name="camera" - probe for each known
+// PsychicRequest can't enumerate "all values for a repeated param name", so
+// each camera gets its own checkbox ("cam_<name>") - probe each known
 // camera by name rather than trying to enumerate submitted fields.
 static TelegramUser parseUserForm(PsychicRequest* request) {
   TelegramUser u;
@@ -716,19 +691,17 @@ static bool saveUserSubmission(const TelegramUser& user, const String& originalN
 // ============================================================
 // Firmware panel - upload a .bin over the dashboard instead of a USB
 // reflash. Backed by ESP32's Update library, which writes into the
-// currently-inactive OTA app partition (this board's partition table has
-// two, app0/app1 - see platformio.ini) and only marks it bootable once the
-// image is fully received and its checksum verifies, so a failed/aborted
-// upload leaves the running firmware untouched.
+// currently-inactive OTA app partition (app0/app1 - see platformio.ini)
+// and only marks it bootable once the checksum verifies, so a failed/
+// aborted upload leaves the running firmware untouched.
 // ============================================================
 
 static bool   g_otaError = false;
 static String g_otaErrorMsg;
 
-// esp_restart() from inside the request handler that's still sending the
-// response would tear down the connection before the client sees it -
-// reboot from a short-lived separate task instead, after send() has
-// returned, so the browser gets a chance to show the result first.
+// esp_restart() inside the still-sending request handler would tear down
+// the connection before the client sees the response - reboot from a
+// short-lived task instead, after send() returns.
 static void otaRebootTask(void*) {
   vTaskDelay(pdMS_TO_TICKS(1000));
   ESP.restart();
@@ -761,10 +734,9 @@ static String renderFirmwarePanel() {
 }
 
 // ============================================================
-// Security panel - dashboard login (HTTP Basic Auth). See auth_store.h and
-// g_authMiddleware's comment: empty username/password (the default) means
-// no login is required at all, which is how the board boots. Setting one
-// here takes effect on the very next request, no reboot needed.
+// Security panel - dashboard login (HTTP Basic Auth). Empty username/
+// password (the default) means no login required, which is how the board
+// boots; setting one here takes effect on the very next request.
 // ============================================================
 
 static String renderSecurityPanel() {
@@ -806,9 +778,7 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
       .setRealm("Camera Monitor")
       .setAuthMethod(BASIC_AUTH);
   // Applies to every route registered below, including the Firmware
-  // upload - AuthenticationMiddleware::run() is a no-op until both fields
-  // above are non-empty, which is what lets the board boot with no login
-  // required (see g_authMiddleware's declaration comment).
+  // upload - see g_authMiddleware's declaration comment.
   server.addMiddleware(&g_authMiddleware);
 
   server.on("/", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {

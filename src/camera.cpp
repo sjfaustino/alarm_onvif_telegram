@@ -17,19 +17,12 @@ bool resolveCameraCredentials(const CameraConfig& cfg, CameraState& st) {
   return true;
 }
 
-// Builds the envelope and posts it, honoring cfg.useWSSecurity: when true,
-// auth rides in the WSSE header (the ONVIF-standard way); when false, the
-// envelope carries no Security header and credentials go over HTTP Basic
-// Auth instead, for cameras/stacks that expect that. Credentials come from
-// st.user/st.pass (resolved by name via resolveCameraCredentials at task
-// startup), not from CameraConfig.
-//
-// Every SOAP call this camera ever makes funnels through here, so this is
-// also where st.lastContactMs gets updated - a non-empty response (even a
-// SOAP fault) means the camera's HTTP/ONVIF stack answered the network
-// request, which is the signal checkCameraOnlineStatus (telegram.cpp) uses
-// to tell a genuinely offline camera from one that's just failing a
-// specific call.
+// Builds the envelope and posts it, honoring cfg.useWSSecurity (WSSE header
+// vs. plain HTTP Basic Auth, for stacks that choke on WSSE). Every SOAP
+// call funnels through here, so this is also where st.lastContactMs gets
+// updated - a non-empty response (even a SOAP fault) means the camera's
+// stack answered, which is what checkCameraOnlineStatus (telegram.cpp)
+// uses to tell a genuinely offline camera from one merely failing a call.
 static String cameraSoapCall(const CameraConfig& cfg, CameraState& st, const String& url,
                               const String& to, const String& action, const String& body) {
   String xml = soapEnvelope(action, body, to, st.user, st.pass,
@@ -105,10 +98,9 @@ bool cameraGetEventProperties(const CameraConfig& cfg, CameraState& st) {
   return true;
 }
 
-// Restricted to actual <...Profiles ...> opening tags (not any "token=" in
+// Restricted to actual <...Profiles ...> opening tags, not any "token=" in
 // the document - GetProfiles responses also carry tokens on nested
-// VideoEncoderConfiguration/VideoSourceConfiguration elements that aren't
-// what we want here).
+// VideoEncoderConfiguration/VideoSourceConfiguration elements.
 struct ProfileInfo { String token; String name; };
 
 static std::vector<ProfileInfo> parseProfiles(const String& xml) {
@@ -146,10 +138,8 @@ bool cameraFetchProfileAndSnapshotUri(const CameraConfig& cfg, CameraState& st) 
   if (cfg.snapshotUriOverride.length() > 0) {
     st.snapshotUri = cfg.snapshotUriOverride;
     // {USER}/{PASS} let an override embed query-string auth (some Vstarcam
-    // firmwares want ?loginuse=...&loginpas=... instead of HTTP Basic Auth)
-    // without putting the actual credential in a committed file - st.user/
-    // st.pass come from resolveCameraCredentials, already resolved by the
-    // time this runs.
+    // firmwares want ?loginuse=...&loginpas=...) without a credential
+    // landing in a committed file.
     st.snapshotUri.replace("{USER}", st.user);
     st.snapshotUri.replace("{PASS}", st.pass);
     String logUri = cfg.snapshotUriOverride; // log the un-substituted form - avoids echoing st.pass to serial
@@ -249,15 +239,12 @@ bool cameraCreatePullPoint(const CameraConfig& cfg, CameraState& st) {
   return true;
 }
 
-// Scoped to the NotificationMessage block containing topicKeyword (from the
-// keyword's own position up to that block's closing tag, or end of string)
-// instead of searching the whole response from position 0 - otherwise, in a
-// batch with several topics, this would report whichever topic's
-// State/IsMotion happened to appear first in the XML, regardless of which
-// one this log line is actually about. Recognizes both Name="State" (e.g.
-// VideoSource/MotionAlarm) and Name="IsMotion" (CellMotionDetector/Motion) -
-// different ONVIF stacks name the boolean differently for the same kind of
-// event.
+// Scoped to the NotificationMessage block containing topicKeyword, not the
+// whole response - otherwise a batch with several topics would report
+// whichever State/IsMotion happened to appear first in the XML, regardless
+// of which topic this log line is actually about. Recognizes both
+// Name="State" and Name="IsMotion" - different stacks name the boolean
+// differently for the same kind of event.
 static void printEventState(const CameraConfig& cfg, const String& xml, const String& topicKeyword) {
   int topicPos = xml.indexOf(topicKeyword);
   if (topicPos < 0) return;
@@ -300,10 +287,8 @@ static void parseEvents(const CameraConfig& cfg, CameraState& st, const String& 
   if (signalLoss)  { Serial.printf("[%s] SIGNAL LOSS EVENT\n", cfg.name.c_str());  printEventState(cfg, xml, "SignalLoss"); }
   if (tamper)      { Serial.printf("[%s] TAMPER EVENT\n", cfg.name.c_str());       printEventState(cfg, xml, "TamperDetector"); }
 
-  // Same simplification as the original: doesn't distinguish which topic was
-  // true if several arrive in the same batch. Fine for a hobby alert bot;
-  // if you need to alert on motion only, this needs per-NotificationMessage
-  // parsing instead of whole-response substring search.
+  // Doesn't distinguish which topic was true if several arrive in the same
+  // batch - would need per-NotificationMessage parsing to fix.
   if ((motionAlarm || cellMotion) && anyTrue) {
     triggerMotionAlert(cfg, st);
   }
@@ -313,12 +298,8 @@ bool cameraPullMessages(const CameraConfig& cfg, CameraState& st) {
   if (!st.subscriptionActive || st.pullPointUrl.length() == 0) return false;
 
   String action = "http://www.onvif.org/ver10/events/wsdl/PullPointSubscription/PullMessagesRequest";
-  // PT1S: a holdover from when this was single-camera-per-round-robin-slot
-  // and a 5s long-poll per camera would stack up badly across the group.
-  // Now that each camera has its own task (see cameraTaskFn), that
-  // constraint is gone - PT1S still works fine and is left as-is, but PT5S
-  // (fewer, longer polls) is worth trying if you want to reduce request
-  // volume per camera.
+  // PT1S long-poll; PT5S (fewer, longer polls) would cut request volume
+  // per camera if that's ever worth trading off against latency.
   String body = "<tev:PullMessages><tev:Timeout>PT1S</tev:Timeout>"
                 "<tev:MessageLimit>20</tev:MessageLimit></tev:PullMessages>";
   String response = cameraSoapCall(cfg, st, st.pullPointUrl, st.pullPointUrl, action, body);
@@ -375,18 +356,11 @@ bool cameraSetupSequence(const CameraConfig& cfg, CameraState& st) {
 static const unsigned long RETRY_BACKOFF_MAX_MS = 300000UL; // 5 minutes between retries
 
 // ============================================================
-// Per-camera FreeRTOS task
-//
-// Replaces main.cpp's old round-robin loop() slot for this camera. Each
-// enabled camera gets one of these, created once in setup() and pinned to
-// core 1. Runs forever; never returns.
-//
-// This board turned out to be a genuine dual-core ESP32 (ESP32-D0WDQ6, per
-// esptool chip-id), not the single-core S2 this was first written against -
-// so with tasks pinned to core 1, this IS true parallel execution: camera
-// A's slow SOAP call or Telegram TLS upload doesn't steal core 1 time from
-// camera B's task the way it would on a single core, and neither competes
-// with the WiFi/BT stack or the Arduino loopTask, which stay on core 0.
+// Per-camera FreeRTOS task - one per enabled camera, created once in
+// setup() and pinned to core 1. Runs forever; never returns. Pinning to
+// core 1 gives true parallel execution: one camera's slow SOAP call or
+// Telegram TLS upload doesn't steal core 1 time from another's task, and
+// neither competes with the WiFi/BT stack or loopTask on core 0.
 // ============================================================
 void cameraTaskFn(void* pvParameters) {
   CameraTaskContext* ctx = static_cast<CameraTaskContext*>(pvParameters);

@@ -13,11 +13,8 @@
 #include <vector>
 
 bool telegramCAConfigured() {
-  // Cheap sanity check that this actually looks like a PEM certificate,
-  // not a placeholder/filename/empty string left behind by mistake (see
-  // telegram_ca.h history - it once held a file path instead of PEM data,
-  // which passed the old "REPLACE_WITH" substring check while still
-  // being unparseable).
+  // Sanity check that this actually looks like a PEM certificate, not a
+  // placeholder/filename/empty string left behind by mistake.
   return strstr(TELEGRAM_ROOT_CA, "-----BEGIN CERTIFICATE-----") != nullptr &&
          strstr(TELEGRAM_ROOT_CA, "-----END CERTIFICATE-----") != nullptr;
 }
@@ -25,22 +22,16 @@ bool telegramCAConfigured() {
 // ============================================================
 // Camera -> Telegram
 //
-// PSRAM is a hard requirement now (main.cpp's setup() refuses to boot
-// without it), because a motion alert can go to more than one Telegram
-// user: the JPEG has to be fetched from the camera once, held in memory,
-// and resent per recipient (see triggerMotionAlert below). This project did
-// run on a couple of earlier no-PSRAM boards, with a streamed send path
-// that relayed camera bytes straight into Telegram's TLS connection to
-// avoid ever holding the whole JPEG in RAM - that path is gone, since
-// streaming consumes the camera's response as it goes and could only ever
-// have served a single recipient. SNAPSHOT_MAX_BYTES (much smaller than
-// SNAPSHOT_MAX_BYTES_PSRAM) survives only as allocateSnapshotBuffer's
-// fallback cap for the rare case a PSRAM allocation itself fails.
+// PSRAM is a hard requirement (main.cpp's setup() refuses to boot without
+// it): a motion alert can go to more than one Telegram user, so the JPEG
+// is fetched from the camera once, held in memory, and resent per
+// recipient (see triggerMotionAlert below). SNAPSHOT_MAX_BYTES (much
+// smaller than SNAPSHOT_MAX_BYTES_PSRAM) survives only as
+// allocateSnapshotBuffer's fallback cap if a PSRAM allocation itself fails.
 // ============================================================
 
-// Allocates `cap` bytes for a snapshot buffer, preferring PSRAM (always
-// available - see above) and falling back to internal RAM only if that
-// specific allocation fails, e.g. due to PSRAM pool fragmentation.
+// Allocates `cap` bytes for a snapshot buffer, preferring PSRAM and
+// falling back to internal RAM only if that allocation itself fails.
 static uint8_t* allocateSnapshotBuffer(size_t cap) {
   uint8_t* buf = (uint8_t*)heap_caps_malloc(cap, MALLOC_CAP_SPIRAM);
   if (!buf) buf = (uint8_t*)malloc(cap);
@@ -167,16 +158,9 @@ static bool readTelegramResponse(WiFiClientSecure& client) {
   return ok;
 }
 
-// Sends a buffer that's already fully in RAM to one chat. Used for every
-// recipient of a motion alert - the JPEG is fetched from the camera once
-// and this is called once per subscribed Telegram user, reusing the same
-// PSRAM buffer (see triggerMotionAlert). This used to have a sibling
-// sendTelegramPhotoStreamed() that relayed camera bytes straight into
-// Telegram's TLS connection without ever buffering the whole JPEG - dropped
-// because streaming consumes the camera's HTTP response as it goes, so it
-// can only ever serve a single recipient; multiple Telegram users need the
-// JPEG held in memory to resend, which is exactly why PSRAM is now
-// mandatory rather than just preferred (see this file's top comment).
+// Sends a buffer that's already fully in RAM to one chat - called once per
+// subscribed Telegram user, reusing the same PSRAM buffer (see
+// triggerMotionAlert).
 static bool sendTelegramPhotoBuffered(const uint8_t* jpg, size_t jpgLen, const String& caption,
                                        const String& chatId) {
   if (!jpg || jpgLen == 0) return false;
@@ -216,12 +200,10 @@ static bool sendTelegramPhotoBuffered(const uint8_t* jpg, size_t jpgLen, const S
 }
 
 // localtime_r, not gmtime_r - honors whatever POSIX TZ rule main.cpp's
-// setupTime() applied at boot (see WifiCredentials::posixTz), computing
-// DST-aware local time automatically. Falls back to plain UTC if no TZ was
-// configured (today's behavior, unchanged). The system clock itself always
-// stays true UTC either way - only this *display* value is affected;
-// onvif_soap.cpp's WS-Security timestamps read UTC directly via gmtime_r()
-// and are unaffected by TZ.
+// setupTime() applied at boot (WifiCredentials::posixTz), or plain UTC if
+// none configured. The system clock itself always stays true UTC either
+// way - only this *display* value is affected; WS-Security's timestamp
+// reads UTC directly via gmtime_r() and is unaffected by TZ.
 static String nowTimestampString() {
   time_t now; time(&now);
   struct tm tmStruct; localtime_r(&now, &tmStruct);
@@ -230,15 +212,9 @@ static String nowTimestampString() {
   return String(buf);
 }
 
-// Sends a plain text message via Telegram's sendMessage endpoint (JSON
-// body, not multipart - there's no photo). Shares writeAllBytes and
-// readTelegramResponse with the photo-send paths above so all three stay
-// consistent about what counts as success.
-
-// Low-level single-recipient send - the actual HTTPS round trip. Used both
-// directly (command replies, which must go back to whoever sent the
-// command, not everyone) and by sendTelegramMessage() below (broadcast to
-// every "system messages" user).
+// Low-level single-recipient send (JSON body, no photo) - the actual HTTPS
+// round trip. Used both directly (command replies go back to whoever sent
+// the command, not everyone) and by sendTelegramMessage() below (broadcast).
 static bool sendTelegramMessageTo(const String& chatId, const String& text) {
   WiFiClientSecure client;
   client.setCACert(TELEGRAM_ROOT_CA); // see telegram_ca.h if this needs refreshing
@@ -252,9 +228,6 @@ static bool sendTelegramMessageTo(const String& chatId, const String& text) {
     return false;
   }
 
-  // ArduinoJson handles the escaping (quotes, backslashes, control chars,
-  // unicode) instead of a hand-rolled jsonEscape() - see telegram_parse.cpp
-  // for the equivalent on the receiving side (parseTelegramUpdates).
   JsonDocument outDoc;
   outDoc["chat_id"] = chatId;
   outDoc["text"] = text;
@@ -360,29 +333,21 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st) {
     return;
   }
 
-  // Only past this point is a send actually attempted, so only past this
-  // point is the cooldown worth spending - marking it any earlier meant a
-  // camera with no subscribers, or one whose snapshot URI never resolved,
-  // silently "used up" every motion event's cooldown window doing nothing:
-  // the dashboard's Last Alert column would show a recent timestamp despite
-  // nothing ever being sent, and fixing the underlying config issue could
-  // still take a while to produce the next real alert. A failure past this
-  // point (HTTP GET, buffer fetch, Telegram send) still spends the
-  // cooldown, on purpose - that's what stops sustained motion from
-  // retry-storming a misbehaving camera every PULL_INTERVAL_MS.
+  // Cooldown is only spent once a send is actually attempted (past this
+  // point) - marking it earlier would let a camera with no subscribers, or
+  // an unresolved snapshot URI, silently burn every motion event's cooldown
+  // doing nothing. A failure past this point still spends it, on purpose,
+  // to stop sustained motion from retry-storming a misbehaving camera.
   st.lastAlert = nowMs;
   st.hasAlerted = true;
 
   unsigned int shots = (cfg.snapshotBurstCount > 0) ? cfg.snapshotBurstCount : 1;
 
-  // Each shot is its own fetch (a snapshot URI just returns "the current
-  // frame", so re-fetching is what makes consecutive shots actually differ)
-  // and its own fan-out to every recipient, same as the single-shot path
-  // always did - re-fetching per recipient instead would hammer cameras
-  // whose embedded HTTP stacks only tolerate 1-2 connections (see the
-  // boot-stagger comment in main.cpp). No artificial delay between shots -
-  // the camera fetch and the Telegram upload each take a real amount of
-  // time on their own, which is already enough spacing between frames.
+  // Each shot is its own fetch (re-fetching is what makes consecutive
+  // shots differ) and its own fan-out to every recipient - re-fetching per
+  // recipient instead would hammer cameras whose HTTP stacks only tolerate
+  // 1-2 connections. No artificial delay between shots: the fetch and
+  // upload each take real time on their own, already enough spacing.
   for (unsigned int i = 0; i < shots; i++) {
     size_t jpgLen = 0;
     uint8_t* jpg = fetchOneSnapshot(cfg, st, jpgLen);
@@ -419,13 +384,9 @@ void checkCameraOnlineStatus(const CameraConfig& cfg, CameraState& st) {
 // Remote on/off control (Telegram commands)
 //
 // pollTelegramCommands() is called periodically from loop() and does a
-// short (timeout=0, not long-poll) getUpdates round trip. Parsing is
-// hand-rolled rather than pulling in a JSON library - matches how the ONVIF
-// side of this project hand-rolls its XML parsing (see onvif_soap.cpp)
-// instead of taking on a dependency for what's a small, predictable
-// response shape. lastUpdateId isn't persisted - after a reboot the next
-// poll may redeliver a couple of already-applied commands, which is
-// harmless since /on and /off are idempotent.
+// short (timeout=0, not long-poll) getUpdates round trip. lastUpdateId
+// isn't persisted - after a reboot the next poll may redeliver a couple of
+// already-applied commands, harmless since /on and /off are idempotent.
 // ============================================================
 
 static const char* ALERT_PREF_NAMESPACE = "camctl";
@@ -448,8 +409,6 @@ static void saveAlertEnabledPref(size_t index, bool enabled) {
   prefs.putBool(key, enabled);
   prefs.end();
 }
-
-// jsonUnescape() itself now lives in telegram_parse.h/cpp.
 
 // Fetches a fresh snapshot from cfg/st right now and sends it only to
 // chatId (whoever asked) - unlike triggerMotionAlert, this is an explicit
@@ -520,13 +479,8 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
 
   cameraName.trim();
 
-  // Matched by prefix ("D01" matches "D01-FDir"), not just exact name, so
-  // you don't have to type the full camera name - an exact match (name
-  // equals the typed text) still works too, since a string always starts
-  // with itself. If the prefix is ambiguous (matches more than one enabled
-  // camera), nothing is applied and the reply lists what matched, rather
-  // than guessing which camera was meant. See test/test_telegram_parse for
-  // the matching behavior itself.
+  // Matched by prefix ("D01" matches "D01-FDir") - ambiguous matches get
+  // nothing applied and a reply listing what matched, rather than guessing.
   std::vector<size_t> matches = matchCamerasByPrefix(cameras, numCameras, cameraName);
 
   if (matches.size() > 1) {
