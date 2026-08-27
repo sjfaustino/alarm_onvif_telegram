@@ -467,9 +467,12 @@ static bool saveCameraSubmission(CameraConfig cam, const String& originalName, S
 }
 
 // Runs a live GetCapabilities -> GetServiceCapabilities/GetEventProperties
-// -> GetProfiles/GetSnapshotUri sequence against cfg without touching NVS,
-// reusing the same calls cameraSetupSequence (camera.cpp) makes at boot -
-// a pass here is a strong signal the real thing will work too.
+// -> GetProfiles/GetSnapshotUri -> CreatePullPointSubscription sequence
+// against cfg without touching NVS, reusing the same calls
+// cameraSetupSequence (camera.cpp) makes at boot - a pass here is a strong
+// signal the real thing will work too. Does create one real, temporary
+// subscription on the camera (same as the real thing would) - not
+// cleaned up afterward, so it just expires on its own.
 static String testCameraConnection(CameraConfig cfg) {
   if (cfg.deviceServiceUrl.length() == 0) {
     return "Enter a device service URL first, then Test Connection.";
@@ -493,6 +496,15 @@ static String testCameraConnection(CameraConfig cfg) {
   } else {
     result += " WARNING: the event service didn't respond to GetServiceCapabilities/GetEventProperties - "
               "this camera may not support ONVIF eventing at all.";
+  }
+
+  if (cameraCreatePullPoint(cfg, st)) {
+    result += " Subscription created successfully.";
+  } else {
+    result += " WARNING: CreatePullPointSubscription failed - motion events won't be received even "
+              "though the event service itself responds. See the Serial log for the SOAP fault; a "
+              "camera that's had several failed subscription attempts recently (e.g. from repeated "
+              "reboots) may just need time for old subscriptions to expire, or a power-cycle.";
   }
 
   if (cfg.snapshotUriOverride.length() > 0 || st.mediaServiceUrl.length() > 0) {
