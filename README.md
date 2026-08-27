@@ -123,8 +123,12 @@ practice; a single-core PSRAM chip is untested.
      ends up connecting); DHCP shows the board's current live-obtained settings,
      grayed out. Also an editable NTP server + resync interval (default `pool.ntp.org`,
      1 hour) - no port field, since ESP32's SNTP client hardcodes the standard UDP
-     port 123 and can't be pointed at a custom one. Saving writes to NVS immediately
-     but only takes effect after the
+     port 123 and can't be pointed at a custom one. And a local time offset from UTC
+     (in hours, decimals allowed for half-hour zones) - the board's system clock
+     always stays true UTC (ONVIF's WS-Security timestamps require it), this only
+     shifts what's shown in Telegram alert photo captions, and unlike everything
+     else on this page it applies immediately, no reboot needed. Saving writes to
+     NVS immediately but only takes effect after the
      next reboot - a live change could drop the board off the network with
      no way back to this page if the new credentials are wrong.
    - **Cameras** — add/edit/delete/view, each row showing live subscription status

@@ -47,6 +47,17 @@ struct WifiCredentials {
   // supported way to point it at a different port.
   String ntpServer;
   unsigned long ntpSyncIntervalMs = 3600000UL; // 1 hour, matches ESP-IDF's own default
+
+  // Display-only offset from UTC, in minutes (can be negative; supports
+  // half/quarter-hour zones like UTC+5:30). The board's actual system
+  // clock stays UTC always - main.cpp's setupTime() calls configTime(0, 0,
+  // ...) unconditionally - because ONVIF's WS-Security Created timestamp
+  // (isoTimeNow() in onvif_soap.cpp) must be true UTC for cameras to accept
+  // it; shifting the system clock itself would silently break that. This
+  // offset is applied only where a human reads a wall-clock time, e.g.
+  // telegram.cpp's nowTimestampString() for alert photo captions. Default 0
+  // (UTC) - today's behavior unchanged until set.
+  int timezoneOffsetMinutes = 0;
 };
 
 // Loads WiFi credentials + hostname + NTP config from NVS. On the very
