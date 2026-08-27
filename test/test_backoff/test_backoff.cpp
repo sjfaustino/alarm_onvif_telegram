@@ -42,6 +42,35 @@ void test_full_sequence_matches_both_callers_expectations(void) {
   TEST_ASSERT_EQUAL_UINT32(10000UL, delay); // back to start, not still capped
 }
 
+// ---- detectorSafeBackoffCapMs ----
+// The exact bug hit in the field: camera.cpp's retry backoff ceiling and
+// its offline-threshold alert were both independently 5 minutes, so a
+// camera whose backoff reached its ceiling could go quiet just long
+// enough between retries to false-trip "OFFLINE" on its own.
+
+void test_detectorSafeBackoffCapMs_half_the_threshold_when_under_global_cap(void) {
+  // 5 min threshold / 2 = 2.5 min, well under the 5 min global cap.
+  TEST_ASSERT_EQUAL_UINT32(150000UL, detectorSafeBackoffCapMs(300000UL, 300000UL, 10000UL));
+}
+
+// This is the actual field scenario: threshold and global cap both 5
+// minutes - half the threshold (2.5 min) must win, not the global cap.
+void test_detectorSafeBackoffCapMs_threshold_equal_to_global_cap(void) {
+  TEST_ASSERT_EQUAL_UINT32(150000UL, detectorSafeBackoffCapMs(300000UL, 300000UL, 10000UL));
+}
+
+// A generous offline threshold (e.g. 30 minutes) shouldn't let the retry
+// backoff grow past its own intended global ceiling.
+void test_detectorSafeBackoffCapMs_global_cap_wins_when_threshold_is_generous(void) {
+  TEST_ASSERT_EQUAL_UINT32(300000UL, detectorSafeBackoffCapMs(300000UL, 1800000UL, 10000UL));
+}
+
+// A very short configured threshold must not push the cap below the
+// backoff's own first-attempt delay - the result is never less than startMs.
+void test_detectorSafeBackoffCapMs_floored_at_startMs(void) {
+  TEST_ASSERT_EQUAL_UINT32(10000UL, detectorSafeBackoffCapMs(300000UL, 60UL, 10000UL));
+}
+
 int main(int argc, char** argv) {
   UNITY_BEGIN();
   RUN_TEST(test_first_failure_returns_start_delay);
@@ -49,5 +78,9 @@ int main(int argc, char** argv) {
   RUN_TEST(test_delay_is_capped_and_does_not_exceed_cap);
   RUN_TEST(test_delay_stays_at_cap_once_reached);
   RUN_TEST(test_full_sequence_matches_both_callers_expectations);
+  RUN_TEST(test_detectorSafeBackoffCapMs_half_the_threshold_when_under_global_cap);
+  RUN_TEST(test_detectorSafeBackoffCapMs_threshold_equal_to_global_cap);
+  RUN_TEST(test_detectorSafeBackoffCapMs_global_cap_wins_when_threshold_is_generous);
+  RUN_TEST(test_detectorSafeBackoffCapMs_floored_at_startMs);
   return UNITY_END();
 }

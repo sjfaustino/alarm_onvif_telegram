@@ -301,7 +301,16 @@ bool cameraSetupSequence(const CameraConfig& cfg, CameraState& st) {
 }
 
 // Cap for the per-camera subscription retry backoff below - see
-// CameraState::retryDelayMs's comment in camera.h.
+// CameraState::retryDelayMs's comment in camera.h. Also never allowed to
+// exceed half of this camera's own offlineThresholdMs (see the retry loop
+// below) - a SOAP fault still counts as "contact" (cameraSoapCall's
+// comment), so a camera stuck failing subscription retries keeps
+// refreshing lastContactMs, but only as often as it's actually retried.
+// Hit in the field: with this fixed at 5 minutes and offlineThresholdMs
+// defaulting to the same 5 minutes, a camera whose retries had backed off
+// to the ceiling could go quiet for just long enough between retries -
+// each of which still would have answered - to trip a false OFFLINE
+// alert on its own, with nothing actually wrong.
 static const unsigned long RETRY_BACKOFF_MAX_MS = 300000UL; // 5 minutes between retries
 
 // ============================================================
@@ -374,7 +383,12 @@ void cameraTaskFn(void* pvParameters) {
           st.retryStreak = 0;
           st.retryDelayMs = 0;
         } else {
-          st.retryDelayMs = nextBackoffDelayMs(st.retryDelayMs, RETRY_INTERVAL_MS, RETRY_BACKOFF_MAX_MS);
+          // Never let the retry cadence alone go slower than half this
+          // camera's offline threshold - see RETRY_BACKOFF_MAX_MS's and
+          // detectorSafeBackoffCapMs's (backoff.h) comments for why.
+          unsigned long retryBackoffCap =
+              detectorSafeBackoffCapMs(RETRY_BACKOFF_MAX_MS, cfg.offlineThresholdMs, RETRY_INTERVAL_MS);
+          st.retryDelayMs = nextBackoffDelayMs(st.retryDelayMs, RETRY_INTERVAL_MS, retryBackoffCap);
           st.retryStreak++;
           Serial.printf("[%s] Still not subscribed after %u consecutive attempt(s) - next retry in %lus.\n",
                         cfg.name.c_str(), (unsigned)st.retryStreak, st.retryDelayMs / 1000UL);
