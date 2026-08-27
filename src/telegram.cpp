@@ -170,6 +170,25 @@ static bool sendTelegramPhotoBuffered(const uint8_t* jpg, size_t jpgLen, const S
   return readTelegramResponse(client);
 }
 
+// Retries once (fresh TLS connection) on failure. A failed/stalled write
+// (see writeAllBytes' comment) doesn't necessarily mean the network is
+// unusable - concurrent camera polling contending for the one WiFi radio
+// has been observed to stall a large photo upload until mbedTLS gives up
+// and closes the connection; a second attempt often lands in a quieter
+// moment.
+static bool sendTelegramPhotoWithRetry(const uint8_t* jpg, size_t jpgLen, const String& caption,
+                                        const String& chatId) {
+  static const int MAX_ATTEMPTS = 2;
+  for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    if (sendTelegramPhotoBuffered(jpg, jpgLen, caption, chatId)) return true;
+    if (attempt < MAX_ATTEMPTS) {
+      Serial.printf("Telegram photo send to chat %s failed (attempt %d/%d) - retrying.\n",
+                    chatId.c_str(), attempt, MAX_ATTEMPTS);
+    }
+  }
+  return false;
+}
+
 // localtime_r, not gmtime_r - honors whatever POSIX TZ rule main.cpp's
 // setupTime() applied at boot (WifiCredentials::posixTz), or plain UTC if
 // none configured. The system clock itself always stays true UTC either
@@ -352,7 +371,7 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st) {
     if (shots > 1) caption += " (" + String(i + 1) + "/" + String(shots) + ")";
 
     for (auto& chatId : recipients) {
-      if (!sendTelegramPhotoBuffered(jpg, jpgLen, caption, chatId)) {
+      if (!sendTelegramPhotoWithRetry(jpg, jpgLen, caption, chatId)) {
         Serial.printf("[%s] Telegram send to chat %s failed.\n", cfg.name.c_str(), chatId.c_str());
       }
     }
@@ -430,7 +449,7 @@ static void sendOnDemandSnapshot(const CameraConfig& cfg, CameraState& st, const
   }
 
   String caption = cfg.name + " - " + nowTimestampString();
-  if (!sendTelegramPhotoBuffered(jpg, jpgLen, caption, chatId)) {
+  if (!sendTelegramPhotoWithRetry(jpg, jpgLen, caption, chatId)) {
     Serial.printf("[%s] On-demand snapshot send to chat %s failed.\n", cfg.name.c_str(), chatId.c_str());
   }
   free(jpg);
