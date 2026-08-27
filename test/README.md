@@ -28,6 +28,9 @@ this way:
 | `telegram_user_serialize`    | `telegram_users.cpp`                   | `TelegramUser` <-> NVS blob (de)serialization (also schema-versioned), and `telegramUserWantsCamera` |
 | `telegram_parse`             | `telegram.cpp`                         | `parseTelegramUpdates` (ArduinoJson, replacing hand-rolled brace-counting) and the `/on`/`/off`/`/snap` camera-name prefix matching |
 | `backoff`                    | `main.cpp` + `camera.cpp` (duplicated) | The doubling-with-a-cap retry delay formula, previously hand-written twice and prone to drifting apart |
+| `camera_parse`               | `camera.cpp`                           | ONVIF `GetProfiles` response parsing (`parseProfiles`), motion/tamper/signal-loss event classification (`classifyCameraEvent`), and the per-topic state-value lookup (`extractEventStateValue`) |
+| `telegram_multipart`         | `telegram.cpp`                         | `sendPhoto`'s multipart/form-data request builder (`buildMultipart`) - boundary/head/tail/Content-Length construction |
+| `format_utils`               | `main.cpp` + `webserver.cpp` (duplicated) | `formatUptime`, `formatElapsedSince`, `htmlEscape`, `urlEncode`, `extractHost` - `formatUptime` was independently hand-written in both files (byte-identical, silently able to drift) before this |
 
 ### Why the serialization modules are schema-versioned
 
@@ -59,16 +62,21 @@ now comes back empty instead.
 
 ## What's *not* covered, and what it would take
 
-- **`onvif_soap.cpp`'s `soapPost`/`makeSecurityHeader`/`isoTimeNow`, `camera.cpp`,
-  `telegram.cpp`'s send paths, `webserver.cpp`, `main.cpp`'s boot sequence** -
-  all fundamentally about talking to a network/clock/NVS that doesn't exist
-  on a CI runner. Testing these for real would mean either running against
-  actual ONVIF cameras and a real Telegram bot (not reproducible, not CI-safe),
-  or building a fake HTTPClient/Preferences/WiFi layer detailed enough to be
-  a second implementation worth its own tests.
+- **`onvif_soap.cpp`'s `soapPost`/`makeSecurityHeader`/`isoTimeNow`, the SOAP
+  call sequencing in `camera.cpp`, `telegram.cpp`'s actual send paths,
+  `webserver.cpp`'s route handlers, `main.cpp`'s boot sequence** - all
+  fundamentally about talking to a network/clock/NVS that doesn't exist on a
+  CI runner. Testing these for real would mean either running against actual
+  ONVIF cameras and a real Telegram bot (not reproducible, not CI-safe), or
+  building a fake HTTPClient/Preferences/WiFi layer detailed enough to be a
+  second implementation worth its own tests. The pure parsing/formatting
+  logic that used to be tangled up inside these files - what a response
+  *means*, not how it was fetched - is what's extracted into the `lib/`
+  modules above instead.
 - **The FreeRTOS task/concurrency behavior** (per-camera tasks, the task
-  watchdog, the web server's request handling) - needs either real hardware
-  or a FreeRTOS simulator; out of scope here.
+  watchdog, `CameraState`'s cross-task locking, the web server's request
+  handling) - needs either real hardware or a FreeRTOS simulator; out of
+  scope here.
 - **`webserver.cpp`'s ~1000 lines of hand-built HTML** - not logic so much
   as string assembly; the highest-value thing to test there would be that
   every user-controlled value passed to `htmlEscape()` actually gets there,

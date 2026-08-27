@@ -2,6 +2,7 @@
 #include "telegram_ca.h"
 #include "telegram_users.h"
 #include "telegram_parse.h"
+#include "telegram_multipart.h"
 #include <ArduinoJson.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
@@ -105,36 +106,6 @@ static uint8_t* fetchSnapshotBuffered(HTTPClient& http, size_t& outLen, size_t c
   return buf;
 }
 
-// Shared multipart header/trailer builder + response reader, used by both
-// the streamed and buffered send paths so they can't drift apart.
-struct TelegramMultipart {
-  String boundary, head, tail, requestLine;
-  size_t contentLength;
-};
-
-static TelegramMultipart buildMultipart(size_t jpgLen, const String& caption, const String& chatId) {
-  TelegramMultipart m;
-  m.boundary = "----ESP32Boundary7MA4YWxk";
-  m.head.reserve(160 + caption.length());
-  m.head += "--" + m.boundary + "\r\n";
-  m.head += "Content-Disposition: form-data; name=\"chat_id\"\r\n\r\n" + chatId + "\r\n";
-  m.head += "--" + m.boundary + "\r\n";
-  m.head += "Content-Disposition: form-data; name=\"caption\"\r\n\r\n" + caption + "\r\n";
-  m.head += "--" + m.boundary + "\r\n";
-  m.head += "Content-Disposition: form-data; name=\"photo\"; filename=\"snap.jpg\"\r\n";
-  m.head += "Content-Type: image/jpeg\r\n\r\n";
-  m.tail = "\r\n--" + m.boundary + "--\r\n";
-  m.contentLength = m.head.length() + jpgLen + m.tail.length();
-
-  m.requestLine.reserve(96 + strlen(TELEGRAM_BOT_TOKEN));
-  m.requestLine += "POST /bot" + String(TELEGRAM_BOT_TOKEN) + "/sendPhoto HTTP/1.1\r\n";
-  m.requestLine += "Host: api.telegram.org\r\n";
-  m.requestLine += "Content-Type: multipart/form-data; boundary=" + m.boundary + "\r\n";
-  m.requestLine += "Content-Length: " + String(m.contentLength) + "\r\n";
-  m.requestLine += "Connection: close\r\n\r\n";
-  return m;
-}
-
 static bool readTelegramResponse(WiFiClientSecure& client) {
   uint32_t t0 = millis();
   while (client.connected() && !client.available() && millis() - t0 < 10000) delay(10);
@@ -181,7 +152,7 @@ static bool sendTelegramPhotoBuffered(const uint8_t* jpg, size_t jpgLen, const S
     return false;
   }
 
-  TelegramMultipart m = buildMultipart(jpgLen, caption, chatId);
+  TelegramMultipart m = buildMultipart(jpgLen, caption, chatId, TELEGRAM_BOT_TOKEN);
 
   size_t sent = 0;
   sent += writeAllBytes(client, (const uint8_t*)m.requestLine.c_str(), m.requestLine.length());

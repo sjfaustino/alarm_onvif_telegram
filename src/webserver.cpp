@@ -2,10 +2,10 @@
 #include "telegram_users.h"
 #include "network_store.h"
 #include "auth_store.h"
+#include "format_utils.h"
 #include <PsychicHttp.h>
 #include <WiFi.h>
 #include <cctype>
-#include <cstdio>
 #include <Update.h>
 #include <esp_ota_ops.h>
 
@@ -19,60 +19,6 @@ static std::vector<CameraState>*  g_liveStates  = nullptr;
 // what makes the board boot with no login required. The Security page's
 // save handler updates it live, taking effect on the very next request.
 static AuthenticationMiddleware g_authMiddleware;
-
-static String formatUptime(unsigned long ms) {
-  unsigned long totalSec = ms / 1000UL;
-  unsigned long days  = totalSec / 86400UL;
-  unsigned long hours = (totalSec % 86400UL) / 3600UL;
-  unsigned long mins  = (totalSec % 3600UL) / 60UL;
-  String s;
-  if (days > 0) s += String(days) + "d ";
-  s += String(hours) + "h " + String(mins) + "m";
-  return s;
-}
-
-static String htmlEscape(const String& s) {
-  String out;
-  out.reserve(s.length());
-  for (size_t i = 0; i < s.length(); i++) {
-    char c = s[i];
-    switch (c) {
-      case '&':  out += "&amp;";  break;
-      case '<':  out += "&lt;";   break;
-      case '>':  out += "&gt;";   break;
-      case '"':  out += "&quot;"; break;
-      default:   out += c;        break;
-    }
-  }
-  return out;
-}
-
-// Percent-encodes anything outside the URL-safe set - used for putting a
-// camera name (mostly unrestricted free text) into a query string, e.g.
-// /cameras/edit?name=...
-static String urlEncode(const String& s) {
-  String out;
-  char buf[4];
-  for (size_t i = 0; i < s.length(); i++) {
-    unsigned char c = (unsigned char)s[i];
-    if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
-      out += (char)c;
-    } else {
-      snprintf(buf, sizeof(buf), "%%%02X", c);
-      out += buf;
-    }
-  }
-  return out;
-}
-
-// "Xh Ym ago" (reusing formatUptime's formatting) for a millis() timestamp,
-// or "just now" for anything under a minute - formatUptime alone would
-// print "0h 0m ago" for a fresh alert, which reads like stale data.
-static String formatElapsedSince(unsigned long ms) {
-  unsigned long elapsed = millis() - ms;
-  if (elapsed < 60000UL) return "just now";
-  return formatUptime(elapsed) + " ago";
-}
 
 // ============================================================
 // Dashboard shell - sidebar + content panel, plain server-rendered pages
@@ -424,7 +370,7 @@ static String renderCamerasPanel(const CameraConfig* prefill, bool isEdit) {
       liveStatus = subscribed ? "subscribed" : "not subscribed";
       if (offline) liveStatus += " - OFFLINE";
       if (!alertsEnabled) liveStatus += " (alerts OFF)";
-      if (hasAlerted) lastAlertStr = formatElapsedSince(lastAlert);
+      if (hasAlerted) lastAlertStr = formatElapsedSince(lastAlert, millis());
     } else if (!c.enabled) {
       liveStatus = "disabled";
     } else {

@@ -12,6 +12,7 @@
 #include "telegram.h"
 #include "webserver.h"
 #include "backoff.h"
+#include "format_utils.h"
 
 static std::vector<CameraConfig> g_cameras;
 static std::vector<CameraState> g_cameraStates;
@@ -22,15 +23,6 @@ static unsigned long lastCommandPollMs = 0;
 // True once startMonitoring() has actually run - see its comment for why
 // this can happen later than setup() if WiFi wasn't up yet at boot.
 static bool g_monitoringStarted = false;
-
-// Extracts "host[:port]" out of a device service URL, for the camera listing.
-static String extractHost(const String& url) {
-  int schemeEnd = url.indexOf("://");
-  int start = (schemeEnd >= 0) ? schemeEnd + 3 : 0;
-  int pathStart = url.indexOf('/', start);
-  int end = (pathStart >= 0) ? pathStart : (int)url.length();
-  return url.substring(start, end);
-}
 
 static void printCameraList() {
   Serial.println("\n--- Configured cameras ---");
@@ -207,17 +199,6 @@ static void setupTime() {
     Serial.print(".");
   }
   Serial.println("\nWARNING: NTP synchronization failed.");
-}
-
-static String formatUptime(unsigned long ms) {
-  unsigned long totalSec = ms / 1000UL;
-  unsigned long days  = totalSec / 86400UL;
-  unsigned long hours = (totalSec % 86400UL) / 3600UL;
-  unsigned long mins  = (totalSec % 3600UL) / 60UL;
-  String s;
-  if (days > 0) s += String(days) + "d ";
-  s += String(hours) + "h " + String(mins) + "m";
-  return s;
 }
 
 // Periodic "still alive" ping - a missing heartbeat (or an unexpected boot

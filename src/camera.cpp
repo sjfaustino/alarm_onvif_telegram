@@ -2,6 +2,7 @@
 #include "onvif_soap.h"
 #include "telegram.h"
 #include "backoff.h"
+#include "camera_parse.h"
 #include <WiFi.h>
 #include <vector>
 #include <cstring>
@@ -103,40 +104,6 @@ bool cameraGetEventProperties(const CameraConfig& cfg, CameraState& st) {
     return false;
   }
   return true;
-}
-
-// Restricted to actual <...Profiles ...> opening tags, not any "token=" in
-// the document - GetProfiles responses also carry tokens on nested
-// VideoEncoderConfiguration/VideoSourceConfiguration elements.
-struct ProfileInfo { String token; String name; };
-
-static std::vector<ProfileInfo> parseProfiles(const String& xml) {
-  std::vector<ProfileInfo> profiles;
-  int pos = 0;
-  while (true) {
-    int p = xml.indexOf("Profiles ", pos);
-    if (p < 0) break;
-    bool isOpeningTag = (p > 0) && (xml[p - 1] == ':' || xml[p - 1] == '<');
-    if (!isOpeningTag) { pos = p + 9; continue; }
-
-    int tagEnd = xml.indexOf(">", p);
-    if (tagEnd < 0) break;
-    String tag = xml.substring(p, tagEnd);
-
-    String token = findAttributeInTag(tag, "token"); // tolerates single- or double-quoted attributes
-
-    String name;
-    int namePos = xml.indexOf("Name>", tagEnd);
-    if (namePos >= 0 && namePos - tagEnd < 300) {
-      int cs = namePos + 5;
-      int ce = xml.indexOf("</", cs);
-      if (ce > cs) name = xml.substring(cs, ce);
-    }
-
-    if (token.length() > 0) profiles.push_back({token, name});
-    pos = tagEnd + 1;
-  }
-  return profiles;
 }
 
 bool cameraFetchProfileAndSnapshotUri(const CameraConfig& cfg, CameraState& st) {
@@ -251,57 +218,27 @@ bool cameraCreatePullPoint(const CameraConfig& cfg, CameraState& st) {
   return true;
 }
 
-// Scoped to the NotificationMessage block containing topicKeyword, not the
-// whole response - otherwise a batch with several topics would report
-// whichever State/IsMotion happened to appear first in the XML, regardless
-// of which topic this log line is actually about. Recognizes both
-// Name="State" and Name="IsMotion" - different stacks name the boolean
-// differently for the same kind of event.
+// Logs extractEventStateValue's result for topicKeyword (camera_parse.h) -
+// the actual search logic is there and unit-tested; this is just the
+// Serial-log wrapper camera.cpp needs.
 static void printEventState(const CameraConfig& cfg, const String& xml, const String& topicKeyword) {
-  int topicPos = xml.indexOf(topicKeyword);
-  if (topicPos < 0) return;
-  int blockEnd = xml.indexOf("</wsnt:NotificationMessage>", topicPos);
-  if (blockEnd < 0) blockEnd = xml.length();
-
-  int p = xml.indexOf("Name=\"State\"", topicPos);
-  if (p < 0 || p >= blockEnd) p = xml.indexOf("Name=\"state\"", topicPos);
-  if (p < 0 || p >= blockEnd) p = xml.indexOf("Name=\"IsMotion\"", topicPos);
-  if (p < 0 || p >= blockEnd) return;
-
-  int valuePos = xml.indexOf("Value=", p);
-  if (valuePos < 0 || valuePos >= blockEnd) return;
-  int start = valuePos + strlen("Value=");
-  if (start >= (int)xml.length()) return;
-  char quote = xml[start];
-  if (quote != '"' && quote != '\'') return;
-  start++;
-  int end = xml.indexOf(quote, start);
-  if (end < 0) return;
-
-  String state = xml.substring(start, end);
-  state.trim();
-  Serial.printf("[%s] State = %s\n", cfg.name.c_str(), state.c_str());
+  String state = extractEventStateValue(xml, topicKeyword);
+  if (state.length() > 0) Serial.printf("[%s] State = %s\n", cfg.name.c_str(), state.c_str());
 }
 
 static void parseEvents(const CameraConfig& cfg, CameraState& st, const String& xml) {
-  bool anyTrue = xml.indexOf("Value=\"true\"") >= 0;
-  if (!anyTrue && !VERBOSE_SOAP_LOG) return;
+  CameraEventClassification ev = classifyCameraEvent(xml);
+  if (!ev.anyTrue && !VERBOSE_SOAP_LOG) return;
+  if (!ev.motionAlarm && !ev.cellMotion && !ev.signalLoss && !ev.tamper) return;
 
-  bool motionAlarm = xml.indexOf("MotionAlarm") >= 0;
-  bool cellMotion  = xml.indexOf("CellMotionDetector") >= 0;
-  bool signalLoss  = xml.indexOf("SignalLoss") >= 0;
-  bool tamper      = xml.indexOf("TamperDetector") >= 0;
-
-  if (!motionAlarm && !cellMotion && !signalLoss && !tamper) return;
-
-  if (motionAlarm) { Serial.printf("[%s] MOTION ALARM EVENT\n", cfg.name.c_str()); printEventState(cfg, xml, "MotionAlarm"); }
-  if (cellMotion)  { Serial.printf("[%s] CELL MOTION EVENT\n", cfg.name.c_str());  printEventState(cfg, xml, "CellMotionDetector"); }
-  if (signalLoss)  { Serial.printf("[%s] SIGNAL LOSS EVENT\n", cfg.name.c_str());  printEventState(cfg, xml, "SignalLoss"); }
-  if (tamper)      { Serial.printf("[%s] TAMPER EVENT\n", cfg.name.c_str());       printEventState(cfg, xml, "TamperDetector"); }
+  if (ev.motionAlarm) { Serial.printf("[%s] MOTION ALARM EVENT\n", cfg.name.c_str()); printEventState(cfg, xml, "MotionAlarm"); }
+  if (ev.cellMotion)  { Serial.printf("[%s] CELL MOTION EVENT\n", cfg.name.c_str());  printEventState(cfg, xml, "CellMotionDetector"); }
+  if (ev.signalLoss)  { Serial.printf("[%s] SIGNAL LOSS EVENT\n", cfg.name.c_str());  printEventState(cfg, xml, "SignalLoss"); }
+  if (ev.tamper)      { Serial.printf("[%s] TAMPER EVENT\n", cfg.name.c_str());       printEventState(cfg, xml, "TamperDetector"); }
 
   // Doesn't distinguish which topic was true if several arrive in the same
   // batch - would need per-NotificationMessage parsing to fix.
-  if ((motionAlarm || cellMotion) && anyTrue) {
+  if ((ev.motionAlarm || ev.cellMotion) && ev.anyTrue) {
     triggerMotionAlert(cfg, st);
   }
 }
