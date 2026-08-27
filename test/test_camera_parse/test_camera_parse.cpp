@@ -125,6 +125,52 @@ void test_classifyCameraEvent_no_recognized_topic(void) {
   TEST_ASSERT_FALSE(ev.tamper);
 }
 
+// ---- motionEventFired ----
+
+// A batch where the motion topic itself reports true - the baseline case.
+void test_motionEventFired_true_for_motion_alarm_reporting_true(void) {
+  String xml = "<wsnt:NotificationMessage><tt:Topic>MotionAlarm</tt:Topic>"
+               "<tt:SimpleItem Name=\"State\" Value=\"true\"/></wsnt:NotificationMessage>";
+  auto ev = classifyCameraEvent(xml);
+  TEST_ASSERT_TRUE(motionEventFired(xml, ev));
+}
+
+// The bug this exists to catch: CellMotionDetector's own state in this
+// batch is false (motion just ended), but an unrelated SignalLoss topic in
+// the same PullMessages response reports Value="true", which used to make
+// ev.anyTrue true and fire a motion alert anyway. motionEventFired must
+// check CellMotionDetector's own scoped state, not the body-wide flag.
+void test_motionEventFired_false_when_only_an_unrelated_topic_is_true(void) {
+  String xml = "<wsnt:NotificationMessage><tt:Topic>CellMotionDetector</tt:Topic>"
+               "<tt:SimpleItem Name=\"State\" Value=\"false\"/></wsnt:NotificationMessage>"
+               "<wsnt:NotificationMessage><tt:Topic>SignalLoss</tt:Topic>"
+               "<tt:SimpleItem Name=\"State\" Value=\"true\"/></wsnt:NotificationMessage>";
+  auto ev = classifyCameraEvent(xml);
+  TEST_ASSERT_TRUE(ev.anyTrue);   // sanity: the old, buggy signal is still true here
+  TEST_ASSERT_TRUE(ev.cellMotion);
+  TEST_ASSERT_FALSE(motionEventFired(xml, ev)); // but the fix must not fire on it
+}
+
+// Same shape, but the motion topic itself is the one that's true - must
+// still fire even with an unrelated topic also present in the batch.
+void test_motionEventFired_true_when_motion_topic_itself_is_true_alongside_another(void) {
+  String xml = "<wsnt:NotificationMessage><tt:Topic>TamperDetector</tt:Topic>"
+               "<tt:SimpleItem Name=\"State\" Value=\"false\"/></wsnt:NotificationMessage>"
+               "<wsnt:NotificationMessage><tt:Topic>MotionAlarm</tt:Topic>"
+               "<tt:SimpleItem Name=\"State\" Value=\"true\"/></wsnt:NotificationMessage>";
+  auto ev = classifyCameraEvent(xml);
+  TEST_ASSERT_TRUE(motionEventFired(xml, ev));
+}
+
+// No motion-relevant topic present at all (only Tamper) - never fires,
+// regardless of anyTrue.
+void test_motionEventFired_false_when_no_motion_topic_present(void) {
+  String xml = "<wsnt:NotificationMessage><tt:Topic>TamperDetector</tt:Topic>"
+               "<tt:SimpleItem Name=\"State\" Value=\"true\"/></wsnt:NotificationMessage>";
+  auto ev = classifyCameraEvent(xml);
+  TEST_ASSERT_FALSE(motionEventFired(xml, ev));
+}
+
 int main(int argc, char** argv) {
   UNITY_BEGIN();
   RUN_TEST(test_parseProfiles_finds_token_and_name);
@@ -141,5 +187,9 @@ int main(int argc, char** argv) {
   RUN_TEST(test_classifyCameraEvent_detects_motion_alarm);
   RUN_TEST(test_classifyCameraEvent_value_false_is_not_anyTrue);
   RUN_TEST(test_classifyCameraEvent_no_recognized_topic);
+  RUN_TEST(test_motionEventFired_true_for_motion_alarm_reporting_true);
+  RUN_TEST(test_motionEventFired_false_when_only_an_unrelated_topic_is_true);
+  RUN_TEST(test_motionEventFired_true_when_motion_topic_itself_is_true_alongside_another);
+  RUN_TEST(test_motionEventFired_false_when_no_motion_topic_present);
   return UNITY_END();
 }

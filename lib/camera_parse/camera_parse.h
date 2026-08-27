@@ -29,9 +29,14 @@ std::vector<ProfileInfo> parseProfiles(const String& xml);
 String extractEventStateValue(const String& xml, const String& topicKeyword);
 
 // Which alarm topics are present in a PullMessages response body, and
-// whether any of them actually fired (Value="true" anywhere in the body -
-// PullMessages batches can report changes back to false too, which this
-// distinguishes from an actual event).
+// whether *anything* in the whole body reported Value="true" - anyTrue is
+// NOT scoped to any one topic (PullMessages batches can report changes back
+// to false too, which this distinguishes from "some event in this body
+// actually fired", but not from *which* one). A batch carrying several
+// different topics is normal (MessageLimit=20 in camera.cpp's PullMessages
+// call), so anyTrue can be set entirely by a topic unrelated to
+// motionAlarm/cellMotion - see motionEventFired() below for the check that
+// actually matters for deciding whether to send a motion alert.
 struct CameraEventClassification {
   bool anyTrue = false;
   bool motionAlarm = false;
@@ -40,3 +45,15 @@ struct CameraEventClassification {
   bool tamper = false;
 };
 CameraEventClassification classifyCameraEvent(const String& xml);
+
+// Whether a motion-relevant topic (MotionAlarm or CellMotionDetector) that
+// classifyCameraEvent found present in this batch *itself* reported
+// State/IsMotion="true", via extractEventStateValue's per-NotificationMessage
+// scoping - NOT ev.anyTrue, which is a body-wide flag that a same-batch,
+// unrelated topic (SignalLoss, TamperDetector) can set to true while the
+// motion topic's own state is actually false (e.g. "motion just ended").
+// Checking ev.anyTrue alone - what camera.cpp's parseEvents used to do -
+// fires a motion alert off an unrelated topic's true value, with the log
+// line for the motion topic itself confusingly showing "State = false"
+// right before it.
+bool motionEventFired(const String& xml, const CameraEventClassification& ev);

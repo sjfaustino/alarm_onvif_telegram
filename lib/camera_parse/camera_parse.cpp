@@ -65,3 +65,9 @@ CameraEventClassification classifyCameraEvent(const String& xml) {
   ev.tamper      = xml.indexOf("TamperDetector") >= 0;
   return ev;
 }
+
+bool motionEventFired(const String& xml, const CameraEventClassification& ev) {
+  if (ev.motionAlarm && extractEventStateValue(xml, "MotionAlarm") == "true") return true;
+  if (ev.cellMotion && extractEventStateValue(xml, "CellMotionDetector") == "true") return true;
+  return false;
+}

@@ -236,9 +236,13 @@ static void parseEvents(const CameraConfig& cfg, CameraState& st, const String& 
   if (ev.signalLoss)  { Serial.printf("[%s] SIGNAL LOSS EVENT\n", cfg.name.c_str());  printEventState(cfg, xml, "SignalLoss"); }
   if (ev.tamper)      { Serial.printf("[%s] TAMPER EVENT\n", cfg.name.c_str());       printEventState(cfg, xml, "TamperDetector"); }
 
-  // Doesn't distinguish which topic was true if several arrive in the same
-  // batch - would need per-NotificationMessage parsing to fix.
-  if ((ev.motionAlarm || ev.cellMotion) && ev.anyTrue) {
+  // motionEventFired checks MotionAlarm/CellMotionDetector's own scoped
+  // State/IsMotion value, not ev.anyTrue (a body-wide flag a same-batch,
+  // unrelated topic - e.g. SignalLoss/TamperDetector - can set on its own,
+  // even while the motion topic's own state is actually false). See
+  // motionEventFired's comment in camera_parse.h for why that distinction
+  // matters here.
+  if (motionEventFired(xml, ev)) {
     triggerMotionAlert(cfg, st);
   }
 }
