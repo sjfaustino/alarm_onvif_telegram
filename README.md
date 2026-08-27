@@ -46,10 +46,12 @@ Arduino-ESP32/IDF releases.
   once it's fully received and its checksum verifies.
 - Any number of Telegram users, each independently configured for which cameras
   they hear from (specific list or "all, including future ones"), whether they get
-  the heartbeat/boot messages, and whether they're allowed to send `/on`, `/off`,
-  `/snap`, `/status` commands (which apply per-camera, matched by name or prefix,
-  and reply to whoever sent them - `/snap` fetches and sends a fresh photo on
-  demand, even from a camera currently muted with `/off`).
+  the heartbeat/boot messages, and two independent command permissions: `/on`,
+  `/off`, `/status` (toggle/view per-camera alerts) and `/snap` (fetch and send a
+  fresh photo on demand, even from a camera currently muted with `/off`) - a user
+  can have either, both, or neither, since pulling a live photo is a different
+  kind of trust than silencing alerts. Commands are matched by camera name or
+  prefix and reply to whoever sent them.
 - Dashboard login is opt-in but boots disabled: the board comes up with no password
   and a standing banner nagging you to set one, on every page, until you do. Once
   set (Security page), HTTP Basic Auth is required on every dashboard route,
@@ -140,8 +142,9 @@ practice; a single-core PSRAM chip is untested.
      Network page's WiFi password. Adding, editing, or deleting writes to NVS
      immediately but only takes effect after the next reboot.
    - **Telegram Users** — add/edit/delete/view recipients. Each one picks specific
-     cameras or "all cameras", and independently toggles heartbeat/boot messages and
-     command permission. Takes effect immediately, no reboot needed.
+     cameras or "all cameras", and independently toggles heartbeat/boot messages,
+     `/on`/`/off`/`/status` permission, and `/snap` permission (separately, since
+     they're different kinds of trust). Takes effect immediately, no reboot needed.
    - **Firmware** — upload a `.bin` (built with `pio run -e esp32s3`) to reflash
      over the network instead of USB. Writes into the currently-inactive OTA app
      partition and only reboots into it once the upload is complete and its

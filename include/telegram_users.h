@@ -7,7 +7,7 @@
 // Replaces the old single hardcoded TELEGRAM_CHAT_ID: any number of chat
 // IDs can now receive alerts, each independently configured for which
 // cameras they hear from, whether they get heartbeat/boot messages, and
-// whether they're allowed to send /on, /off, /status commands.
+// whether they're allowed to send /on, /off, /status, and/or /snap.
 struct TelegramUser {
   String name;   // display label, unique key (like CameraConfig::name)
   String chatId; // numeric Telegram chat id, as a string
@@ -20,6 +20,14 @@ struct TelegramUser {
 
   bool systemMessages = false; // heartbeat + boot-online messages
   bool canCommand = false;     // may send /on, /off, /status
+
+  // Independent of canCommand: may send /snap to pull a live photo on
+  // demand from any camera. Split out separately because it's a different
+  // kind of trust than toggling alerts on/off - e.g. a user you want able
+  // to check in on a camera right now, but not silence its alerts, or vice
+  // versa. See handleTelegramCommand in telegram.cpp for how each command
+  // is gated.
+  bool canSnap = false;
 };
 
 // True if this user should receive alerts for camera `cameraName`.
@@ -28,9 +36,9 @@ bool telegramUserWantsCamera(const TelegramUser& user, const String& cameraName)
 // Loads the Telegram user list from NVS. On the very first boot after
 // upgrading to this (nothing in NVS yet), seeds a single user named "Admin"
 // from secrets.h's TELEGRAM_CHAT_ID, with allCameras/systemMessages/
-// canCommand all true - so the board keeps working exactly as before
-// (one recipient, gets everything, can command) until you add more users
-// or adjust that one through the web UI.
+// canCommand/canSnap all true - so the board keeps working exactly as
+// before (one recipient, gets everything, can command) until you add more
+// users or adjust that one through the web UI.
 std::vector<TelegramUser> loadTelegramUsers();
 
 // Overwrites the entire persisted user list.

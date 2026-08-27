@@ -55,10 +55,16 @@ bool loadAlertEnabledPref(size_t index);
 //                                the alert cooldown, since it's an explicit
 //                                one-off request, not a motion alert
 //   /status                    - list every enabled camera's on/off state
-// Each /on or /off toggle is persisted via NVS so it survives a reboot. The
-// reply (and, for /snap, the photo) goes back to whichever chat sent the
-// command. Commands from a chat ID that doesn't belong to a Telegram user
-// with canCommand enabled (see telegram_users.h) are ignored. Call
+// /on, /off, and /status require TelegramUser::canCommand; /snap requires
+// the separate TelegramUser::canSnap instead - a user can have either, both,
+// or neither (see telegram_users.h for why they're independent). Each /on
+// or /off toggle is persisted via NVS so it survives a reboot. The reply
+// (and, for /snap, the photo) goes back to whichever chat sent the command.
+// A chat ID that doesn't belong to any Telegram user, or belongs to one
+// with neither permission, is ignored outright; one with only one of the
+// two gets a plain "not authorized" reply if they try a command outside
+// their scope, rather than being silently ignored like a stranger would be.
+// Call
 // periodically from loop() (e.g. every TELEGRAM_COMMAND_POLL_MS) - each
 // call is one short, non-blocking-long-poll HTTPS round trip (plus, for a
 // /snap, the snapshot fetch/upload itself), safe to call often.

@@ -40,7 +40,8 @@ static String serializeUser(const TelegramUser& u) {
   s += (u.allCameras ? "1" : "0");   s += FIELD_SEP;
   s += cameras;                      s += FIELD_SEP;
   s += (u.systemMessages ? "1" : "0"); s += FIELD_SEP;
-  s += (u.canCommand ? "1" : "0");
+  s += (u.canCommand ? "1" : "0");   s += FIELD_SEP;
+  s += (u.canSnap ? "1" : "0");
   return s;
 }
 
@@ -61,6 +62,11 @@ static TelegramUser deserializeUser(const String& record) {
   u.allCameras     = fields[2] == "1";
   u.systemMessages = fields[4] == "1";
   u.canCommand     = fields[5] == "1";
+  // canSnap was added after the original 6-field format - records saved
+  // before it existed keep TelegramUser's default (false) via fields.size().
+  if (fields.size() >= 7) {
+    u.canSnap = fields[6] == "1";
+  }
 
   String camerasField = fields[3];
   int start = 0;
@@ -88,11 +94,12 @@ std::vector<TelegramUser> loadTelegramUsers() {
     admin.allCameras = true;
     admin.systemMessages = true;
     admin.canCommand = true;
+    admin.canSnap = true;
     users.push_back(admin);
     saveTelegramUsers(users);
     Serial.println("[telegram_users] First boot with NVS-backed user storage - seeded one "
                     "\"Admin\" user from secrets.h's TELEGRAM_CHAT_ID (all cameras, system "
-                    "messages, can command).");
+                    "messages, can command, can snap).");
     return users;
   }
 
