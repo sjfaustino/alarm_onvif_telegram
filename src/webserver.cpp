@@ -377,13 +377,20 @@ static String renderCamerasPanel(const CameraConfig* prefill, bool isEdit) {
       liveStatus = "not running - reboot to apply";
     }
 
+    // Icon + native title-attribute tooltip instead of the full text, so a
+    // long note doesn't blow out the column width - no JS needed, the
+    // browser renders the tooltip on hover itself.
+    String notesCell = c.notes.length() > 0
+        ? "<span title=\"" + htmlEscape(c.notes) + "\" style=\"cursor:help;\">\xF0\x9F\x93\x9D</span>"
+        : "";
+
     html += "<tr><td>" + htmlEscape(c.name) + "</td><td>" + htmlEscape(c.deviceServiceUrl) +
             "</td><td>" + (c.enabled ? "yes" : "no") + "</td><td>" +
             String(c.alertCooldownMs / 1000) + "s</td><td>" +
             String(c.offlineThresholdMs / 60000UL) + "m</td><td>" +
             String(c.snapshotBurstCount) + "</td><td>" + liveStatus + "</td><td>" +
             lastAlertStr + "</td><td>" +
-            htmlEscape(c.notes) + "</td><td>";
+            notesCell + "</td><td>";
     html += "<a href=\"/cameras/edit?name=" + urlEncode(c.name) + "\">Edit</a> ";
     html += "<form class=\"inline\" method=\"POST\" action=\"/delete\" "
             "onsubmit=\"return confirm('Delete " + htmlEscape(c.name) + "?');\">";
