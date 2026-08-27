@@ -482,7 +482,7 @@ static void sendOnDemandSnapshot(const CameraConfig& cfg, CameraState& st, const
 
 static void handleTelegramCommand(const TelegramUser& sender, const String& text, const CameraConfig cameras[],
                                    CameraState states[], size_t numCameras) {
-  Serial.printf("[Telegram] Command from %s: \"%s\"\n", sender.name.c_str(), text.c_str());
+  Serial.printf("[Telegram] Command from user \"%s\": \"%s\"\n", sender.name.c_str(), text.c_str());
 
   if (text.equalsIgnoreCase("/status")) {
     if (!sender.canCommand) {
@@ -496,7 +496,7 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
       if (!cameras[i].enabled) continue;
       msg += String(cameras[i].name) + ": " + (states[i].alertsEnabled ? "ON" : "OFF") + "\n";
     }
-    Serial.println("[Telegram] Replying with camera status.");
+    Serial.printf("[Telegram] Replying to user \"%s\" with camera status.\n", sender.name.c_str());
     sendTelegramMessageTo(sender.chatId, msg);
     return;
   }
@@ -506,7 +506,7 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
       sendTelegramMessageTo(sender.chatId, "You're not authorized to use /uptime.");
       return;
     }
-    Serial.println("[Telegram] Replying with uptime.");
+    Serial.printf("[Telegram] Replying to user \"%s\" with uptime.\n", sender.name.c_str());
     sendTelegramMessageTo(sender.chatId, "Uptime: " + formatUptime(millis()));
     return;
   }
@@ -516,7 +516,7 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
       sendTelegramMessageTo(sender.chatId, "You're not authorized to use /reset.");
       return;
     }
-    Serial.printf("[Telegram] Reboot requested by %s via /reset.\n", sender.name.c_str());
+    Serial.printf("[Telegram] Reboot requested by user \"%s\" via /reset.\n", sender.name.c_str());
     // Reply before restarting - ESP.restart() never returns, so this is
     // the last chance to confirm the command was actually received.
     sendTelegramMessageTo(sender.chatId, "\xE2\x99\xBB\xEF\xB8\x8F Rebooting now...");
@@ -543,7 +543,7 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
   // why (different kind of trust: pulling a live photo vs. toggling alerts).
   bool authorized = (cmd == Cmd::Snap) ? sender.canSnap : sender.canCommand;
   if (!authorized) {
-    Serial.printf("[Telegram] %s not authorized for /%s.\n", sender.name.c_str(), verb);
+    Serial.printf("[Telegram] User \"%s\" not authorized for /%s.\n", sender.name.c_str(), verb);
     sendTelegramMessageTo(sender.chatId, "You're not authorized to use /" + String(verb) + ".");
     return;
   }
@@ -557,14 +557,16 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
   if (matches.size() > 1) {
     String list;
     for (size_t idx : matches) { if (list.length() > 0) list += ", "; list += cameras[idx].name; }
-    Serial.printf("[Telegram] /%s target \"%s\" is ambiguous: %s\n", verb, cameraName.c_str(), list.c_str());
+    Serial.printf("[Telegram] /%s target \"%s\" from user \"%s\" is ambiguous: %s\n", verb,
+                  cameraName.c_str(), sender.name.c_str(), list.c_str());
     sendTelegramMessageTo(sender.chatId, "\"" + cameraName + "\" matches more than one camera: " + list +
                                           " - be more specific.");
     return;
   }
 
   if (matches.empty()) {
-    Serial.printf("[Telegram] /%s target not found or disabled: \"%s\"\n", verb, cameraName.c_str());
+    Serial.printf("[Telegram] /%s target not found or disabled: \"%s\" (user \"%s\")\n", verb,
+                  cameraName.c_str(), sender.name.c_str());
     sendTelegramMessageTo(sender.chatId, "Unknown or disabled camera: " + cameraName);
     return;
   }
@@ -572,7 +574,8 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
   size_t i = matches[0];
 
   if (cmd == Cmd::Snap) {
-    Serial.printf("[%s] On-demand snapshot requested via Telegram.\n", cameras[i].name.c_str());
+    Serial.printf("[%s] On-demand snapshot requested by user \"%s\" via Telegram.\n",
+                  cameras[i].name.c_str(), sender.name.c_str());
     sendOnDemandSnapshot(cameras[i], states[i], sender.chatId);
     return;
   }
@@ -580,7 +583,8 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
   bool turnOn = (cmd == Cmd::On);
   { CameraStateLock lock(states[i]); states[i].alertsEnabled = turnOn; } // read cross-task by camera.cpp/webserver.cpp
   saveAlertEnabledPref(i, turnOn);
-  Serial.printf("[%s] Alerts turned %s via Telegram.\n", cameras[i].name.c_str(), turnOn ? "ON" : "OFF");
+  Serial.printf("[%s] Alerts turned %s via Telegram by user \"%s\".\n", cameras[i].name.c_str(),
+                turnOn ? "ON" : "OFF", sender.name.c_str());
   sendTelegramMessageTo(sender.chatId, String(cameras[i].name) + " alerts: " + (turnOn ? "ON" : "OFF"));
 }
 
