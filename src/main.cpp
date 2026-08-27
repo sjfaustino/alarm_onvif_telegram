@@ -242,7 +242,14 @@ static String formatUptime(unsigned long ms) {
 static void sendHeartbeat() {
   String msg = "\xF0\x9F\x92\x93 Camera monitor heartbeat\n";
   msg += "Uptime: " + formatUptime(millis()) + "\n";
-  msg += "Free heap: " + String(ESP.getFreeHeap()) + " bytes\n";
+  // getFreeHeap() is a snapshot (recovers after a transient dip); the
+  // lifetime minimum alongside it is what actually reveals a slow leak -
+  // if that number keeps dropping heartbeat after heartbeat (every
+  // HEARTBEAT_INTERVAL_MS), something's leaking. If it settles and stays
+  // flat, the current free-heap level is just normal steady-state overhead
+  // (WiFi/mbedTLS/PsychicHttp/per-camera task stacks), not a leak.
+  msg += "Free heap: " + String(ESP.getFreeHeap()) + " bytes (min ever: " +
+         String(ESP.getMinFreeHeap()) + ")\n";
   for (size_t i = 0; i < g_cameras.size(); i++) {
     if (!g_cameras[i].enabled) continue;
     msg += g_cameras[i].name + ": " +

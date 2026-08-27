@@ -22,8 +22,10 @@ Arduino-ESP32/IDF releases.
 - Per-camera quirks handled via config flags: WS-Security vs. HTTP Basic Auth,
   optional `InitialTerminationTime`/`ReplyTo` (needed by some Xiongmai-derived
   stacks), snapshot URI override, and preferred video profile.
-- Periodic Telegram heartbeat (uptime, free heap, per-camera subscription status)
-  so a silently hung or endlessly-retrying board doesn't go unnoticed.
+- Periodic Telegram heartbeat (uptime, free heap alongside its lifetime minimum -
+  a steady minimum means normal overhead, a minimum that keeps dropping means a
+  leak - and per-camera subscription status) so a silently hung, endlessly-retrying,
+  or slowly leaking board doesn't go unnoticed.
 - Offline camera detection: if a camera goes without answering *any* SOAP request
   for longer than its own offline threshold (per-camera, default 5 minutes), it's
   flagged OFFLINE and an immediate Telegram alert goes out (and another when it
