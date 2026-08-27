@@ -4,6 +4,7 @@
 #include <esp_heap_caps.h>
 #include <esp_sntp.h>
 #include <esp_task_wdt.h>
+#include <cstdlib>
 #include "config.h"
 #include "camera.h"
 #include "camera_store.h"
@@ -208,6 +209,21 @@ static void setupTime() {
   // this first one. No port setting exists here on purpose - ESP32's SNTP
   // client hardcodes the standard NTP UDP port 123.
   esp_sntp_set_sync_interval(g_wifiCredentials.ntpSyncIntervalMs);
+
+  // configTime() above already set TZ internally, to a no-op UTC form
+  // (it's always called with gmtOffset=0/daylightOffset=0 - the system
+  // clock itself must stay true UTC, see network_store.h's comment on
+  // WifiCredentials::posixTz). This overrides that with a real POSIX TZ
+  // rule if one's configured, but only affects code that explicitly reads
+  // DST-aware local time (telegram.cpp's nowTimestampString(), for alert
+  // photo captions) - onvif_soap.cpp's WS-Security timestamp reads UTC
+  // directly via gmtime_r(), which ignores TZ entirely, so it's correct
+  // either way.
+  if (g_wifiCredentials.posixTz.length() > 0) {
+    setenv("TZ", g_wifiCredentials.posixTz.c_str(), 1);
+    tzset();
+    Serial.printf("Local timezone for alert captions: %s\n", g_wifiCredentials.posixTz.c_str());
+  }
 
   struct tm timeinfo;
   for (int i = 0; i < 20; i++) {

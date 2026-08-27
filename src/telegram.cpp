@@ -1,7 +1,6 @@
 #include "telegram.h"
 #include "telegram_ca.h"
 #include "telegram_users.h"
-#include "network_store.h"
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <NetworkClient.h> // HTTPClient::getStreamPtr() returns NetworkClient* on Arduino-ESP32 3.x cores
@@ -214,15 +213,16 @@ static bool sendTelegramPhotoBuffered(const uint8_t* jpg, size_t jpgLen, const S
   return readTelegramResponse(client);
 }
 
-// The system clock itself is always UTC (see WifiCredentials::timezoneOffsetMinutes's
-// comment - onvif_soap.cpp's WS-Security timestamps depend on that being
-// true). This shifts only the value used to *display* a wall-clock time in
-// an alert caption, by the Network page's configured local offset -
-// defaults to 0 (UTC, unchanged from before this existed).
+// localtime_r, not gmtime_r - honors whatever POSIX TZ rule main.cpp's
+// setupTime() applied at boot (see WifiCredentials::posixTz), computing
+// DST-aware local time automatically. Falls back to plain UTC if no TZ was
+// configured (today's behavior, unchanged). The system clock itself always
+// stays true UTC either way - only this *display* value is affected;
+// onvif_soap.cpp's WS-Security timestamps read UTC directly via gmtime_r()
+// and are unaffected by TZ.
 static String nowTimestampString() {
   time_t now; time(&now);
-  now += (time_t)loadWifiCredentials().timezoneOffsetMinutes * 60;
-  struct tm tmStruct; gmtime_r(&now, &tmStruct);
+  struct tm tmStruct; localtime_r(&now, &tmStruct);
   char buf[25];
   strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &tmStruct);
   return String(buf);

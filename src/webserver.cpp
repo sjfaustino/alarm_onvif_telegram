@@ -6,7 +6,6 @@
 #include <WiFi.h>
 #include <cctype>
 #include <cstdio>
-#include <cmath>
 #include <Update.h>
 #include <esp_ota_ops.h>
 
@@ -242,18 +241,19 @@ static String renderNetworkPanel() {
   html += "<label>Resync interval, minutes<input type=\"text\" name=\"ntpSyncMinutes\" value=\"" +
           String(creds.ntpSyncIntervalMs / 60000UL) + "\"></label>";
 
-  html += "<label style=\"margin-top:20px;\">Local time offset from UTC, hours (e.g. 1, -5, 5.5 - "
-          "supports half-hour zones) - the board's own clock always stays UTC (ONVIF requires it), "
-          "this only shifts what's shown in Telegram alert photo captions"
-          "<input type=\"text\" name=\"utcOffsetHours\" value=\"" +
-          String(creds.timezoneOffsetMinutes / 60.0f, 2) + "\"></label>";
+  html += "<label style=\"margin-top:20px;\">POSIX TZ string for local time in Telegram alert photo "
+          "captions (optional; leave blank for UTC) - the board's own clock always stays UTC (ONVIF "
+          "requires it), this only affects what's shown in captions, and it auto-adjusts for daylight "
+          "saving since the rule carries its own DST dates. Look yours up at "
+          "https://github.com/nayarsystems/posix_tz_db - e.g. mainland Portugal: "
+          "WET0WEST,M3.5.0/1,M10.5.0"
+          "<input type=\"text\" name=\"posixTz\" value=\"" + htmlEscape(creds.posixTz) + "\"></label>";
 
   html += "<p><button type=\"submit\">Save</button></p></form></fieldset>";
 
   html += "<p class=\"hint\">Saving updates storage immediately, but only takes effect after "
           "the board reboots - a live change could drop it off the network with no way back to "
-          "this page if the new credentials are wrong. The local time offset is the exception - "
-          "it's read fresh for every alert, so it applies immediately with no reboot needed.</p>";
+          "this page if the new credentials are wrong.</p>";
   return html;
 }
 
@@ -338,11 +338,11 @@ static void handleSaveNetwork(PsychicRequest* request, String& banner) {
   // else keep whatever was already stored - a blank/zero/negative field
   // shouldn't produce a 0ms (hammer-the-server) resync interval.
 
-  // toFloat() returns 0.0 for a blank/unparseable field, which is a valid
-  // offset (UTC) in its own right - no "keep previous value" fallback
-  // needed here, unlike the fields above.
-  float utcOffsetHours = request->getParam("utcOffsetHours", "0").toFloat();
-  creds.timezoneOffsetMinutes = (int)lroundf(utcOffsetHours * 60.0f);
+  // A blank field is a valid choice in its own right (UTC, no TZ applied) -
+  // no "keep previous value" fallback needed here, unlike the fields above.
+  String posixTz = request->getParam("posixTz", "");
+  posixTz.trim();
+  creds.posixTz = posixTz;
 
   saveWifiCredentials(creds);
   banner = "Saved - reboot the board to apply the new network configuration.";

@@ -15,12 +15,33 @@ String makeUUID() {
   return String(buf);
 }
 
+// Deliberately gmtime_r, not Arduino's getLocalTime()/localtime_r - this
+// feeds WS-Security's Created timestamp (see makeSecurityHeader below),
+// which ONVIF requires to be true UTC. getLocalTime() would instead return
+// whatever main.cpp's setupTime() set TZ to - a DST-aware local time, if a
+// POSIX TZ rule is configured there for Telegram caption display (see
+// network_store.h's comment on WifiCredentials::posixTz) - which would
+// silently mislabel a shifted time as "Z" (UTC) and could fail a camera's
+// own timestamp-freshness check. Mirrors getLocalTime()'s own sync-detection
+// logic (tm_year > 116 means the clock has actually been set by SNTP, not
+// still sitting at the 1970 epoch) so the "wait up to 2s for sync" behavior
+// is unchanged.
 String isoTimeNow() {
-  struct tm timeinfo;
-  if (!getLocalTime(&timeinfo, 2000)) {
+  time_t now = 0;
+  struct tm timeinfo = {};
+  uint32_t start = millis();
+  do {
+    time(&now);
+    gmtime_r(&now, &timeinfo);
+    if (timeinfo.tm_year > (2016 - 1900)) break;
+    delay(10);
+  } while (millis() - start <= 2000);
+
+  if (timeinfo.tm_year <= (2016 - 1900)) {
     Serial.println("ERROR: NTP time unavailable");
     return "";
   }
+
   char buf[40];
   strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &timeinfo);
   return String(buf);

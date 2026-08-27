@@ -48,16 +48,22 @@ struct WifiCredentials {
   String ntpServer;
   unsigned long ntpSyncIntervalMs = 3600000UL; // 1 hour, matches ESP-IDF's own default
 
-  // Display-only offset from UTC, in minutes (can be negative; supports
-  // half/quarter-hour zones like UTC+5:30). The board's actual system
-  // clock stays UTC always - main.cpp's setupTime() calls configTime(0, 0,
-  // ...) unconditionally - because ONVIF's WS-Security Created timestamp
-  // (isoTimeNow() in onvif_soap.cpp) must be true UTC for cameras to accept
-  // it; shifting the system clock itself would silently break that. This
-  // offset is applied only where a human reads a wall-clock time, e.g.
-  // telegram.cpp's nowTimestampString() for alert photo captions. Default 0
-  // (UTC) - today's behavior unchanged until set.
-  int timezoneOffsetMinutes = 0;
+  // Optional POSIX TZ rule string (e.g. "WET0WEST,M3.5.0/1,M10.5.0" for
+  // mainland Portugal - look yours up at
+  // https://github.com/nayarsystems/posix_tz_db) applied via
+  // setenv("TZ",...)/tzset() once at boot, in main.cpp's setupTime(), right
+  // after configTime(). Lets DST-aware local time be computed automatically
+  // for display purposes - currently just telegram.cpp's
+  // nowTimestampString(), used in alert photo captions. Empty (default)
+  // means no TZ is applied, so display stays UTC - today's behavior,
+  // unchanged until this is set.
+  //
+  // The board's actual system clock is unaffected either way: ONVIF's
+  // WS-Security Created timestamp (isoTimeNow() in onvif_soap.cpp) reads
+  // true UTC directly via gmtime_r(), which ignores TZ entirely, so cameras
+  // always see honest UTC no matter what's configured here. Takes effect
+  // after a reboot, like the rest of this struct's fields.
+  String posixTz;
 };
 
 // Loads WiFi credentials + hostname + NTP config from NVS. On the very

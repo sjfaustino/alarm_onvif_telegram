@@ -15,7 +15,7 @@ static const char* NVS_KEY_GW     = "gw";
 static const char* NVS_KEY_DNS    = "dns";
 static const char* NVS_KEY_NTPSRV = "ntpsrv";
 static const char* NVS_KEY_NTPINT = "ntpint";
-static const char* NVS_KEY_TZOFF  = "tzoff";
+static const char* NVS_KEY_TZ     = "posixtz";
 static const char* DEFAULT_HOSTNAME = "cameramonitor";
 static const char* DEFAULT_NTP_SERVER = "pool.ntp.org";
 
@@ -42,9 +42,9 @@ WifiCredentials loadWifiCredentials() {
     creds.ntpServer         = prefs.getString(NVS_KEY_NTPSRV, DEFAULT_NTP_SERVER);
     creds.ntpSyncIntervalMs = prefs.getULong(NVS_KEY_NTPINT, 3600000UL);
     // Absent key (didn't exist before this field was added) correctly
-    // defaults to 0 - UTC, the system clock's real timezone - same
+    // defaults to "" - no TZ applied, display stays UTC - same
     // backward-compat reasoning as ssid2/pass2/static/etc above.
-    creds.timezoneOffsetMinutes = prefs.getInt(NVS_KEY_TZOFF, 0);
+    creds.posixTz = prefs.getString(NVS_KEY_TZ, "");
   }
   prefs.end();
 
@@ -77,7 +77,7 @@ bool saveWifiCredentials(const WifiCredentials& creds) {
   prefs.putString(NVS_KEY_DNS, creds.staticDNS);
   prefs.putString(NVS_KEY_NTPSRV, creds.ntpServer);
   prefs.putULong(NVS_KEY_NTPINT, creds.ntpSyncIntervalMs);
-  prefs.putInt(NVS_KEY_TZOFF, creds.timezoneOffsetMinutes);
+  prefs.putString(NVS_KEY_TZ, creds.posixTz);
   prefs.end();
   return true;
 }
