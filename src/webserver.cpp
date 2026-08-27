@@ -346,8 +346,7 @@ static String renderCamerasPanel(const CameraConfig* prefill, bool isEdit) {
 
   String html = "<h1>Cameras</h1>";
   html += "<table><tr><th>Name</th><th>Device Service URL</th><th>Enabled</th>"
-          "<th>Cooldown</th><th>Offline After</th><th>Shots/Alert</th><th>Live Status</th>"
-          "<th>Last Alert</th><th>Notes</th><th></th></tr>";
+          "<th>Live Status</th><th>Last Alert</th><th>Notes</th><th></th></tr>";
   for (auto& c : cams) {
     int idx = findLiveCameraIndex(c.name);
     String liveStatus;
@@ -385,10 +384,7 @@ static String renderCamerasPanel(const CameraConfig* prefill, bool isEdit) {
         : "";
 
     html += "<tr><td>" + htmlEscape(c.name) + "</td><td>" + htmlEscape(c.deviceServiceUrl) +
-            "</td><td>" + (c.enabled ? "yes" : "no") + "</td><td>" +
-            String(c.alertCooldownMs / 1000) + "s</td><td>" +
-            String(c.offlineThresholdMs / 60000UL) + "m</td><td>" +
-            String(c.snapshotBurstCount) + "</td><td>" + liveStatus + "</td><td>" +
+            "</td><td>" + (c.enabled ? "yes" : "no") + "</td><td>" + liveStatus + "</td><td>" +
             lastAlertStr + "</td><td>" +
             notesCell + "</td><td>";
     html += "<a href=\"/cameras/edit?name=" + urlEncode(c.name) + "\">Edit</a> ";
