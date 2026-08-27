@@ -215,18 +215,25 @@ static String nowTimestampString() {
 // Low-level single-recipient send (JSON body, no photo) - the actual HTTPS
 // round trip. Used both directly (command replies go back to whoever sent
 // the command, not everyone) and by sendTelegramMessage() below (broadcast).
+//
+// Uses HTTPClient rather than a raw WiFiClientSecure + hand-built request
+// line (unlike sendTelegramPhotoBuffered, which streams a multipart body
+// HTTPClient has no API for) - HTTPClient correctly handles chunked
+// transfer-encoding on the response, which a manual "read until idle, split
+// on the first \r\n\r\n" parser doesn't; api.telegram.org is free to send
+// a chunked response and has been observed to.
 static bool sendTelegramMessageTo(const String& chatId, const String& text) {
   WiFiClientSecure client;
   client.setCACert(TELEGRAM_ROOT_CA); // see telegram_ca.h if this needs refreshing
-  if (!client.connect("api.telegram.org", 443)) {
-    char errBuf[128];
-    client.lastError(errBuf, sizeof(errBuf));
-    Serial.printf("sendTelegramMessageTo(%s): could not connect - %s\n", chatId.c_str(), errBuf);
-    if (!telegramCAConfigured()) {
-      Serial.println("  ^ TELEGRAM_ROOT_CA in telegram_ca.h is still the placeholder - fill it in.");
-    }
+
+  HTTPClient http;
+  String url = "https://api.telegram.org/bot" + String(TELEGRAM_BOT_TOKEN) + "/sendMessage";
+  if (!http.begin(client, url)) {
+    Serial.printf("sendTelegramMessageTo(%s): http.begin() failed.\n", chatId.c_str());
     return false;
   }
+  http.setTimeout(HTTP_TIMEOUT_MS);
+  http.addHeader("Content-Type", "application/json");
 
   JsonDocument outDoc;
   outDoc["chat_id"] = chatId;
@@ -234,25 +241,21 @@ static bool sendTelegramMessageTo(const String& chatId, const String& text) {
   String body;
   serializeJson(outDoc, body);
 
-  String requestLine;
-  requestLine.reserve(96 + strlen(TELEGRAM_BOT_TOKEN));
-  requestLine += "POST /bot" + String(TELEGRAM_BOT_TOKEN) + "/sendMessage HTTP/1.1\r\n";
-  requestLine += "Host: api.telegram.org\r\n";
-  requestLine += "Content-Type: application/json\r\n";
-  requestLine += "Content-Length: " + String(body.length()) + "\r\n";
-  requestLine += "Connection: close\r\n\r\n";
-
-  size_t sent = 0;
-  sent += writeAllBytes(client, (const uint8_t*)requestLine.c_str(), requestLine.length());
-  sent += writeAllBytes(client, (const uint8_t*)body.c_str(), body.length());
-
-  if (sent < requestLine.length() + body.length()) {
-    Serial.printf("sendTelegramMessageTo(%s): write incomplete.\n", chatId.c_str());
-    client.stop();
-    return false;
+  int code = http.POST(body);
+  bool ok = (code == 200);
+  if (!ok) {
+    Serial.printf("sendTelegramMessageTo(%s): HTTP %d", chatId.c_str(), code);
+    if (code > 0) {
+      Serial.printf(" - %s\n", http.getString().c_str());
+    } else {
+      Serial.printf(" - %s\n", HTTPClient::errorToString(code).c_str());
+      if (!telegramCAConfigured()) {
+        Serial.println("  ^ TELEGRAM_ROOT_CA in telegram_ca.h is still the placeholder - fill it in.");
+      }
+    }
   }
-
-  return readTelegramResponse(client);
+  http.end();
+  return ok;
 }
 
 // Broadcasts to every Telegram user with systemMessages enabled - used for
@@ -281,9 +284,21 @@ bool sendTelegramMessage(const String& text) {
 static uint8_t* fetchOneSnapshot(const CameraConfig& cfg, CameraState& st, size_t& outLen) {
   outLen = 0;
 
+  // snapshotUri/user/pass are written by this camera's own task
+  // (camera.cpp) but this function is also called from loop()'s task via
+  // /snap - copy them out under CameraStateLock rather than reading the
+  // live fields directly. See CameraState::stateMutex.
+  String snapshotUri; const char* user; const char* pass;
+  {
+    CameraStateLock lock(st);
+    snapshotUri = st.snapshotUri;
+    user = st.user;
+    pass = st.pass;
+  }
+
   HTTPClient http;
-  http.begin(st.snapshotUri);
-  http.setAuthorization(st.user, st.pass);
+  http.begin(snapshotUri);
+  http.setAuthorization(user, pass);
   http.setTimeout(HTTP_TIMEOUT_MS);
 
   int code = http.GET();
@@ -314,8 +329,16 @@ static uint8_t* fetchOneSnapshot(const CameraConfig& cfg, CameraState& st, size_
 }
 
 void triggerMotionAlert(const CameraConfig& cfg, CameraState& st) {
-  if (!st.alertsEnabled) return; // muted via Telegram - see pollTelegramCommands
+  // alertsEnabled is written by loop()'s task (pollTelegramCommands'
+  // /on//off), this function runs on the camera's own task - cross-task
+  // read, needs CameraStateLock. See CameraState::stateMutex.
+  bool alertsEnabled;
+  { CameraStateLock lock(st); alertsEnabled = st.alertsEnabled; }
+  if (!alertsEnabled) return; // muted via Telegram - see pollTelegramCommands
 
+  // hasAlerted/lastAlert are written only here, always from this same
+  // task, so this self-read needs no lock - only cross-task readers
+  // (webserver.cpp) do.
   uint32_t nowMs = millis();
   if (st.hasAlerted && nowMs - st.lastAlert < cfg.alertCooldownMs) return; // cooling down
 
@@ -328,6 +351,8 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st) {
     return;
   }
 
+  // snapshotUri is written only by this camera's own task too (camera.cpp),
+  // same-task self-read, no lock needed here either.
   if (st.snapshotUri.length() == 0) {
     Serial.printf("[%s] No snapshot URI available - skipping Telegram send.\n", cfg.name.c_str());
     return;
@@ -338,8 +363,7 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st) {
   // an unresolved snapshot URI, silently burn every motion event's cooldown
   // doing nothing. A failure past this point still spends it, on purpose,
   // to stop sustained motion from retry-storming a misbehaving camera.
-  st.lastAlert = nowMs;
-  st.hasAlerted = true;
+  { CameraStateLock lock(st); st.lastAlert = nowMs; st.hasAlerted = true; }
 
   unsigned int shots = (cfg.snapshotBurstCount > 0) ? cfg.snapshotBurstCount : 1;
 
@@ -367,9 +391,12 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st) {
 
 void checkCameraOnlineStatus(const CameraConfig& cfg, CameraState& st) {
   bool offlineNow = (millis() - st.lastContactMs) >= cfg.offlineThresholdMs;
+  // isOffline is written only here, always from this camera's own task, so
+  // this self-read needs no lock - only the write below does, since
+  // webserver.cpp/main.cpp read it from other tasks.
   if (offlineNow == st.isOffline) return; // no state change - most calls hit this
 
-  st.isOffline = offlineNow;
+  { CameraStateLock lock(st); st.isOffline = offlineNow; }
   if (offlineNow) {
     Serial.printf("[%s] OFFLINE - no response for over %lus.\n", cfg.name.c_str(), cfg.offlineThresholdMs / 1000UL);
     sendTelegramMessage("\xE2\x9A\xA0\xEF\xB8\x8F " + cfg.name + " is OFFLINE - no response for over " +
@@ -415,7 +442,11 @@ static void saveAlertEnabledPref(size_t index, bool enabled) {
 // one-off request, not a motion alert, so it ignores st.alertsEnabled and
 // doesn't touch st.lastAlert/hasAlerted or spend the alert cooldown.
 static void sendOnDemandSnapshot(const CameraConfig& cfg, CameraState& st, const String& chatId) {
-  if (st.snapshotUri.length() == 0) {
+  // This runs on loop()'s task, snapshotUri is written by the camera's own
+  // task - cross-task read, needs CameraStateLock. See CameraState::stateMutex.
+  bool hasSnapshotUri;
+  { CameraStateLock lock(st); hasSnapshotUri = st.snapshotUri.length() > 0; }
+  if (!hasSnapshotUri) {
     sendTelegramMessageTo(chatId, cfg.name + ": no snapshot URI available yet.");
     return;
   }
@@ -443,6 +474,8 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
       sendTelegramMessageTo(sender.chatId, "You're not authorized to use /status.");
       return;
     }
+    // alertsEnabled is only ever written from this same task (below, and
+    // main.cpp's boot-time restore), so this self-read needs no lock.
     String msg = "Camera alert status:\n";
     for (size_t i = 0; i < numCameras; i++) {
       if (!cameras[i].enabled) continue;
@@ -507,7 +540,7 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
   }
 
   bool turnOn = (cmd == Cmd::On);
-  states[i].alertsEnabled = turnOn;
+  { CameraStateLock lock(states[i]); states[i].alertsEnabled = turnOn; } // read cross-task by camera.cpp/webserver.cpp
   saveAlertEnabledPref(i, turnOn);
   Serial.printf("[%s] Alerts turned %s via Telegram.\n", cameras[i].name.c_str(), turnOn ? "ON" : "OFF");
   sendTelegramMessageTo(sender.chatId, String(cameras[i].name) + " alerts: " + (turnOn ? "ON" : "OFF"));
@@ -516,43 +549,31 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
 void pollTelegramCommands(const CameraConfig cameras[], CameraState states[], size_t numCameras) {
   static long lastUpdateId = 0;
 
+  // HTTPClient rather than a raw socket + hand-rolled "\r\n\r\n" body split
+  // (see sendTelegramMessageTo's comment) - that split silently mis-parses
+  // if Telegram ever sends a chunked response, since it doesn't decode
+  // chunk-size markers before handing the body to parseTelegramUpdates.
   WiFiClientSecure client;
   client.setCACert(TELEGRAM_ROOT_CA);
-  if (!client.connect("api.telegram.org", 443)) {
-    Serial.println("[Telegram] pollTelegramCommands: could not connect - will retry next poll.");
+
+  HTTPClient http;
+  String url = "https://api.telegram.org/bot" + String(TELEGRAM_BOT_TOKEN) +
+               "/getUpdates?offset=" + String(lastUpdateId + 1) + "&timeout=0";
+  if (!http.begin(client, url)) {
+    Serial.println("[Telegram] pollTelegramCommands: http.begin() failed.");
+    return;
+  }
+  http.setTimeout(HTTP_TIMEOUT_MS);
+
+  int code = http.GET();
+  if (code != 200) {
+    String detail = (code > 0) ? String("") : (" - " + HTTPClient::errorToString(code));
+    Serial.printf("[Telegram] pollTelegramCommands: HTTP %d%s\n", code, detail.c_str());
+    http.end();
     return; // transient - next poll retries
   }
-
-  String requestLine;
-  requestLine.reserve(96 + strlen(TELEGRAM_BOT_TOKEN));
-  requestLine += "GET /bot" + String(TELEGRAM_BOT_TOKEN) + "/getUpdates?offset=" +
-                  String(lastUpdateId + 1) + "&timeout=0 HTTP/1.1\r\n";
-  requestLine += "Host: api.telegram.org\r\n";
-  requestLine += "Connection: close\r\n\r\n";
-  writeAllBytes(client, (const uint8_t*)requestLine.c_str(), requestLine.length());
-
-  uint32_t t0 = millis();
-  while (client.connected() && !client.available() && millis() - t0 < 10000) delay(10);
-  if (!client.available()) {
-    Serial.println("[Telegram] pollTelegramCommands: no response within timeout.");
-    client.stop();
-    return;
-  }
-
-  String body;
-  uint32_t readStart = millis();
-  while (client.connected() && millis() - readStart < 3000) {
-    while (client.available()) { body += (char)client.read(); readStart = millis(); }
-  }
-  while (client.available()) body += (char)client.read();
-  client.stop();
-
-  int bodyStart = body.indexOf("\r\n\r\n");
-  if (bodyStart < 0) {
-    Serial.println("[Telegram] pollTelegramCommands: malformed response (no header/body split).");
-    return;
-  }
-  body = body.substring(bodyStart + 4);
+  String body = http.getString();
+  http.end();
 
   String parseError;
   std::vector<TelegramUpdate> updates = parseTelegramUpdates(body, &parseError);

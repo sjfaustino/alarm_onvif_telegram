@@ -230,12 +230,20 @@ static void sendHeartbeat() {
   // it's just normal steady-state overhead (WiFi/mbedTLS/PsychicHttp/tasks).
   msg += "Free heap: " + String(ESP.getFreeHeap()) + " bytes (min ever: " +
          String(ESP.getMinFreeHeap()) + ")\n";
+  // subscriptionActive/isOffline are written by each camera's own task;
+  // this runs on loop()'s task, so reading them needs CameraStateLock -
+  // see CameraState::stateMutex.
   for (size_t i = 0; i < g_cameras.size(); i++) {
     if (!g_cameras[i].enabled) continue;
-    msg += g_cameras[i].name + ": " +
-           (g_cameraStates[i].subscriptionActive ? "subscribed" : "NOT subscribed") +
-           (g_cameraStates[i].isOffline ? " (OFFLINE)" : "") +
-           (g_cameraStates[i].alertsEnabled ? "" : " (alerts OFF)") + "\n";
+    bool subscribed, offline, alertsEnabled;
+    {
+      CameraStateLock lock(g_cameraStates[i]);
+      subscribed = g_cameraStates[i].subscriptionActive;
+      offline = g_cameraStates[i].isOffline;
+      alertsEnabled = g_cameraStates[i].alertsEnabled;
+    }
+    msg += g_cameras[i].name + ": " + (subscribed ? "subscribed" : "NOT subscribed") +
+           (offline ? " (OFFLINE)" : "") + (alertsEnabled ? "" : " (alerts OFF)") + "\n";
   }
   if (!sendTelegramMessage(msg)) {
     Serial.println("Heartbeat: Telegram send failed.");
@@ -272,7 +280,14 @@ static void startMonitoring() {
       Serial.printf("[%s] Disabled - no task created.\n", g_cameras[i].name.c_str());
       continue;
     }
-    g_cameraStates[i].alertsEnabled = loadAlertEnabledPref(i); // restore any /on or /off from before a reboot
+    cameraStateInit(g_cameraStates[i]); // must run before any other task can see this camera - see camera.h
+    {
+      // The web server is already live at this point (started above) and
+      // could be rendering /cameras concurrently, so this write needs the
+      // lock too, same as any other cross-task access.
+      CameraStateLock lock(g_cameraStates[i]);
+      g_cameraStates[i].alertsEnabled = loadAlertEnabledPref(i); // restore any /on or /off from before a reboot
+    }
     CameraTaskContext* ctx = new CameraTaskContext{&g_cameras[i], &g_cameraStates[i]};
     char taskName[16];
     snprintf(taskName, sizeof(taskName), "cam%u", (unsigned)i);

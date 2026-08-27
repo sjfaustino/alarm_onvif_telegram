@@ -407,11 +407,24 @@ static String renderCamerasPanel(const CameraConfig* prefill, bool isEdit) {
     String liveStatus;
     String lastAlertStr = "never";
     if (idx >= 0 && g_liveStates && idx < (int)g_liveStates->size()) {
+      // Read under lock - these fields are written by the camera's own
+      // task, this render runs on PsychicHttp's task. See
+      // CameraState::stateMutex.
       CameraState& st = (*g_liveStates)[idx];
-      liveStatus = st.subscriptionActive ? "subscribed" : "not subscribed";
-      if (st.isOffline) liveStatus += " - OFFLINE";
-      if (!st.alertsEnabled) liveStatus += " (alerts OFF)";
-      if (st.hasAlerted) lastAlertStr = formatElapsedSince(st.lastAlert);
+      bool subscribed, offline, alertsEnabled, hasAlerted;
+      uint32_t lastAlert;
+      {
+        CameraStateLock lock(st);
+        subscribed = st.subscriptionActive;
+        offline = st.isOffline;
+        alertsEnabled = st.alertsEnabled;
+        hasAlerted = st.hasAlerted;
+        lastAlert = st.lastAlert;
+      }
+      liveStatus = subscribed ? "subscribed" : "not subscribed";
+      if (offline) liveStatus += " - OFFLINE";
+      if (!alertsEnabled) liveStatus += " (alerts OFF)";
+      if (hasAlerted) lastAlertStr = formatElapsedSince(lastAlert);
     } else if (!c.enabled) {
       liveStatus = "disabled";
     } else {

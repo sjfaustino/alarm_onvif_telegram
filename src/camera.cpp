@@ -6,12 +6,17 @@
 #include <vector>
 #include <cstring>
 
+void cameraStateInit(CameraState& st) {
+  if (!st.stateMutex) st.stateMutex = xSemaphoreCreateMutex();
+}
+
 bool resolveCameraCredentials(const CameraConfig& cfg, CameraState& st) {
   if (cfg.user.length() == 0 || cfg.pass.length() == 0) {
     Serial.printf("[%s] ERROR: no username/password set for this camera - add them via the web UI.\n",
                   cfg.name.c_str());
     return false;
   }
+  CameraStateLock lock(st);
   st.user = cfg.user.c_str();
   st.pass = cfg.pass.c_str();
   return true;
@@ -25,10 +30,12 @@ bool resolveCameraCredentials(const CameraConfig& cfg, CameraState& st) {
 // uses to tell a genuinely offline camera from one merely failing a call.
 static String cameraSoapCall(const CameraConfig& cfg, CameraState& st, const String& url,
                               const String& to, const String& action, const String& body) {
-  String xml = soapEnvelope(action, body, to, st.user, st.pass,
+  const char* user; const char* pass;
+  { CameraStateLock lock(st); user = st.user; pass = st.pass; }
+  String xml = soapEnvelope(action, body, to, user, pass,
                              cfg.includeReplyToAnonymous, cfg.useWSSecurity);
-  const char* basicUser = cfg.useWSSecurity ? nullptr : st.user;
-  const char* basicPass = cfg.useWSSecurity ? nullptr : st.pass;
+  const char* basicUser = cfg.useWSSecurity ? nullptr : user;
+  const char* basicPass = cfg.useWSSecurity ? nullptr : pass;
   String response = soapPost(cfg.name.c_str(), url, action, xml, basicUser, basicPass);
   if (response.length() > 0) st.lastContactMs = millis();
   return response;
@@ -136,12 +143,16 @@ bool cameraFetchProfileAndSnapshotUri(const CameraConfig& cfg, CameraState& st) 
   Serial.printf("\n[%s] Resolving snapshot URI\n", cfg.name.c_str());
 
   if (cfg.snapshotUriOverride.length() > 0) {
-    st.snapshotUri = cfg.snapshotUriOverride;
     // {USER}/{PASS} let an override embed query-string auth (some Vstarcam
     // firmwares want ?loginuse=...&loginpas=...) without a credential
     // landing in a committed file.
-    st.snapshotUri.replace("{USER}", st.user);
-    st.snapshotUri.replace("{PASS}", st.pass);
+    String resolved = cfg.snapshotUriOverride;
+    {
+      CameraStateLock lock(st);
+      resolved.replace("{USER}", st.user);
+      resolved.replace("{PASS}", st.pass);
+      st.snapshotUri = resolved;
+    }
     String logUri = cfg.snapshotUriOverride; // log the un-substituted form - avoids echoing st.pass to serial
     logUri.replace("{PASS}", "***");
     Serial.printf("[%s] Using configured snapshot override: %s\n", cfg.name.c_str(), logUri.c_str());
@@ -192,14 +203,15 @@ bool cameraFetchProfileAndSnapshotUri(const CameraConfig& cfg, CameraState& st) 
     return false;
   }
 
-  st.snapshotUri = findElementByLocalName(snapResponse, "Uri");
-  st.snapshotUri.trim();
-  if (st.snapshotUri.length() == 0) {
+  String resolvedUri = findElementByLocalName(snapResponse, "Uri");
+  resolvedUri.trim();
+  if (resolvedUri.length() == 0) {
     Serial.printf("[%s] Could not find snapshot URI in response.\n", cfg.name.c_str());
     return false;
   }
+  { CameraStateLock lock(st); st.snapshotUri = resolvedUri; }
 
-  Serial.printf("[%s] Snapshot URI: %s\n", cfg.name.c_str(), st.snapshotUri.c_str());
+  Serial.printf("[%s] Snapshot URI: %s\n", cfg.name.c_str(), resolvedUri.c_str());
   Serial.println("  ^ if this looks wrong (bad IP/port), that's the same GetSnapshotUri "
                   "quirk seen on the XM530 - you may need a snapshotUriOverride for this camera too.");
   return true;
@@ -232,7 +244,7 @@ bool cameraCreatePullPoint(const CameraConfig& cfg, CameraState& st) {
   }
 
   st.pullPointUrl = address;
-  st.subscriptionActive = true;
+  { CameraStateLock lock(st); st.subscriptionActive = true; }
   st.lastRenew = millis();
   st.lastPull = millis();
   Serial.printf("[%s] Subscription ACTIVE: %s\n", cfg.name.c_str(), st.pullPointUrl.c_str());
@@ -295,7 +307,7 @@ static void parseEvents(const CameraConfig& cfg, CameraState& st, const String& 
 }
 
 bool cameraPullMessages(const CameraConfig& cfg, CameraState& st) {
-  if (!st.subscriptionActive || st.pullPointUrl.length() == 0) return false;
+  if (!st.subscriptionActive || st.pullPointUrl.length() == 0) return false; // same-task read, no lock needed
 
   String action = "http://www.onvif.org/ver10/events/wsdl/PullPointSubscription/PullMessagesRequest";
   // PT1S long-poll; PT5S (fewer, longer polls) would cut request volume
@@ -313,14 +325,14 @@ bool cameraPullMessages(const CameraConfig& cfg, CameraState& st) {
 
   if (response.indexOf("ResourceUnknownFault") >= 0 || responseHasFault(response)) {
     Serial.printf("[%s] PullPoint gone, will resubscribe.\n", cfg.name.c_str());
-    st.subscriptionActive = false;
+    { CameraStateLock lock(st); st.subscriptionActive = false; }
     st.pullPointUrl = "";
   }
   return false;
 }
 
 bool cameraRenewSubscription(const CameraConfig& cfg, CameraState& st) {
-  if (!st.subscriptionActive || st.pullPointUrl.length() == 0) return false;
+  if (!st.subscriptionActive || st.pullPointUrl.length() == 0) return false; // same-task read, no lock needed
 
   String action = "http://docs.oasis-open.org/wsn/bw-2/Renew";
   String body = "<wsnt:Renew><wsnt:TerminationTime>PT5M</wsnt:TerminationTime></wsnt:Renew>";
@@ -333,7 +345,7 @@ bool cameraRenewSubscription(const CameraConfig& cfg, CameraState& st) {
   }
 
   Serial.printf("[%s] Renew failed, will resubscribe.\n", cfg.name.c_str());
-  st.subscriptionActive = false;
+  { CameraStateLock lock(st); st.subscriptionActive = false; }
   st.pullPointUrl = "";
   return false;
 }
@@ -394,8 +406,8 @@ void cameraTaskFn(void* pvParameters) {
       // main.cpp's loop() owns reconnecting; this task just waits and, once
       // back, treats itself as needing a fresh subscription (the old one
       // almost certainly timed out server-side during the outage anyway).
-      if (st.subscriptionActive) {
-        st.subscriptionActive = false;
+      if (st.subscriptionActive) { // same-task read, no lock needed
+        { CameraStateLock lock(st); st.subscriptionActive = false; }
         st.pullPointUrl = "";
       }
       vTaskDelay(pdMS_TO_TICKS(500));
@@ -419,7 +431,7 @@ void cameraTaskFn(void* pvParameters) {
 
         // Both calls above set st.subscriptionActive=true on success (see
         // cameraCreatePullPoint) as a side effect, so it's the signal here
-        // regardless of which branch ran.
+        // regardless of which branch ran. Same-task read, no lock needed.
         if (st.subscriptionActive) {
           Serial.printf("[%s] Subscription recovered.\n", cfg.name.c_str());
           st.retryStreak = 0;
