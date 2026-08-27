@@ -94,9 +94,20 @@ bool saveTelegramUsers(const std::vector<TelegramUser>& users) {
 
   Preferences prefs;
   if (!prefs.begin(NVS_NAMESPACE, false)) return false;
-  prefs.putString(NVS_KEY_LIST, blob);
-  prefs.putUShort(NVS_KEY_SCHEMA, TELEGRAM_USER_SCHEMA_VERSION);
+  // See camera_store.cpp's saveCameras() for why these return values are
+  // checked - an unnoticed write failure here used to look identical to a
+  // successful save.
+  size_t written = prefs.putString(NVS_KEY_LIST, blob);
+  bool schemaOk = prefs.putUShort(NVS_KEY_SCHEMA, TELEGRAM_USER_SCHEMA_VERSION) > 0;
   prefs.end();
+
+  bool listOk = (blob.length() == 0) || (written > 0);
+  if (!listOk || !schemaOk) {
+    Serial.printf("[telegram_users] ERROR: saveTelegramUsers failed to persist %u user(s) (wrote %u "
+                  "of %u bytes) - NVS may be full. This WILL be lost on reboot.\n",
+                  (unsigned)users.size(), (unsigned)written, (unsigned)blob.length());
+    return false;
+  }
   return true;
 }
 

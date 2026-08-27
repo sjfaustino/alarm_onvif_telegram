@@ -2,6 +2,7 @@
 #include "camera_serialize.h"
 #include "secrets.h"
 #include <Preferences.h>
+#include <esp_task_wdt.h>
 
 static const char* NVS_NAMESPACE  = "camstore";
 static const char* NVS_KEY_LIST   = "list";
@@ -119,9 +120,22 @@ bool saveCameras(const std::vector<CameraConfig>& cameras) {
 
   Preferences prefs;
   if (!prefs.begin(NVS_NAMESPACE, false)) return false;
-  prefs.putString(NVS_KEY_LIST, blob);
-  prefs.putUShort(NVS_KEY_SCHEMA, CAMERA_SCHEMA_VERSION);
+  // putString/putUShort return 0 on failure (NVS full, value too large for
+  // one entry, etc.) - previously ignored, so a failed write here would
+  // silently report success to every caller (addCamera/updateCamera/
+  // deleteCamera) while NVS quietly kept its old value.
+  size_t written = prefs.putString(NVS_KEY_LIST, blob);
+  bool schemaOk = prefs.putUShort(NVS_KEY_SCHEMA, CAMERA_SCHEMA_VERSION) > 0;
   prefs.end();
+
+  bool listOk = (blob.length() == 0) || (written > 0);
+  if (!listOk || !schemaOk) {
+    Serial.printf("[camera_store] ERROR: saveCameras failed to persist %u camera(s) (wrote %u of %u "
+                  "bytes) - NVS may be full. The in-memory list changed but NVS still has the old "
+                  "data; this WILL be lost on reboot.\n",
+                  (unsigned)cameras.size(), (unsigned)written, (unsigned)blob.length());
+    return false;
+  }
   return true;
 }
 
@@ -171,16 +185,30 @@ size_t restoreMissingCamerasFromSeed() {
   std::vector<CameraConfig> existing = loadCameras();
   std::vector<CameraConfig> seed = seedFromSecrets();
 
+  Serial.printf("[camera_store] Restoring from CAMERA_SEED: %u already stored, %u in secrets.h.\n",
+                (unsigned)existing.size(), (unsigned)seed.size());
+  for (auto& e : existing) Serial.printf("[camera_store]   already have: \"%s\"\n", e.name.c_str());
+
   size_t added = 0;
   for (auto& s : seed) {
     bool found = false;
     for (auto& e : existing) {
       if (e.name.equalsIgnoreCase(s.name)) { found = true; break; }
     }
-    if (!found && addCamera(s)) {
+    if (found) {
+      Serial.printf("[camera_store]   skip \"%s\": already present.\n", s.name.c_str());
+    } else if (addCamera(s)) {
       added++;
-      Serial.printf("[camera_store] Restored camera \"%s\" from secrets.h's CAMERA_SEED.\n", s.name.c_str());
+      Serial.printf("[camera_store]   restored \"%s\".\n", s.name.c_str());
+    } else {
+      Serial.printf("[camera_store]   FAILED to restore \"%s\" - addCamera() returned false (name "
+                    "collision detected mid-loop, or the NVS write itself failed - see any "
+                    "saveCameras ERROR line above).\n", s.name.c_str());
     }
+    // Each iteration does a real NVS read+write; setup() doesn't feed the
+    // watchdog otherwise (only loop() does), so a slow flash write here
+    // shouldn't be allowed to add up toward the 90s timeout.
+    esp_task_wdt_reset();
   }
 
   Preferences writePrefs;
