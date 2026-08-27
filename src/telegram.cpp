@@ -405,11 +405,21 @@ void checkCameraOnlineStatus(const CameraConfig& cfg, CameraState& st) {
 // short (timeout=0, not long-poll) getUpdates round trip. lastUpdateId is
 // persisted in NVS (see loadLastUpdateId/saveLastUpdateId below) - it used
 // not to be, on the theory that redelivering a couple of already-applied
-// commands after a reboot is harmless since /on/off/snap are idempotent.
-// /reset broke that assumption: redelivering it after the reboot it
-// itself caused re-executes /reset again, forever - an infinite reboot
-// loop hit in the field the very first time /reset was used. Persisting
-// the offset is what actually stops a command from being seen twice.
+// commands after a reboot is harmless since /on/off/snap/status/uptime are
+// idempotent. /reset broke that assumption: redelivering it after the
+// reboot it itself caused re-executes /reset again, forever - an infinite
+// reboot loop hit in the field the very first time /reset was used.
+//
+// Persisting on every single update (the first fix) closed that loop but
+// opened a smaller one: Telegram delivers every inbound message to
+// getUpdates regardless of who sent it, so an unauthenticated flood of
+// messages would have forced an NVS write per message with zero
+// permission check. pollTelegramCommands() below persists once per poll
+// instead (bounded, matches the original harmless-redelivery assumption
+// for everything except /reset), with one exception: an already-
+// authorized /reset gets its own immediate, synchronous persist right
+// before it's acted on, since ESP.restart() means the code would never
+// reach the end-of-poll persist otherwise.
 // ============================================================
 
 static const char* TELEGRAM_STATE_NAMESPACE = "tgstate";
@@ -595,6 +605,7 @@ void pollTelegramCommands(const CameraConfig cameras[], CameraState states[], si
   // now that /reset exists. Real Telegram update_ids are always >= 0.
   static long lastUpdateId = -1;
   if (lastUpdateId < 0) lastUpdateId = loadLastUpdateId();
+  long startingUpdateId = lastUpdateId; // so the end-of-poll persist below is skipped when nothing advanced
 
   // HTTPClient rather than a raw socket + hand-rolled "\r\n\r\n" body split
   // (see sendTelegramMessageTo's comment) - that split silently mis-parses
@@ -630,14 +641,17 @@ void pollTelegramCommands(const CameraConfig cameras[], CameraState states[], si
 
   std::vector<TelegramUser> users = loadTelegramUsers();
   for (auto& upd : updates) {
-    // Persisted (not just updated in RAM) before this update is acted on -
-    // see this section's top comment. Written once per new update rather
-    // than once per poll so a mid-batch reboot (e.g. this very update
-    // being /reset) still can't cause a redelivery loop.
-    if (upd.updateId > lastUpdateId) {
-      lastUpdateId = upd.updateId;
-      saveLastUpdateId(lastUpdateId);
-    }
+    // Advanced in RAM for every update (keeps the offset moving so the
+    // same batch isn't refetched next poll), but NOT persisted to NVS here
+    // - Telegram delivers every inbound message to getUpdates regardless
+    // of sender, so persisting per-update would let anyone who finds this
+    // bot force an NVS write just by sending it messages, no permission
+    // required. Persisted once at the very end of this loop instead,
+    // covering the normal case (redelivering an already-applied /on/off/
+    // snap/status/uptime after a reboot is harmless - see this section's
+    // top comment) in one write per poll regardless of how many messages
+    // arrived, spam included.
+    if (upd.updateId > lastUpdateId) lastUpdateId = upd.updateId;
     if (!upd.hasChatId) continue; // no message on this update (edited_message, channel_post, ...)
 
     const TelegramUser* sender = nullptr;
@@ -659,6 +673,16 @@ void pollTelegramCommands(const CameraConfig cameras[], CameraState states[], si
     }
 
     if (upd.text.length() == 0) continue; // e.g. a sticker or photo with no caption - nothing to act on
+
+    // The one exception to "persist once at the end": /reset doesn't
+    // return here (ESP.restart()), so the end-of-loop persist below would
+    // never run - without this, the reboot it causes would redeliver this
+    // same update and re-execute /reset forever. Gated behind sender being
+    // authorized (not just the text matching) so this extra write path
+    // isn't itself something an unauthenticated message can trigger.
+    if (sender->canReset && upd.text.equalsIgnoreCase("/reset")) saveLastUpdateId(lastUpdateId);
+
     handleTelegramCommand(*sender, upd.text, cameras, states, numCameras);
   }
+  if (lastUpdateId != startingUpdateId) saveLastUpdateId(lastUpdateId);
 }
