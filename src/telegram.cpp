@@ -472,6 +472,30 @@ static String jsonUnescape(const String& in) {
   return out;
 }
 
+// Fetches a fresh snapshot from cfg/st right now and sends it only to
+// chatId (whoever asked) - unlike triggerMotionAlert, this is an explicit
+// one-off request, not a motion alert, so it ignores st.alertsEnabled and
+// doesn't touch st.lastAlert/hasAlerted or spend the alert cooldown.
+static void sendOnDemandSnapshot(const CameraConfig& cfg, CameraState& st, const String& chatId) {
+  if (st.snapshotUri.length() == 0) {
+    sendTelegramMessageTo(chatId, cfg.name + ": no snapshot URI available yet.");
+    return;
+  }
+
+  size_t jpgLen = 0;
+  uint8_t* jpg = fetchOneSnapshot(cfg, st, jpgLen);
+  if (!jpg) {
+    sendTelegramMessageTo(chatId, cfg.name + ": snapshot fetch failed - see Serial log.");
+    return;
+  }
+
+  String caption = cfg.name + " - " + nowTimestampString();
+  if (!sendTelegramPhotoBuffered(jpg, jpgLen, caption, chatId)) {
+    Serial.printf("[%s] On-demand snapshot send to chat %s failed.\n", cfg.name.c_str(), chatId.c_str());
+  }
+  free(jpg);
+}
+
 static void handleTelegramCommand(const String& fromChatId, const String& text, const CameraConfig cameras[],
                                    CameraState states[], size_t numCameras) {
   Serial.printf("[Telegram] Command from chat %s: \"%s\"\n", fromChatId.c_str(), text.c_str());
@@ -490,10 +514,12 @@ static void handleTelegramCommand(const String& fromChatId, const String& text, 
   String lowerText = text;
   lowerText.toLowerCase();
 
-  bool turnOn;
+  enum class Cmd { On, Off, Snap };
+  Cmd cmd;
   String cameraName;
-  if (lowerText.startsWith("/on ")) { turnOn = true; cameraName = text.substring(4); }
-  else if (lowerText.startsWith("/off ")) { turnOn = false; cameraName = text.substring(5); }
+  if (lowerText.startsWith("/on ")) { cmd = Cmd::On; cameraName = text.substring(4); }
+  else if (lowerText.startsWith("/off ")) { cmd = Cmd::Off; cameraName = text.substring(5); }
+  else if (lowerText.startsWith("/snap ")) { cmd = Cmd::Snap; cameraName = text.substring(6); }
   else {
     Serial.println("[Telegram] Unrecognized command - ignored.");
     return;
@@ -517,27 +543,36 @@ static void handleTelegramCommand(const String& fromChatId, const String& text, 
     if (haystack.startsWith(needle)) matches.push_back(i);
   }
 
-  if (matches.size() == 1) {
-    size_t i = matches[0];
-    states[i].alertsEnabled = turnOn;
-    saveAlertEnabledPref(i, turnOn);
-    Serial.printf("[%s] Alerts turned %s via Telegram.\n", cameras[i].name.c_str(), turnOn ? "ON" : "OFF");
-    sendTelegramMessageTo(fromChatId, String(cameras[i].name) + " alerts: " + (turnOn ? "ON" : "OFF"));
-    return;
-  }
+  const char* verb = (cmd == Cmd::On) ? "on" : (cmd == Cmd::Off) ? "off" : "snap";
 
   if (matches.size() > 1) {
     String list;
     for (size_t idx : matches) { if (list.length() > 0) list += ", "; list += cameras[idx].name; }
-    Serial.printf("[Telegram] /%s target \"%s\" is ambiguous: %s\n",
-                  turnOn ? "on" : "off", cameraName.c_str(), list.c_str());
+    Serial.printf("[Telegram] /%s target \"%s\" is ambiguous: %s\n", verb, cameraName.c_str(), list.c_str());
     sendTelegramMessageTo(fromChatId, "\"" + cameraName + "\" matches more than one camera: " + list +
                                        " - be more specific.");
     return;
   }
 
-  Serial.printf("[Telegram] /%s target not found or disabled: \"%s\"\n", turnOn ? "on" : "off", cameraName.c_str());
-  sendTelegramMessageTo(fromChatId, "Unknown or disabled camera: " + cameraName);
+  if (matches.empty()) {
+    Serial.printf("[Telegram] /%s target not found or disabled: \"%s\"\n", verb, cameraName.c_str());
+    sendTelegramMessageTo(fromChatId, "Unknown or disabled camera: " + cameraName);
+    return;
+  }
+
+  size_t i = matches[0];
+
+  if (cmd == Cmd::Snap) {
+    Serial.printf("[%s] On-demand snapshot requested via Telegram.\n", cameras[i].name.c_str());
+    sendOnDemandSnapshot(cameras[i], states[i], fromChatId);
+    return;
+  }
+
+  bool turnOn = (cmd == Cmd::On);
+  states[i].alertsEnabled = turnOn;
+  saveAlertEnabledPref(i, turnOn);
+  Serial.printf("[%s] Alerts turned %s via Telegram.\n", cameras[i].name.c_str(), turnOn ? "ON" : "OFF");
+  sendTelegramMessageTo(fromChatId, String(cameras[i].name) + " alerts: " + (turnOn ? "ON" : "OFF"));
 }
 
 void pollTelegramCommands(const CameraConfig cameras[], CameraState states[], size_t numCameras) {

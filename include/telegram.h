@@ -49,11 +49,17 @@ bool loadAlertEnabledPref(size_t index);
 //   /off <camera name/prefix>  - mute Telegram alerts for that camera
 //                                (polling and its ONVIF subscription keep
 //                                running regardless)
+//   /snap <camera name/prefix> - fetch and send a fresh snapshot right now,
+//                                to whoever asked only - ignores alertsEnabled
+//                                (works even while muted) and doesn't touch
+//                                the alert cooldown, since it's an explicit
+//                                one-off request, not a motion alert
 //   /status                    - list every enabled camera's on/off state
-// Each toggle is persisted via NVS so it survives a reboot. The reply goes
-// back to whichever chat sent the command. Commands from a chat ID that
-// doesn't belong to a Telegram user with canCommand enabled (see
-// telegram_users.h) are ignored. Call periodically from loop() (e.g. every
-// TELEGRAM_COMMAND_POLL_MS) - each call is one short, non-blocking-long-poll
-// HTTPS round trip, safe to call often.
+// Each /on or /off toggle is persisted via NVS so it survives a reboot. The
+// reply (and, for /snap, the photo) goes back to whichever chat sent the
+// command. Commands from a chat ID that doesn't belong to a Telegram user
+// with canCommand enabled (see telegram_users.h) are ignored. Call
+// periodically from loop() (e.g. every TELEGRAM_COMMAND_POLL_MS) - each
+// call is one short, non-blocking-long-poll HTTPS round trip (plus, for a
+// /snap, the snapshot fetch/upload itself), safe to call often.
 void pollTelegramCommands(const CameraConfig cameras[], CameraState states[], size_t numCameras);

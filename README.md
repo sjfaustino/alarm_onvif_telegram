@@ -47,7 +47,9 @@ Arduino-ESP32/IDF releases.
 - Any number of Telegram users, each independently configured for which cameras
   they hear from (specific list or "all, including future ones"), whether they get
   the heartbeat/boot messages, and whether they're allowed to send `/on`, `/off`,
-  `/status` commands (which apply per-camera and reply to whoever sent them).
+  `/snap`, `/status` commands (which apply per-camera, matched by name or prefix,
+  and reply to whoever sent them - `/snap` fetches and sends a fresh photo on
+  demand, even from a camera currently muted with `/off`).
 - Dashboard login is opt-in but boots disabled: the board comes up with no password
   and a standing banner nagging you to set one, on every page, until you do. Once
   set (Security page), HTTP Basic Auth is required on every dashboard route,
