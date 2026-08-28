@@ -45,9 +45,35 @@ std::vector<TelegramUpdate> parseTelegramUpdates(const String& jsonBody, String*
         u.text = String(text);
       }
     }
-    // No "message" at all (e.g. edited_message, channel_post) - u keeps
-    // hasChatId=false/text="", which the caller treats as "nothing to act
-    // on", but updateId is still returned so its offset still advances.
+
+    JsonObject callbackQuery = update["callback_query"];
+    if (!callbackQuery.isNull()) {
+      const char* id = callbackQuery["id"];
+      if (id != nullptr) {
+        u.callbackQueryId = String(id);
+        u.hasCallbackQuery = true;
+      }
+      const char* data = callbackQuery["data"];
+      if (data != nullptr) u.callbackData = String(data);
+
+      // Same null-safety idiom as the "message" branch above - a stale/
+      // deleted-message callback_query can omit this entirely, in which
+      // case chatId/hasChatId just stay whatever "message" above already
+      // left them (false, since a callback_query update has no top-level
+      // "message" of its own).
+      JsonObject cbMessage = callbackQuery["message"];
+      if (!cbMessage.isNull()) {
+        JsonObject chat = cbMessage["chat"];
+        if (!chat.isNull() && !chat["id"].isNull()) {
+          u.chatId = chat["id"].as<int64_t>();
+          u.hasChatId = true;
+        }
+      }
+    }
+    // Neither "message" nor "callback_query" (e.g. edited_message,
+    // channel_post) - u keeps hasChatId=false/text=""/hasCallbackQuery=
+    // false, which the caller treats as "nothing to act on", but updateId
+    // is still returned so its offset still advances.
 
     updates.push_back(u);
   }
@@ -127,12 +153,18 @@ ParsedTelegramCommand parseTelegramCommand(const String& text) {
   } else if (lower.startsWith("/log ")) {
     result.command = TelegramCommand::Log;
     result.logCountText = text.substring(5);
+  } else if (lower == "/on") {
+    result.command = TelegramCommand::On; // cameraName stays "" - picker, see this function's own comment
   } else if (lower.startsWith("/on ")) {
     result.command = TelegramCommand::On;
     splitNameAndDuration(text.substring(4), result.cameraName, result.durationText);
+  } else if (lower == "/off") {
+    result.command = TelegramCommand::Off;
   } else if (lower.startsWith("/off ")) {
     result.command = TelegramCommand::Off;
     splitNameAndDuration(text.substring(5), result.cameraName, result.durationText);
+  } else if (lower == "/snap") {
+    result.command = TelegramCommand::Snap;
   } else if (lower.startsWith("/snap ")) {
     result.command = TelegramCommand::Snap;
     result.cameraName = text.substring(6);

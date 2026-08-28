@@ -87,6 +87,36 @@ void test_parseTelegramUpdates_message_without_text(void) {
   TEST_ASSERT_EQUAL_STRING("", updates[0].text.c_str());
 }
 
+// An inline-keyboard button tap - callback_query, not message. chatId
+// comes from callback_query.message.chat.id (the chat the picker message
+// was sent to), same field names/roles as a normal message update.
+void test_parseTelegramUpdates_callback_query(void) {
+  String body = R"({"ok":true,"result":[
+    {"update_id":9,"callback_query":{"id":"cbq123","data":"off|D01-FrontDoor",
+     "message":{"chat":{"id":555}}}}
+  ]})";
+  std::vector<TelegramUpdate> updates = parseTelegramUpdates(body);
+  TEST_ASSERT_EQUAL_INT(1, (int)updates.size());
+  TEST_ASSERT_TRUE(updates[0].hasCallbackQuery);
+  TEST_ASSERT_EQUAL_STRING("cbq123", updates[0].callbackQueryId.c_str());
+  TEST_ASSERT_EQUAL_STRING("off|D01-FrontDoor", updates[0].callbackData.c_str());
+  TEST_ASSERT_TRUE(updates[0].hasChatId);
+  TEST_ASSERT_EQUAL_INT64(555, updates[0].chatId);
+  TEST_ASSERT_EQUAL_STRING("", updates[0].text.c_str());
+}
+
+// Telegram can omit "message" on a callback_query for a stale/deleted
+// message - hasChatId must stay false (not crash), same null-safety
+// idiom as a plain message's missing chat.
+void test_parseTelegramUpdates_callback_query_without_message(void) {
+  String body = R"({"ok":true,"result":[
+    {"update_id":10,"callback_query":{"id":"cbq456","data":"snap|all"}}
+  ]})";
+  std::vector<TelegramUpdate> updates = parseTelegramUpdates(body);
+  TEST_ASSERT_TRUE(updates[0].hasCallbackQuery);
+  TEST_ASSERT_FALSE(updates[0].hasChatId);
+}
+
 void test_parseTelegramUpdates_empty_result_array(void) {
   std::vector<TelegramUpdate> updates = parseTelegramUpdates(R"({"ok":true,"result":[]})");
   TEST_ASSERT_TRUE(updates.empty());
@@ -286,14 +316,36 @@ void test_parseTelegramCommand_is_case_insensitive(void) {
   TEST_ASSERT_TRUE(TelegramCommand::Snap == parseTelegramCommand("/SNAP D01").command);
 }
 
-// Bare "/on" with no trailing space and camera name isn't a recognized
-// command at all (matches how the old inline parsing - which required
-// "/on " with a trailing space - fell through to "unrecognized, ignored"
-// for it) - it must not be treated as an unauthorized /on attempt.
-void test_parseTelegramCommand_on_without_target_is_unknown(void) {
+// Bare "/on"/"/off"/"/snap" (no target at all) parse as their own command
+// with an empty cameraName, NOT Unknown - handleTelegramCommand (telegram.cpp)
+// recognizes the empty name and sends an inline-keyboard camera picker
+// instead of falling through to name/prefix matching.
+void test_parseTelegramCommand_on_without_target_is_picker(void) {
   ParsedTelegramCommand p = parseTelegramCommand("/on");
-  TEST_ASSERT_TRUE(TelegramCommand::Unknown == p.command);
-  TEST_ASSERT_TRUE(TelegramCommandPermission::Unknown == p.requiredPermission);
+  TEST_ASSERT_TRUE(TelegramCommand::On == p.command);
+  TEST_ASSERT_TRUE(TelegramCommandPermission::Command == p.requiredPermission);
+  TEST_ASSERT_EQUAL_STRING("", p.cameraName.c_str());
+}
+
+void test_parseTelegramCommand_off_without_target_is_picker(void) {
+  ParsedTelegramCommand p = parseTelegramCommand("/off");
+  TEST_ASSERT_TRUE(TelegramCommand::Off == p.command);
+  TEST_ASSERT_EQUAL_STRING("", p.cameraName.c_str());
+}
+
+void test_parseTelegramCommand_snap_without_target_is_picker(void) {
+  ParsedTelegramCommand p = parseTelegramCommand("/snap");
+  TEST_ASSERT_TRUE(TelegramCommand::Snap == p.command);
+  TEST_ASSERT_EQUAL_STRING("", p.cameraName.c_str());
+}
+
+// "/on " (trailing space, still nothing after it) reaches the same empty
+// cameraName via splitNameAndDuration instead of the bare-word branch
+// above - a second, previously-untested path into the same picker case.
+void test_parseTelegramCommand_on_with_trailing_space_only_is_picker(void) {
+  ParsedTelegramCommand p = parseTelegramCommand("/on ");
+  TEST_ASSERT_TRUE(TelegramCommand::On == p.command);
+  TEST_ASSERT_EQUAL_STRING("", p.cameraName.c_str());
 }
 
 void test_parseTelegramCommand_unrecognized_text_is_unknown(void) {
@@ -453,6 +505,8 @@ int main(int argc, char** argv) {
   RUN_TEST(test_parseTelegramUpdates_unescapes_text_field);
   RUN_TEST(test_parseTelegramUpdates_update_without_message_still_returns_updateId);
   RUN_TEST(test_parseTelegramUpdates_message_without_text);
+  RUN_TEST(test_parseTelegramUpdates_callback_query);
+  RUN_TEST(test_parseTelegramUpdates_callback_query_without_message);
   RUN_TEST(test_parseTelegramUpdates_empty_result_array);
   RUN_TEST(test_parseTelegramUpdates_malformed_json_reports_error);
   RUN_TEST(test_parseTelegramUpdates_api_error_reports_description);
@@ -481,7 +535,10 @@ int main(int argc, char** argv) {
   RUN_TEST(test_parseTelegramCommand_log_bare);
   RUN_TEST(test_parseTelegramCommand_log_with_count);
   RUN_TEST(test_parseTelegramCommand_is_case_insensitive);
-  RUN_TEST(test_parseTelegramCommand_on_without_target_is_unknown);
+  RUN_TEST(test_parseTelegramCommand_on_without_target_is_picker);
+  RUN_TEST(test_parseTelegramCommand_off_without_target_is_picker);
+  RUN_TEST(test_parseTelegramCommand_snap_without_target_is_picker);
+  RUN_TEST(test_parseTelegramCommand_on_with_trailing_space_only_is_picker);
   RUN_TEST(test_parseTelegramCommand_unrecognized_text_is_unknown);
   RUN_TEST(test_parseTelegramCommand_off_with_minutes_duration);
   RUN_TEST(test_parseTelegramCommand_on_with_clock_time_duration);

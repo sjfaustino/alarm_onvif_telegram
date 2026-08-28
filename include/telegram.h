@@ -62,6 +62,12 @@ bool loadAlertEnabledPref(size_t index);
 // fetches a fresh photo from every camera). A real camera named starting
 // with "all" would be unreachable by its own prefix as a result - an
 // accepted, extremely narrow trade-off, not a bug.
+//   /on|/off|/snap with no target at all - shows a tappable inline-
+//                              keyboard camera picker instead (one button
+//                              per enabled camera plus "All"); permanent
+//                              on/off/snap only, no duration timer via
+//                              buttons. See handleTelegramCallbackQuery
+//                              (telegram.cpp) for how a tap is handled.
 //   /on|/off <name/prefix|all> [duration] - resume/mute alerts
 //                              (subscription stays up either way).
 //                              Optional trailing duration schedules an

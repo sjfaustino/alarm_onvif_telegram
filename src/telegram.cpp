@@ -238,29 +238,31 @@ static int currentLocalMinuteOfDay() {
 // transfer-encoding on the response, which a manual "read until idle, split
 // on the first \r\n\r\n" parser doesn't; api.telegram.org is free to send
 // a chunked response and has been observed to.
-static bool sendTelegramMessageTo(const String& chatId, const String& text) {
+// Shared outbound JSON-POST mechanics for every Telegram Bot API method
+// this project calls with a JSON body - sendMessage (plain or with an
+// inline keyboard) and answerCallbackQuery. `method` is the API method
+// name (e.g. "sendMessage"); `doc` is the caller's already-built request
+// body.
+static bool sendTelegramApiCall(const String& method, JsonDocument& doc) {
   WiFiClientSecure client;
   client.setCACert(TELEGRAM_ROOT_CA); // see telegram_ca.h if this needs refreshing
 
   HTTPClient http;
-  String url = "https://api.telegram.org/bot" + String(TELEGRAM_BOT_TOKEN) + "/sendMessage";
+  String url = "https://api.telegram.org/bot" + String(TELEGRAM_BOT_TOKEN) + "/" + method;
   if (!http.begin(client, url)) {
-    Serial.printf("sendTelegramMessageTo(%s): http.begin() failed.\n", chatId.c_str());
+    Serial.printf("sendTelegramApiCall(%s): http.begin() failed.\n", method.c_str());
     return false;
   }
   http.setTimeout(HTTP_TIMEOUT_MS);
   http.addHeader("Content-Type", "application/json");
 
-  JsonDocument outDoc;
-  outDoc["chat_id"] = chatId;
-  outDoc["text"] = text;
   String body;
-  serializeJson(outDoc, body);
+  serializeJson(doc, body);
 
   int code = http.POST(body);
   bool ok = (code == 200);
   if (!ok) {
-    Serial.printf("sendTelegramMessageTo(%s): HTTP %d", chatId.c_str(), code);
+    Serial.printf("sendTelegramApiCall(%s): HTTP %d", method.c_str(), code);
     if (code > 0) {
       Serial.printf(" - %s\n", http.getString().c_str());
     } else {
@@ -272,6 +274,50 @@ static bool sendTelegramMessageTo(const String& chatId, const String& text) {
   }
   http.end();
   return ok;
+}
+
+static bool sendTelegramMessageTo(const String& chatId, const String& text) {
+  JsonDocument doc;
+  doc["chat_id"] = chatId;
+  doc["text"] = text;
+  return sendTelegramApiCall("sendMessage", doc);
+}
+
+// Sends text with an inline keyboard, one button per row - `buttons` is
+// (label, callback_data) pairs. handleTelegramCallbackQuery (below)
+// receives a tapped button's callback_data back on the next poll. Skips
+// (and logs) any button whose callback_data would exceed Telegram's
+// 64-byte limit rather than sending a broken button - not expected to
+// trigger with this project's camera names.
+static bool sendTelegramKeyboardTo(const String& chatId, const String& text,
+                                    const std::vector<std::pair<String, String>>& buttons) {
+  JsonDocument doc;
+  doc["chat_id"] = chatId;
+  doc["text"] = text;
+  JsonArray rows = doc["reply_markup"]["inline_keyboard"].to<JsonArray>();
+  for (auto& b : buttons) {
+    if (b.second.length() > 64) {
+      Serial.printf("[Telegram] Skipping button \"%s\" - callback_data too long (%u bytes).\n",
+                    b.first.c_str(), (unsigned)b.second.length());
+      continue;
+    }
+    JsonArray row = rows.add<JsonArray>();
+    JsonObject btn = row.add<JsonObject>();
+    btn["text"] = b.first;
+    btn["callback_data"] = b.second;
+  }
+  return sendTelegramApiCall("sendMessage", doc);
+}
+
+// Acknowledges a button tap - clears its client-side loading spinner.
+// `text` (optional, "" for none) shows as a brief toast, not a chat
+// message - handleTelegramCallbackQuery still sends a real confirmation
+// message separately for anything worth keeping in the chat history.
+static bool answerTelegramCallback(const String& callbackQueryId, const String& text) {
+  JsonDocument doc;
+  doc["callback_query_id"] = callbackQueryId;
+  if (text.length() > 0) doc["text"] = text;
+  return sendTelegramApiCall("answerCallbackQuery", doc);
 }
 
 // Broadcasts to every Telegram user with systemMessages enabled - used for
@@ -682,6 +728,34 @@ static AlertTimer resolveAlertTimer(const String& durationText, bool turnOn) {
   return result;
 }
 
+// Sets one camera's alerts on/off, persists it (NVS), logs it, and
+// replies with confirmation - the single-camera state-mutation tail
+// shared by the text-command path (/on|/off <camera> [duration], see
+// handleTelegramCommand's own tail below) and the inline-keyboard button
+// path (handleTelegramCallbackQuery, always a default-constructed
+// AlertTimer - permanent, no duration support via buttons). Sharing this
+// one implementation is what keeps the button path from silently
+// diverging from the text-command path on reboot-persistence (a change
+// here or a forgotten saveAlertEnabledPref call would otherwise only be
+// caught in one of the two places).
+static void applyOnOffToCamera(const CameraConfig& cfg, CameraState& st, size_t index, bool turnOn,
+                                const AlertTimer& timer, const String& viaWho, const String& replyChatId) {
+  {
+    CameraStateLock lock(st); // read cross-task by camera.cpp/webserver.cpp
+    st.alertsEnabled = turnOn;
+    // A plain (no-timer) /on or /off cancels whatever timer was pending
+    // before - issuing a new command always replaces the old schedule,
+    // never stacks with it.
+    st.scheduledRevertDueMs = timer.hasTimer ? timer.revertDueMs : 0;
+    st.scheduledRevertToOn = !turnOn;
+  }
+  saveAlertEnabledPref(index, turnOn);
+  Serial.printf("[%s] Alerts turned %s via Telegram by user \"%s\"%s.\n", cfg.name.c_str(),
+                turnOn ? "ON" : "OFF", viaWho.c_str(), timer.hasTimer ? " (timed)" : "");
+  logEvent(cfg.name + " alerts: " + (turnOn ? "ON" : "OFF") + " via " + viaWho + timer.suffix);
+  sendTelegramMessageTo(replyChatId, cfg.name + " alerts: " + (turnOn ? "ON" : "OFF") + timer.suffix);
+}
+
 // Applies /on all, /off all [duration], or /snap all to every currently-
 // enabled camera - see pollTelegramCommands' (telegram.h) comment on the
 // "all" keyword for the (extremely narrow) trade-off it makes against a
@@ -735,6 +809,31 @@ static void handleAllCamerasCommand(const TelegramUser& sender, const ParsedTele
   logEvent("All cameras alerts: " + String(turnOn ? "ON" : "OFF") + " via " + sender.name + timer.suffix);
   sendTelegramMessageTo(sender.chatId, "All " + String(targets.size()) + " camera(s) alerts: " +
                                         (turnOn ? "ON" : "OFF") + timer.suffix);
+}
+
+// Sent when /on, /off, or /snap arrives with no camera name at all (see
+// parseTelegramCommand's own comment on the bare-command case) - one
+// button per enabled camera plus "All", each carrying
+// "<verb>|<cameraNameOrAll>" as its callback_data for
+// handleTelegramCallbackQuery (below) to act on when tapped. No
+// duration-timer support via buttons - tap-to-toggle/snap only, permanent
+// on/off.
+static void sendCameraPickerKeyboard(const TelegramUser& sender, TelegramCommand command,
+                                      const CameraConfig cameras[], size_t numCameras) {
+  String verb = commandDisplayName(command).substring(1); // "on"/"off"/"snap" - drop the leading "/"
+
+  std::vector<std::pair<String, String>> buttons;
+  for (size_t i = 0; i < numCameras; i++) {
+    if (!cameras[i].enabled) continue;
+    buttons.push_back({cameras[i].name, verb + "|" + cameras[i].name});
+  }
+  if (buttons.empty()) {
+    sendTelegramMessageTo(sender.chatId, "No enabled cameras to choose from.");
+    return;
+  }
+  buttons.push_back({"All", verb + "|all"});
+
+  sendTelegramKeyboardTo(sender.chatId, "Choose a camera for " + commandDisplayName(command) + ":", buttons);
 }
 
 // lastUpdateId is this poll's running highest update_id, already advanced
@@ -849,6 +948,8 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
           "/on <camera|all> [duration] - resume alerts\n"
           "/off <camera|all> [duration] - mute alerts\n"
           "/snap <camera|all> - fresh photo now, ignoring mute/cooldown\n"
+          "/on, /off, or /snap with no camera name shows a tappable button "
+          "picker instead (permanent on/off/snap only, no duration timer)\n"
           "/health - board health (heap, PSRAM, NVS, WiFi signal, SD storage)\n"
           "/log [N] - the N most recent Activity log entries (default 10, max " +
           String((unsigned)EVENT_LOG_CAPACITY) + ")\n"
@@ -926,6 +1027,17 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
       return;
   }
 
+  // Bare /on, /off, or /snap (no target at all) - see parseTelegramCommand's
+  // own comment on why this reaches here with an empty cameraName instead
+  // of Unknown. Offer an inline-keyboard picker instead of falling through
+  // to the "all"/prefix-matching logic below, which would otherwise wrongly
+  // treat "" as matching every camera (matchCamerasByPrefix's
+  // startsWith("") is unconditionally true).
+  if (parsed.cameraName.length() == 0) {
+    sendCameraPickerKeyboard(sender, parsed.command, cameras, numCameras);
+    return;
+  }
+
   // "all" (case-insensitive) is a special target meaning every enabled
   // camera at once, matched here rather than by matchCamerasByPrefix below
   // - see pollTelegramCommands' (telegram.h) comment on the trade-off that
@@ -983,21 +1095,89 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
     return;
   }
 
-  {
-    CameraStateLock lock(states[i]); // read cross-task by camera.cpp/webserver.cpp
-    states[i].alertsEnabled = turnOn;
-    // A plain (no-timer) /on or /off cancels whatever timer was pending
-    // before - issuing a new command always replaces the old schedule,
-    // never stacks with it.
-    states[i].scheduledRevertDueMs = timer.hasTimer ? timer.revertDueMs : 0;
-    states[i].scheduledRevertToOn = !turnOn;
+  applyOnOffToCamera(cameras[i], states[i], i, turnOn, timer, sender.name, sender.chatId);
+}
+
+// Handles an inline-keyboard button tap (sendCameraPickerKeyboard above) -
+// upd.callbackData is "<verb>|<cameraNameOrAll>", e.g. "off|D01-FrontDoor"
+// or "snap|all". `sender` has already passed the same chat-id lookup and
+// canCommand||canSnap||canReset gate pollTelegramCommands applies to every
+// update - this function still re-checks the SPECIFIC permission the
+// tapped verb needs (canCommand for on/off, canSnap for snap), exactly
+// like the text-command path does via requiredPermissionForCommand -
+// callback_data is client-supplied and never trusted alone.
+static void handleTelegramCallbackQuery(const TelegramUser& sender, const TelegramUpdate& upd,
+                                         const CameraConfig cameras[], CameraState states[], size_t numCameras) {
+  int sep = upd.callbackData.indexOf('|');
+  String verb = sep >= 0 ? upd.callbackData.substring(0, sep) : upd.callbackData;
+  String target = sep >= 0 ? upd.callbackData.substring(sep + 1) : "";
+
+  TelegramCommand command;
+  if (verb == "on") command = TelegramCommand::On;
+  else if (verb == "off") command = TelegramCommand::Off;
+  else if (verb == "snap") command = TelegramCommand::Snap;
+  else {
+    Serial.printf("[Telegram] Unrecognized callback_data \"%s\" from user \"%s\".\n",
+                  upd.callbackData.c_str(), sender.name.c_str());
+    answerTelegramCallback(upd.callbackQueryId, "Unrecognized action.");
+    return;
   }
-  saveAlertEnabledPref(i, turnOn);
-  Serial.printf("[%s] Alerts turned %s via Telegram by user \"%s\"%s.\n", cameras[i].name.c_str(),
-                turnOn ? "ON" : "OFF", sender.name.c_str(), timer.hasTimer ? " (timed)" : "");
-  logEvent(String(cameras[i].name) + " alerts: " + (turnOn ? "ON" : "OFF") + " via " + sender.name + timer.suffix);
-  sendTelegramMessageTo(sender.chatId,
-                         String(cameras[i].name) + " alerts: " + (turnOn ? "ON" : "OFF") + timer.suffix);
+
+  bool authorized = (command == TelegramCommand::Snap) ? sender.canSnap : sender.canCommand;
+  if (!authorized) {
+    Serial.printf("[Telegram] User \"%s\" not authorized for the %s button.\n", sender.name.c_str(), verb.c_str());
+    answerTelegramCallback(upd.callbackQueryId, "Not authorized.");
+    sendTelegramMessageTo(sender.chatId, "You're not authorized to use " + commandDisplayName(command) + ".");
+    return;
+  }
+
+  String targetLower = target;
+  targetLower.toLowerCase();
+  if (targetLower == "all") {
+    // Reuses handleAllCamerasCommand as-is - it only reads parsed.command
+    // (and parsed.durationText, always "" here - buttons are permanent
+    // only), never parsed.cameraName, so a synthetic ParsedTelegramCommand
+    // built just for this call is safe.
+    ParsedTelegramCommand parsed;
+    parsed.command = command;
+    parsed.requiredPermission = requiredPermissionForCommand(command);
+    handleAllCamerasCommand(sender, parsed, cameras, states, numCameras);
+    answerTelegramCallback(upd.callbackQueryId, "");
+    return;
+  }
+
+  // Exact match, not matchCamerasByPrefix - the button's label was this
+  // camera's real name, generated by sendCameraPickerKeyboard itself, not
+  // typed by hand, so there's no prefix-ambiguity case to handle here.
+  int idx = -1;
+  for (size_t i = 0; i < numCameras; i++) {
+    if (cameras[i].name.equalsIgnoreCase(target)) { idx = (int)i; break; }
+  }
+  if (idx < 0) {
+    // The camera list can change between the picker being sent and a
+    // button being tapped (renamed/deleted, reboot required to apply -
+    // see webserver_cameras.cpp) - handled as a clean "no longer exists"
+    // reply, not a crash.
+    Serial.printf("[Telegram] Callback target camera \"%s\" no longer exists (user \"%s\").\n",
+                  target.c_str(), sender.name.c_str());
+    answerTelegramCallback(upd.callbackQueryId, "That camera no longer exists.");
+    sendTelegramMessageTo(sender.chatId, "\"" + target + "\" no longer exists - it may have been renamed "
+                                          "or deleted since this button was sent.");
+    return;
+  }
+
+  if (command == TelegramCommand::Snap) {
+    Serial.printf("[%s] On-demand snapshot requested by user \"%s\" via button.\n",
+                  cameras[idx].name.c_str(), sender.name.c_str());
+    sendOnDemandSnapshot(cameras[idx], states[idx], sender.chatId);
+    answerTelegramCallback(upd.callbackQueryId, "");
+    return;
+  }
+
+  bool turnOn = (command == TelegramCommand::On);
+  AlertTimer permanent; // default-constructed: ok=true, hasTimer=false, suffix="" - buttons are permanent only
+  applyOnOffToCamera(cameras[idx], states[idx], (size_t)idx, turnOn, permanent, sender.name, sender.chatId);
+  answerTelegramCallback(upd.callbackQueryId, "");
 }
 
 // Called once per loop() tick (main.cpp). Cheap: just a millis() comparison
@@ -1096,6 +1276,11 @@ void pollTelegramCommands(const CameraConfig cameras[], CameraState states[], si
       } else {
         Serial.printf("[Telegram] Ignored command from unknown chat ID %lld\n", (long long)upd.chatId);
       }
+      continue;
+    }
+
+    if (upd.hasCallbackQuery) {
+      handleTelegramCallbackQuery(*sender, upd, cameras, states, numCameras);
       continue;
     }
 

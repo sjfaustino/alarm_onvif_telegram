@@ -25,6 +25,26 @@ Arduino-ESP32/IDF releases.
   single standardized topic name for person/vehicle detection across vendors) is
   logged - to Serial and the Activity page - instead of silently dropped, so support
   for it can be added deliberately once you know what your camera actually sends.
+- Per-camera recurring daily quiet hours (Cameras page edit form) mute motion
+  Telegram alerts during a configured window - tamper and signal-loss alerts stay
+  always-on regardless, since those are security/connectivity-relevant, not
+  "noise". Motion during the window is still detected, cooldown-gated, and
+  recorded (Activity log entry + snapshot history), just not sent. Leaving both
+  the start and end time at the default `00:00` means no active window (quiet
+  hours needs a real, non-zero-width window to do anything) - the opposite
+  default would let checking the enable box alone silently and permanently kill
+  every motion alert for that camera. Falls back to sending alerts normally if
+  the board's clock hasn't synced yet, rather than risk misjudging the window
+  against a near-epoch time.
+- Per-camera "no motion" watchdog (hours, 0 = off) alerts if a camera hasn't seen
+  *any* real motion in over that long - catches a dead PIR or a camera knocked to
+  face the wrong way, which otherwise looks identical to a quiet day. Re-arms
+  automatically once motion resumes, so it only fires once per stretch of silence.
+- Per-camera timelapse capture (minutes, 0 = off) stores a fresh snapshot on its
+  own interval regardless of motion - kept in whichever snapshot-history store is
+  active (see below), never sent to Telegram. Useful for confirming a camera's
+  still alive between motion events, or building a day timelapse from the SD
+  history.
 - TLS to Telegram is certificate-pinned (not `setInsecure()`).
 - Per-camera quirks handled via config flags: WS-Security vs. HTTP Basic Auth,
   optional `InitialTerminationTime`/`ReplyTo` (needed by some Xiongmai-derived
@@ -100,8 +120,16 @@ Arduino-ESP32/IDF releases.
 - A small in-memory Activity log (Activity page) - the most recent ~40 events
   (motion alerts, offline/online transitions, on/off changes including timed
   ones, live config reloads, boot) with a relative timestamp, for a quick "what
-  happened recently" view without a serial cable. Not persisted - resets on
-  reboot, same as the rest of this board's runtime state.
+  happened recently" view without a serial cable. That in-memory view resets on
+  reboot, same as the rest of this board's runtime state - but when SD storage is
+  active, every event is also appended (with a real timestamp, not just uptime)
+  to `/activity.log` on the card, capped at 64KB (wipes and starts fresh once
+  exceeded, same bounded-cost approach the snapshot pruning uses), downloadable
+  in full from the Activity page.
+- A "Gallery" page for browsing a camera's stored snapshot history beyond the
+  Cameras page's 5-entry Preview strip - most useful with SD storage active
+  (far more history than the PSRAM ring holds), showing up to 30 thumbnails per
+  camera per page load.
 - Firmware, Maintenance, and Storage live under a "System" submenu in the sidebar.
   Firmware updates over the dashboard: upload a `.bin` built with
   `pio run -e esp32s3` on the Firmware page instead of reflashing over USB. Uses
@@ -136,9 +164,16 @@ Arduino-ESP32/IDF releases.
   camera's ON/OFF state plus OFFLINE and any pending timer. `/health` reports
   board uptime, free heap (current and worst-case-ever), free PSRAM, NVS usage,
   WiFi signal strength, and SD storage status in one message - a quick "is
-  the board OK" check without opening the dashboard. `/help` replies with
-  the full command list plus the sender's own `canCommand`/`canSnap`/`canReset`
-  permissions, so the syntax doesn't have to be looked up here every time.
+  the board OK" check without opening the dashboard. `/log [N]` replies with the
+  N most recent Activity log entries (default 10, capped at 40) - a quick "what
+  happened recently" check without opening the dashboard. `/on`, `/off`, or
+  `/snap` sent with no camera name at all shows a tappable inline-keyboard
+  picker instead (one button per enabled camera plus "All") - handy from a
+  phone when typing/remembering an exact camera name is more friction than
+  tapping a button; permanent on/off/snap only, no duration timer via buttons.
+  `/help` replies with the full command list plus the sender's own
+  `canCommand`/`canSnap`/`canReset` permissions, so the syntax doesn't have to
+  be looked up here every time.
 - Dashboard login is opt-in but boots disabled: the board comes up with no password
   and a standing banner nagging you to set one, on every page, until you do. Once
   set (Security page), HTTP Basic Auth is required on every dashboard route,
@@ -287,10 +322,11 @@ include/
                        # erase-all, readability check) - thread-safe, hardware-dependent
   snapshot_history.h  # picks SD (sd_store.h) vs the PSRAM ring (camera.h) per camera - the
                        # one place that decision is made
-  webserver.h       # sidebar dashboard - Network/Cameras/Users/Activity/System (Firmware,
+  webserver.h       # sidebar dashboard - Network/Cameras/Users/Activity/Gallery/System (Firmware,
                      # Maintenance, Storage)/Security (PsychicHttp)
   webserver_network.h, webserver_cameras.h, webserver_users.h, webserver_activity.h,
-  webserver_firmware.h, webserver_maintenance.h, webserver_storage.h, webserver_security.h
+  webserver_gallery.h, webserver_firmware.h, webserver_maintenance.h, webserver_storage.h,
+  webserver_security.h
                      # each panel's own rendering/form-handling
   secrets.h.example # template for secrets.h (copy, fill in, gitignored)
   telegram_ca.h      # Telegram's root CA for TLS pinning (committed, not secret)
@@ -310,7 +346,8 @@ src/
   webserver.cpp      # routing table, dashboard shell, OTA upload state, login rate-limiting
                        # middleware - see webserver_*.cpp for panels
   webserver_network.cpp, webserver_cameras.cpp, webserver_users.cpp, webserver_activity.cpp,
-  webserver_firmware.cpp, webserver_maintenance.cpp, webserver_storage.cpp, webserver_security.cpp
+  webserver_gallery.cpp, webserver_firmware.cpp, webserver_maintenance.cpp, webserver_storage.cpp,
+  webserver_security.cpp
                      # each panel's rendering/form-handling, split out of what used to be one
                      # 946-line webserver.cpp
   telegram.cpp       # photo/message send paths, multi-recipient fan-out, remote commands
@@ -325,6 +362,8 @@ lib/                 # pure-logic modules with no hardware dependencies, split o
                            # /on,/off timer-token parsing (minutes or HH:MM)
   backoff/                # the doubling-with-a-cap retry delay formula (shared by main.cpp,
                            # camera.cpp, and webserver.cpp's login rate-limiter)
+  quiet_hours/              # recurring daily do-not-disturb window predicate (start/end minute
+                             # of day, handles the overnight-wraparound case)
   event_log/               # fixed-capacity ring buffer backing the Activity page
   snapshot_storage/         # SD directory-name collision avoidance + prune-decision logic for
                              # sd_store.cpp - the parts of SD support worth unit testing without

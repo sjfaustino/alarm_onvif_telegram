@@ -21,6 +21,16 @@ struct TelegramUpdate {
   int64_t chatId = 0;
   bool hasChatId = false;
   String text;
+
+  // Set when this update is an inline-keyboard button tap
+  // (update.callback_query) rather than a typed message - chatId/hasChatId
+  // above are populated the same way either way (from callback_query
+  // .message.chat.id), so the existing sender-lookup/authorization gate in
+  // pollTelegramCommands (telegram.cpp) needs no changes for this. text
+  // stays empty for a callback update.
+  bool hasCallbackQuery = false;
+  String callbackQueryId; // needed to answer it (clears the button's loading spinner)
+  String callbackData;    // e.g. "off|D01-FrontDoor" - see telegram.cpp's handleTelegramCallbackQuery
 };
 
 // Parses a Telegram getUpdates response body (JSON only - the caller
@@ -30,6 +40,13 @@ struct TelegramUpdate {
 // it's set to a short description when the body isn't valid JSON at all,
 // or the API itself reported failure (e.g. "ok":false from an invalid bot
 // token) - both cases return an empty vector.
+//
+// Handles two update shapes: a typed "message" (populates text/chatId as
+// before) and a "callback_query" (an inline-keyboard button tap -
+// populates hasCallbackQuery/callbackQueryId/callbackData, and chatId from
+// callback_query.message.chat.id the same way). Neither, or a shape this
+// project doesn't act on (edited_message, channel_post) - hasChatId stays
+// false, updateId is still returned so its offset still advances.
 std::vector<TelegramUpdate> parseTelegramUpdates(const String& jsonBody, String* error = nullptr);
 
 // Compares a TelegramUser's stored chat ID (persisted as text, see
@@ -107,14 +124,22 @@ struct ParsedTelegramCommand {
 // separately, to actually dispatch the command - two independent parses
 // of the same text that had to agree with each other. That's exactly the
 // kind of drift that caused the /reset reboot loop (a third such
-// duplication, since fixed). Case-insensitive; /on, /off, /snap
-// specifically require a trailing space and target to be recognized -
-// bare "/on" with nothing after it is Unknown, not a malformed /on.
+// duplication, since fixed). Case-insensitive.
+//
+// Bare "/on"/"/off"/"/snap" (no trailing target at all) parse as their
+// respective command WITH cameraName == "" - handleTelegramCommand
+// recognizes this and sends an inline-keyboard camera picker instead of
+// falling through to the usual name/prefix matching (which would
+// otherwise wrongly treat "" as matching every camera). "/on " (trailing
+// space, still nothing after it) produces the same empty cameraName via
+// the normal splitNameAndDuration path below - both are the same "no
+// target given" case, just reached two different ways.
 //
 // /on and /off additionally accept a second, space-separated token as a
 // timer, e.g. "/off D01 30" - everything after the camera name's own
 // first token goes into durationText verbatim (see parseDurationToken for
-// what it accepts), not re-split or validated here.
+// what it accepts), not re-split or validated here. Not available via the
+// button picker - buttons are tap-to-toggle only, permanent on/off.
 ParsedTelegramCommand parseTelegramCommand(const String& text);
 
 // Interprets a /on or /off duration token (ParsedTelegramCommand::
