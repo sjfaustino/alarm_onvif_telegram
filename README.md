@@ -69,12 +69,18 @@ Arduino-ESP32/IDF releases.
   still readable - not a full filesystem check, this project's SD support has
   no fsck/chkdsk equivalent) and an "erase all snapshot history" action
   (deletes only what this project itself wrote, not a low-level card format).
-  A lighter version of that same readability check - only each camera's
-  *newest* file, not the whole history - runs automatically once at boot,
-  right after mounting: bounded cost regardless of how much history is
-  stored (unlike the full on-demand check, which isn't run automatically for
-  exactly that reason), and it targets the specific failure mode a reboot
-  interrupted mid-write would actually produce. A deliberate reboot
+  Any unreadable file found by that pass sends a Telegram alert (to every
+  systemMessages-subscribed user) and logs an Activity page entry, same as a
+  runtime SD write/read failure does. A lighter version of that same
+  readability check - only each camera's *newest* file, not the whole
+  history - runs automatically once at boot, right after mounting: bounded
+  cost regardless of how much history is stored (unlike the full on-demand
+  check, which isn't run automatically for exactly that reason), and it
+  targets the specific failure mode a reboot interrupted mid-write would
+  actually produce. That boot-time check can't send its own Telegram alert
+  (it runs before WiFi connects), so any problem it finds instead gets
+  folded into the existing boot notification once WiFi is up. A deliberate
+  reboot
   (`/reset`, the Maintenance page, or a firmware update) now also waits for
   any in-flight SD write to finish first - `ESP.restart()` doesn't wait for
   other tasks on its own, and FAT isn't a journaling filesystem, so cutting
@@ -122,7 +128,10 @@ Arduino-ESP32/IDF releases.
   (`/off D01 30`) or a 24h clock time (`/off D01 23:00`, tomorrow if that time has
   already passed today) - after which the camera automatically reverts to the
   opposite state; omitted entirely is permanent, as before. `/status` reports each
-  camera's ON/OFF state plus OFFLINE and any pending timer. `/help` replies with
+  camera's ON/OFF state plus OFFLINE and any pending timer. `/health` reports
+  board uptime, free heap (current and worst-case-ever), free PSRAM, NVS usage,
+  WiFi signal strength, and SD storage status in one message - a quick "is
+  the board OK" check without opening the dashboard. `/help` replies with
   the full command list plus the sender's own `canCommand`/`canSnap`/`canReset`
   permissions, so the syntax doesn't have to be looked up here every time.
 - Dashboard login is opt-in but boots disabled: the board comes up with no password

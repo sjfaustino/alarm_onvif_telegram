@@ -107,6 +107,12 @@ struct SnapshotStorageCheckResult {
 // (that's the whole point of SD over the fixed-size PSRAM ring) - not run
 // automatically at boot for that reason. See checkNewestSnapshots() below
 // for the bounded check initSdStorage() actually runs.
+//
+// Broadcasts a Telegram alert (sendTelegramMessage, telegram.h) and logs
+// to the Activity page (logEvent, event_log_store.h) if any file turns
+// out unreadable - safe to call this directly, since the only caller is
+// the Storage page's "check storage" button, reachable only once the
+// webserver (and therefore WiFi) is already up.
 SnapshotStorageCheckResult checkSnapshotStorage();
 
 // Result of checkNewestSnapshots() below.
@@ -130,7 +136,22 @@ struct QuickSnapshotCheckResult {
 // camera list at all - just walks whatever subdirectories already exist,
 // so it works even before g_cameras is loaded (this runs early in
 // main.cpp's setup(), ahead of that).
+//
+// Deliberately does NOT call sendTelegramMessage() itself, unlike
+// checkSnapshotStorage() above: this runs from initSdStorage(), before
+// WiFi is connected (main.cpp's setup() calls it ahead of connectWiFi()),
+// so a send attempted from here would just silently fail. The result is
+// cached instead - see lastBootCheckResult() below, which main.cpp reads
+// once WiFi is actually up, to fold a warning into the existing boot
+// Telegram message rather than attempting a second, premature send.
 QuickSnapshotCheckResult checkNewestSnapshots();
+
+// The result of the most recent checkNewestSnapshots() call (run once at
+// boot from initSdStorage()) - see that function's own comment for why
+// the alert has to be deferred to here instead of sent from within it.
+// {ranAtAll: false} if SD wasn't active at boot, so a caller should only
+// warn when ranAtAll is true AND ok is false.
+QuickSnapshotCheckResult lastBootCheckResult();
 
 // Blocks (up to a bounded timeout) until no SD operation is in flight,
 // then returns - call this immediately before any *deliberate* reboot

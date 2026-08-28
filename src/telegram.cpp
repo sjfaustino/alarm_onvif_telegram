@@ -9,10 +9,13 @@
 #include "sd_store.h"
 #include <esp_task_wdt.h>
 #include <ArduinoJson.h>
+#include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <NetworkClient.h> // HTTPClient::getStreamPtr() returns NetworkClient* on Arduino-ESP32 3.x cores
 #include <esp_heap_caps.h>
+#include <nvs_flash.h>
+#include <nvs.h>
 #include <Preferences.h>
 #include <time.h>
 #include <cstring>
@@ -775,6 +778,7 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
           "/on <camera|all> [duration] - resume alerts\n"
           "/off <camera|all> [duration] - mute alerts\n"
           "/snap <camera|all> - fresh photo now, ignoring mute/cooldown\n"
+          "/health - board health (heap, PSRAM, NVS, WiFi signal, SD storage)\n"
           "/reset - reboot the board immediately\n"
           "/help - this message\n\n"
           "<camera> matches by name or prefix; \"all\" applies to every enabled camera.\n"
@@ -784,6 +788,40 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
           "Your permissions: canCommand=" + String(sender.canCommand ? "yes" : "no") +
           ", canSnap=" + String(sender.canSnap ? "yes" : "no") +
           ", canReset=" + String(sender.canReset ? "yes" : "no");
+      sendTelegramMessageTo(sender.chatId, msg);
+      return;
+    }
+
+    case TelegramCommand::Health: {
+      Serial.printf("[Telegram] Replying to user \"%s\" with /health.\n", sender.name.c_str());
+
+      nvs_stats_t nvsStats;
+      bool haveNvsStats = (nvs_get_stats(NULL, &nvsStats) == ESP_OK) && nvsStats.total_entries > 0;
+
+      SdStatus sd = getSdStatus();
+      String sdLine;
+      if (!sd.settingEnabled) {
+        sdLine = "disabled (PSRAM-only snapshot history)";
+      } else if (!sd.available) {
+        sdLine = "enabled but not detected (PSRAM-only fallback active)";
+      } else {
+        sdLine = sd.cardTypeName + ", " + String((double)sd.usedBytes / (1024.0 * 1024.0), 1) +
+                 " MB / " + String((double)sd.totalBytes / (1024.0 * 1024.0), 1) + " MB used";
+      }
+
+      String msg = "Board health:\n";
+      msg += "Uptime: " + formatUptime(millis()) + "\n";
+      msg += "Free heap: " + String(ESP.getFreeHeap()) + " bytes (min ever: " +
+             String(ESP.getMinFreeHeap()) + ")\n";
+      msg += "Free PSRAM: " + String((unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM)) + " bytes\n";
+      if (haveNvsStats) {
+        unsigned pct = (unsigned)((uint64_t)nvsStats.used_entries * 100 / nvsStats.total_entries);
+        msg += "NVS usage: " + String(pct) + "% (" + String((unsigned)nvsStats.used_entries) + " / " +
+               String((unsigned)nvsStats.total_entries) + " entries)\n";
+      }
+      msg += "WiFi signal: " + String(WiFi.RSSI()) + " dBm\n";
+      msg += "SD storage: " + sdLine;
+
       sendTelegramMessageTo(sender.chatId, msg);
       return;
     }

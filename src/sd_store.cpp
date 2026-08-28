@@ -1,6 +1,8 @@
 #include "sd_store.h"
 #include "snapshot_storage.h"
 #include "config.h"
+#include "telegram.h"        // sendTelegramMessage - see checkSnapshotStorage()/markSdFailed()'s own comments
+#include "event_log_store.h" // logEvent
 #include <Preferences.h>
 #include <SD.h>
 #include <SPI.h>
@@ -17,6 +19,7 @@ static const char* SNAPSHOTS_ROOT = "/snapshots"; // mount-relative - SD's FS me
 static bool g_sdSettingEnabled = false; // cached at boot, see initSdStorage()
 static bool g_sdAvailable = false;      // see sdActive()'s comment
 static SemaphoreHandle_t g_sdMutex = xSemaphoreCreateMutex();
+static QuickSnapshotCheckResult g_lastBootCheckResult; // see lastBootCheckResult()'s own comment
 
 SdSettings loadSdSettings() {
   Preferences prefs;
@@ -76,8 +79,13 @@ void initSdStorage() {
 
   // Bounded (one file per existing camera directory), unlike the full
   // on-demand check - see checkNewestSnapshots' own comment for why this
-  // one is safe to run unconditionally here.
-  checkNewestSnapshots();
+  // one is safe to run unconditionally here. Cached, not alerted on
+  // directly - see lastBootCheckResult()'s own comment for why.
+  g_lastBootCheckResult = checkNewestSnapshots();
+}
+
+QuickSnapshotCheckResult lastBootCheckResult() {
+  return g_lastBootCheckResult;
 }
 
 bool sdActive() {
@@ -112,6 +120,18 @@ static void markSdFailed(const char* reason) {
   Serial.printf("[sd_store] SD I/O failure (%s) - marking SD unavailable for the rest of this "
                 "session, falling back to the PSRAM snapshot ring.\n", reason);
   g_sdAvailable = false;
+  // Safe to call unconditionally: this is only ever reached from
+  // writeSdSnapshot/readSdSnapshot, both only reachable once camera tasks
+  // are running, which is well after WiFi/the webserver are up - unlike
+  // checkNewestSnapshots(), which can't send from its own boot-time call
+  // site (see that function's comment). All three call sites are also
+  // outside their own g_sdMutex critical section by the time they reach
+  // here, so this blocking network call never holds up another camera's
+  // SD access.
+  logEvent(String("SD storage failed (") + reason + ") - falling back to PSRAM history");
+  sendTelegramMessage("\xE2\x9A\xA0\xEF\xB8\x8F SD card storage failed (" + String(reason) +
+                       ") and has been disabled for the rest of this session - snapshot history is "
+                       "back to the PSRAM-only fallback until the next reboot. Check the card/wiring.");
 }
 
 // Caller must hold g_sdMutex. Lists dirName's own files (basenames only,
@@ -341,6 +361,14 @@ SnapshotStorageCheckResult checkSnapshotStorage() {
   Serial.printf("[sd_store] Storage check: %u director(ies), %u file(s), %u unreadable.\n",
                 (unsigned)result.directoriesChecked, (unsigned)result.filesChecked,
                 (unsigned)result.unreadableFiles);
+
+  if (!result.ok) {
+    logEvent("SD storage check found " + String((unsigned)result.unreadableFiles) + " unreadable file(s)");
+    sendTelegramMessage("\xE2\x9A\xA0\xEF\xB8\x8F SD storage check found " +
+                         String((unsigned)result.unreadableFiles) + " unreadable file(s) out of " +
+                         String((unsigned)result.filesChecked) +
+                         " checked. See the dashboard's Storage page or Serial log for details.");
+  }
   return result;
 }
 

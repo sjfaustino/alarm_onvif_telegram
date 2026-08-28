@@ -262,6 +262,12 @@ void test_parseTelegramCommand_help(void) {
   TEST_ASSERT_TRUE(TelegramCommandPermission::Unknown == p.requiredPermission);
 }
 
+void test_parseTelegramCommand_health(void) {
+  ParsedTelegramCommand p = parseTelegramCommand("/health");
+  TEST_ASSERT_TRUE(TelegramCommand::Health == p.command);
+  TEST_ASSERT_TRUE(TelegramCommandPermission::Command == p.requiredPermission);
+}
+
 void test_parseTelegramCommand_is_case_insensitive(void) {
   TEST_ASSERT_TRUE(TelegramCommand::Reset == parseTelegramCommand("/RESET").command);
   TEST_ASSERT_TRUE(TelegramCommand::Snap == parseTelegramCommand("/SNAP D01").command);
@@ -421,6 +427,7 @@ void test_commandDisplayName_every_command(void) {
   TEST_ASSERT_EQUAL_STRING("/off", commandDisplayName(TelegramCommand::Off).c_str());
   TEST_ASSERT_EQUAL_STRING("/snap", commandDisplayName(TelegramCommand::Snap).c_str());
   TEST_ASSERT_EQUAL_STRING("/help", commandDisplayName(TelegramCommand::Help).c_str());
+  TEST_ASSERT_EQUAL_STRING("/health", commandDisplayName(TelegramCommand::Health).c_str());
   TEST_ASSERT_EQUAL_STRING("", commandDisplayName(TelegramCommand::Unknown).c_str());
 }
 
@@ -456,6 +463,7 @@ int main(int argc, char** argv) {
   RUN_TEST(test_parseTelegramCommand_off);
   RUN_TEST(test_parseTelegramCommand_snap);
   RUN_TEST(test_parseTelegramCommand_help);
+  RUN_TEST(test_parseTelegramCommand_health);
   RUN_TEST(test_parseTelegramCommand_is_case_insensitive);
   RUN_TEST(test_parseTelegramCommand_on_without_target_is_unknown);
   RUN_TEST(test_parseTelegramCommand_unrecognized_text_is_unknown);

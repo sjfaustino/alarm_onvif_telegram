@@ -343,6 +343,13 @@ static void startMonitoring() {
   bootMsg += "Reboot reason: " + describeResetReason() + "\n";
   bootMsg += String(enabledCount) + "/" + String((int)g_cameras.size()) + " cameras enabled\n";
   bootMsg += buildCameraListMessage();
+  QuickSnapshotCheckResult sdBootCheck = lastBootCheckResult();
+  if (sdBootCheck.ranAtAll && !sdBootCheck.ok) {
+    bootMsg += "\n\xE2\x9A\xA0\xEF\xB8\x8F SD boot check found " +
+               String((unsigned)sdBootCheck.unreadableFiles) + " unreadable file(s) in " +
+               String((unsigned)sdBootCheck.directoriesChecked) +
+               " camera director(ies) - see the dashboard's Storage page.";
+  }
   if (!sendTelegramMessage(bootMsg)) {
     Serial.println("Boot notice: Telegram send failed (network/token/CA issue?) - continuing anyway.");
   }

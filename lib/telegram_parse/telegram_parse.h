@@ -49,15 +49,15 @@ std::vector<size_t> matchCamerasByPrefix(const CameraConfig cameras[], size_t nu
 
 // The specific command a message's text was recognized as - Unknown means
 // it isn't a recognized command at all.
-enum class TelegramCommand { Unknown, Status, Uptime, Reset, On, Off, Snap, Help };
+enum class TelegramCommand { Unknown, Status, Uptime, Reset, On, Off, Snap, Help, Health };
 
 // Which TelegramUser permission a command requires - /status, /uptime,
-// /on, /off need canCommand; /snap needs canSnap; /reset needs canReset;
-// /help needs none (Unknown, same value the fallback "not a recognized
-// command at all" case uses - a legitimate double meaning: Unknown means
-// "no specific permission maps to this command," true for both cases, not
-// "command is unknown" specifically). The single source of truth
-// handleTelegramCommand's authorization check
+// /health, /on, /off need canCommand; /snap needs canSnap; /reset needs
+// canReset; /help needs none (Unknown, same value the fallback "not a
+// recognized command at all" case uses - a legitimate double meaning:
+// Unknown means "no specific permission maps to this command," true for
+// both cases, not "command is unknown" specifically). The single source
+// of truth handleTelegramCommand's authorization check
 // is built from, so a new TelegramCommand can't be wired up without this
 // table knowing what it needs (previously each command had its own
 // separate, easy-to-forget "if (!sender.canX)" check scattered through
