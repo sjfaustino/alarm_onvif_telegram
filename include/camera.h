@@ -52,18 +52,58 @@ struct CameraState {
   const char* user = nullptr;
   const char* pass = nullptr;
 
+  // Set by requestLiveConfigReload() (called from webserver_cameras.cpp's
+  // save handler, on loop()'s task) when this camera is edited via the
+  // dashboard while its task is already running - nullptr means none
+  // pending. The owning task claims and applies it at the top of its own
+  // loop (cameraTaskFn) and frees it there; see requestLiveConfigReload's
+  // own comment for why only the owning task may ever write this camera's
+  // CameraConfig fields, never the task that stages a reload.
+  CameraConfig* pendingConfig = nullptr;
+
   // Guards subscriptionActive, isOffline, alertsEnabled, hasAlerted,
-  // lastAlert, snapshotUri, user, pass, scheduledRevertDueMs, and
-  // scheduledRevertToOn - the only fields both written by this camera's
-  // own task (camera.cpp) and read from another task (webserver.cpp's
-  // dashboard render, main.cpp's heartbeat, telegram.cpp's /on /off /snap
-  // command handling and checkScheduledAlertReverts, all on loop()'s
-  // task). Every other field is touched only from the owning camera task,
-  // so it needs no lock.
+  // lastAlert, snapshotUri, user, pass, scheduledRevertDueMs,
+  // scheduledRevertToOn, and pendingConfig - the only fields both written
+  // by this camera's own task (camera.cpp) and read from another task
+  // (webserver.cpp's dashboard render, main.cpp's heartbeat, telegram.cpp's
+  // /on /off /snap command handling and checkScheduledAlertReverts, all on
+  // loop()'s task). Every other field is touched only from the owning
+  // camera task, so it needs no lock.
   // Created once by cameraStateInit() before any task can see this camera -
   // see main.cpp's startMonitoring().
   SemaphoreHandle_t stateMutex = nullptr;
 };
+
+// Stages a new CameraConfig for st's camera to pick up itself, applied by
+// applyPendingConfigIfAny (camera.cpp) - called by the web UI's save
+// handler (webserver_cameras.cpp) in two situations: editing a camera
+// whose task is already running (picked up within one ~10ms loop tick -
+// cameraTaskFn checks at the top of every pass), or enabling a
+// previously-disabled camera that's about to get a task spawned for it
+// live, where it's applied once at that task's own startup instead.
+// Either way, no reboot needed. Heap-allocates a copy; the owning task
+// frees it once applied. A second call before the first is applied
+// replaces it outright (the latest edit always wins) rather than queuing
+// both.
+//
+// Deliberately NOT applied by writing straight into the live CameraConfig
+// from here (or from webserver_cameras.cpp/main.cpp for the live-spawn
+// case): st.user/st.pass hold raw `const char*` pointers into that same
+// CameraConfig's user/pass Strings (see their own comment above), and a
+// String reassignment can free/reallocate its old buffer - doing that
+// from any task other than the one that might read through those pointers
+// (mid-SOAP-call, or the moment a task starts using them) is a real use-
+// after-free. More generally, CameraConfig itself has no locking of its
+// own at all (only the fields CameraState::stateMutex's own comment lists
+// do) - even a field unrelated to user/pass, written unsynchronized from
+// a different task while e.g. the dashboard renders that same camera's
+// row, is a data race the C++ memory model gives no guarantees about.
+// Only the owning task ever writes its own CameraConfig's fields; see
+// cameraTaskFn's/applyPendingConfigIfAny's handling of pendingConfig for
+// the safe sequence (reassign cfg, then immediately re-point st.user/
+// st.pass at the new buffers, unconditionally, before anything else can
+// read the old ones).
+void requestLiveConfigReload(CameraState& st, const CameraConfig& newConfig);
 
 // Creates st.stateMutex. Call once per camera before spawning its task or
 // starting the web server - see main.cpp's startMonitoring().
@@ -107,8 +147,13 @@ bool cameraRenewSubscription(const CameraConfig& cfg, CameraState& st);
 // Heap-allocated, owned by the task - passed as pvParameters to each
 // per-camera FreeRTOS task.
 struct CameraTaskContext {
-  const CameraConfig* cfg;
-  CameraState*         st;
+  // Non-const, unlike every other function in this file's CameraConfig
+  // parameter: cameraTaskFn is the one place that legitimately mutates a
+  // live CameraConfig in place (applying a pendingConfig reload) - see
+  // requestLiveConfigReload's comment. Every SOAP/discovery function still
+  // takes `const CameraConfig&`, which a non-const object binds to fine.
+  CameraConfig* cfg;
+  CameraState*  st;
 };
 
 // Task entry point: runs cameraSetupSequence once, then loops forever

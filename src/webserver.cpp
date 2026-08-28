@@ -4,8 +4,12 @@
 #include "webserver_users.h"
 #include "webserver_firmware.h"
 #include "webserver_security.h"
+#include "webserver_activity.h"
+#include "event_log_store.h"
 #include "telegram_users.h"
 #include "auth_store.h"
+#include "backoff.h"
+#include "format_utils.h"
 #include <PsychicHttp.h>
 #include <Update.h>
 
@@ -28,12 +32,136 @@ static std::vector<CameraState>*  g_liveStates  = nullptr;
 static AuthenticationMiddleware g_authMiddleware;
 
 // ============================================================
+// Login rate-limiting - HTTP Basic Auth over plain HTTP has no throttling
+// of its own, so without this a wrong-password guess costs an attacker
+// nothing but one more request. Runs as its own middleware, registered
+// BEFORE g_authMiddleware in startWebServer() (PsychicMiddlewareChain runs
+// middleware in the order added - verified by reading its runChain()
+// implementation, not assumed), so a locked-out IP never reaches the real
+// credential check at all.
+//
+// Tracks consecutive failed logins per source IP; RATE_LIMIT_MAX_FAILURES
+// in a row locks that IP out for an escalating duration - nextBackoffDelayMs
+// (backoff.h), the same doubling-with-cap helper WiFi reconnect and camera
+// subscription retry already use - reoffending after a lockout expires
+// doubles the next one, up to RATE_LIMIT_LOCKOUT_MAX_MS. A single
+// successful login from that IP forgives it completely (fail count and
+// lockout duration both reset to 0).
+//
+// Applies to every route for that IP during a lockout, not just the login
+// itself - untangling "let already-known-good credentials bypass a
+// lockout" would partially defeat the point, and a legitimate user who
+// knows the real password just waits out what should be a rare, short
+// window rather than guessing.
+//
+// Deliberately in-RAM only, not persisted - a reboot clears every lockout,
+// same as every other purely in-RAM per-boot state in this project (see
+// CameraState::scheduledRevertDueMs for the same reasoning). Tracks at
+// most MAX_TRACKED_IPS distinct addresses - a home LAN device doesn't
+// need to remember more distinct offending IPs than that; once full, the
+// least-recently-seen entry is evicted to make room for a new one.
+// ============================================================
+
+static const uint8_t       RATE_LIMIT_MAX_FAILURES     = 5;               // consecutive failures before a lockout
+static const unsigned long RATE_LIMIT_LOCKOUT_START_MS = 30UL * 1000UL;   // first lockout: 30s
+static const unsigned long RATE_LIMIT_LOCKOUT_MAX_MS   = 30UL * 60UL * 1000UL; // cap: 30 minutes
+static const size_t        MAX_TRACKED_IPS             = 8;
+
+struct RateLimitEntry {
+  IPAddress ip;
+  bool used = false;
+  uint8_t failCount = 0;
+  unsigned long lockoutUntilMs = 0;        // millis() timestamp; 0 = not currently locked out
+  unsigned long lastLockoutDurationMs = 0; // for nextBackoffDelayMs if this IP reoffends later
+  unsigned long lastSeenMs = 0;            // for LRU eviction when the table is full
+};
+
+class RateLimitMiddleware : public PsychicMiddleware {
+ public:
+  RateLimitMiddleware() : mutex_(xSemaphoreCreateMutex()) {}
+  void setAuth(AuthenticationMiddleware* auth) { auth_ = auth; }
+
+  esp_err_t run(PsychicRequest* request, PsychicResponse* response, PsychicMiddlewareNext next) override {
+    unsigned long now = millis();
+
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    RateLimitEntry* entry = findOrCreate(request->client()->remoteIP(), now);
+    bool lockedOut = entry->lockoutUntilMs != 0 && (long)(now - entry->lockoutUntilMs) < 0;
+    unsigned long remainingMs = lockedOut ? (entry->lockoutUntilMs - now) : 0;
+    xSemaphoreGive(mutex_);
+
+    if (lockedOut) {
+      String body = "Too many failed login attempts from this address - try again in " +
+                    formatUptime(remainingMs) + ".";
+      return response->send(429, "text/plain", body.c_str());
+    }
+
+    // Pre-check credentials directly (isAllowed() is public and side-
+    // effect-free - see AuthenticationMiddleware.cpp) so this middleware
+    // knows whether to count a failure. g_authMiddleware itself still runs
+    // via next() below and issues the real 401 challenge on failure;
+    // duplicating the check here (rather than inspecting its response
+    // afterward) avoids reaching into PsychicResponse internals this
+    // library doesn't expose to a middleware.
+    bool allowed = !auth_ || auth_->isAllowed(request);
+
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    entry = findOrCreate(request->client()->remoteIP(), now); // re-find - table state may have moved under a lock we briefly released
+    if (allowed) {
+      entry->failCount = 0;
+      entry->lockoutUntilMs = 0;
+      entry->lastLockoutDurationMs = 0;
+    } else {
+      entry->failCount++;
+      if (entry->failCount >= RATE_LIMIT_MAX_FAILURES) {
+        entry->lastLockoutDurationMs = nextBackoffDelayMs(entry->lastLockoutDurationMs,
+                                                            RATE_LIMIT_LOCKOUT_START_MS, RATE_LIMIT_LOCKOUT_MAX_MS);
+        entry->lockoutUntilMs = now + entry->lastLockoutDurationMs;
+        entry->failCount = 0; // counts fresh toward the *next* lockout, after this one expires
+        Serial.printf("[WebServer] IP %s locked out of the dashboard for %lus after %u consecutive failed logins.\n",
+                      entry->ip.toString().c_str(), entry->lastLockoutDurationMs / 1000UL,
+                      (unsigned)RATE_LIMIT_MAX_FAILURES);
+      }
+    }
+    xSemaphoreGive(mutex_);
+
+    return next();
+  }
+
+ private:
+  // Caller must hold mutex_. Exact IP match if tracked; otherwise an
+  // unused slot, or (table full) the least-recently-seen entry, reset and
+  // claimed for this IP.
+  RateLimitEntry* findOrCreate(const IPAddress& ip, unsigned long now) {
+    for (auto& e : table_) {
+      if (e.used && e.ip == ip) { e.lastSeenMs = now; return &e; }
+    }
+    RateLimitEntry* victim = &table_[0];
+    for (auto& e : table_) {
+      if (!e.used) { victim = &e; break; }
+      if (e.lastSeenMs < victim->lastSeenMs) victim = &e;
+    }
+    *victim = RateLimitEntry{};
+    victim->ip = ip;
+    victim->used = true;
+    victim->lastSeenMs = now;
+    return victim;
+  }
+
+  RateLimitEntry table_[MAX_TRACKED_IPS];
+  AuthenticationMiddleware* auth_ = nullptr;
+  SemaphoreHandle_t mutex_;
+};
+
+static RateLimitMiddleware g_rateLimitMiddleware;
+
+// ============================================================
 // Dashboard shell - sidebar + content panel, plain server-rendered pages
 // with no client-side router/JS framework. Everything's embedded in the
 // firmware binary rather than served from a filesystem, on purpose.
 // ============================================================
 
-enum class Tab { None, Network, Cameras, Users, Firmware, Security };
+enum class Tab { None, Network, Cameras, Users, Activity, Firmware, Security };
 
 static String renderShell(Tab active, const String& banner, const String& contentHtml) {
   String html;
@@ -75,6 +203,9 @@ static String renderShell(Tab active, const String& banner, const String& conten
   html += "<a href=\"/users\" class=\"";
   html += (active == Tab::Users) ? "active" : "";
   html += "\">Telegram Users</a>";
+  html += "<a href=\"/activity\" class=\"";
+  html += (active == Tab::Activity) ? "active" : "";
+  html += "\">Activity</a>";
   html += "<a href=\"/firmware\" class=\"";
   html += (active == Tab::Firmware) ? "active" : "";
   html += "\">Firmware</a>";
@@ -126,8 +257,13 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
       .setPassword(auth.password.c_str())
       .setRealm("Camera Monitor")
       .setAuthMethod(BASIC_AUTH);
-  // Applies to every route registered below, including the Firmware
-  // upload - see g_authMiddleware's declaration comment.
+  g_rateLimitMiddleware.setAuth(&g_authMiddleware);
+  // Rate limiter registered first - PsychicMiddlewareChain runs middleware
+  // in the order added, so a locked-out IP is short-circuited here and
+  // never reaches g_authMiddleware at all. Both apply to every route
+  // registered below, including the Firmware upload - see each
+  // middleware's own declaration comment.
+  server.addMiddleware(&g_rateLimitMiddleware);
   server.addMiddleware(&g_authMiddleware);
 
   server.on("/", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
@@ -146,9 +282,18 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
   });
 
   server.on("/cameras", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
+    // note carries a one-time status banner across the POST-redirect-GET
+    // from /cameras/save (see that route below) - saveCameraSubmission
+    // already htmlEscape()s anything user-controlled (a camera name) that
+    // goes into it before it's ever URL-encoded into the redirect, and
+    // PsychicRequest url-decodes query params automatically (verified by
+    // reading PsychicRequest::_addParams, not assumed) - so what comes
+    // back out here is safe to hand to renderShell's own unescaped banner
+    // parameter as-is, same as every other banner in this file.
+    String note = request->getParam("note", "");
     return response->send(
         200, "text/html",
-        renderShell(Tab::Cameras, "", renderCamerasPanel(nullptr, false, g_liveCameras, g_liveStates)).c_str());
+        renderShell(Tab::Cameras, note, renderCamerasPanel(nullptr, false, g_liveCameras, g_liveStates)).c_str());
   });
 
   server.on("/cameras/edit", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
@@ -171,7 +316,8 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
     originalName.trim();
 
     String banner;
-    if (!saveCameraSubmission(submitted, originalName, banner)) {
+    String applyNote;
+    if (!saveCameraSubmission(submitted, originalName, banner, applyNote, g_liveCameras, g_liveStates)) {
       submitted.pass = "";
       return response->send(
           200, "text/html",
@@ -179,7 +325,13 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
                       renderCamerasPanel(&submitted, originalName.length() > 0, g_liveCameras, g_liveStates))
               .c_str());
     }
-    return response->redirect("/cameras");
+    // Redirect (not render-in-place) even when there's a note to show, to
+    // keep the usual POST-redirect-GET behavior (refreshing /cameras/save
+    // itself would otherwise re-submit the form) - the note rides along
+    // as a query param and the /cameras GET handler above picks it up.
+    String redirectUrl = "/cameras";
+    if (applyNote.length() > 0) redirectUrl += "?note=" + urlEncode(applyNote);
+    return response->redirect(redirectUrl.c_str());
   });
 
   server.on("/cameras/test", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
@@ -243,6 +395,10 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
     String name = request->getParam("name", "");
     deleteTelegramUser(name);
     return response->redirect("/users");
+  });
+
+  server.on("/activity", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
+    return response->send(200, "text/html", renderShell(Tab::Activity, "", renderActivityPanel()).c_str());
   });
 
   server.on("/firmware", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {

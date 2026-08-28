@@ -1,6 +1,24 @@
 #include "webserver_cameras.h"
 #include "format_utils.h"
 #include "webserver_html.h"
+#include "camera_tasks.h"
+#include "event_log_store.h"
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+
+// Serializes saveCameraSubmission's whole "decide whether this camera was
+// already running, then apply live or note a reboot's needed" section
+// below - PsychicHttp can run more than one request concurrently, and
+// without this, two near-simultaneous saves of the same *newly-enabled*
+// camera could both observe wasRunning==false (cam.enabled in
+// liveCameras only flips once the spawned task's own applyPendingConfigIfAny
+// actually runs, which is asynchronous - not immediately when
+// spawnCameraTask returns) and both call spawnCameraTask for the same
+// slot, leaving two tasks fighting over one CameraConfig/CameraState.
+// Camera saves are a low-frequency, admin-driven action, not a hot path -
+// serializing all of them (even ones for different cameras) costs nothing
+// worth avoiding a per-camera locking scheme for.
+static SemaphoreHandle_t g_saveMutex = xSemaphoreCreateMutex();
 
 // Finds cfg's matching live (currently-running) index by name, or -1 if
 // this camera was added since the last reboot and isn't running yet, or was
@@ -171,7 +189,8 @@ CameraConfig parseCameraForm(PsychicRequest* request) {
   return c;
 }
 
-bool saveCameraSubmission(CameraConfig cam, const String& originalName, String& banner) {
+bool saveCameraSubmission(CameraConfig cam, const String& originalName, String& banner, String& applyNote,
+                           std::vector<CameraConfig>* liveCameras, std::vector<CameraState>* liveStates) {
   if (cam.name.length() == 0 || cam.deviceServiceUrl.length() == 0) {
     banner = "Name and device service URL are required - camera not saved.";
     return false;
@@ -182,6 +201,9 @@ bool saveCameraSubmission(CameraConfig cam, const String& originalName, String& 
       banner = "A camera named \"" + htmlEscape(cam.name) + "\" already exists - camera not added.";
       return false;
     }
+    // A brand new camera has no slot in liveCameras/liveStates at all yet
+    // (those are sized once at boot and never grow) - still needs a
+    // reboot before it can be monitored, same as always. Nothing to note.
     return true;
   }
 
@@ -190,11 +212,72 @@ bool saveCameraSubmission(CameraConfig cam, const String& originalName, String& 
       if (existing.name.equalsIgnoreCase(originalName)) { cam.pass = existing.pass; break; }
     }
   }
+
+  // Everything from here on - deciding wasRunning, persisting to NVS, and
+  // applying (or not) a live reload - runs under g_saveMutex: see its own
+  // comment for why (double-spawn prevention for two near-simultaneous
+  // saves of the same camera). Incidentally also serializes concurrent
+  // saves of two *different* cameras against updateCamera/addCamera's own
+  // read-all-modify-one-save-all pattern (camera_store.cpp), which had no
+  // such protection of its own before this.
+  xSemaphoreTake(g_saveMutex, portMAX_DELAY);
+
+  // Captured BEFORE updateCamera touches NVS, using the ORIGINAL name - a
+  // rename doesn't change which live slot this is. wasRunning reflects
+  // reality precisely because nothing except spawnCameraTask() (main.cpp)
+  // ever flips a live camera's task into existence, and it's only ever
+  // called when enabled was true at boot or via the live-spawn path below
+  // - so "was this slot's in-memory CameraConfig::enabled true" is
+  // exactly "does a task exist for it right now".
+  int idx = findLiveCameraIndex(liveCameras, originalName);
+  bool wasRunning = (idx >= 0) && liveStates && idx < (int)liveStates->size() && (*liveCameras)[idx].enabled;
+
   if (!updateCamera(originalName, cam)) {
+    xSemaphoreGive(g_saveMutex);
     banner = "Could not save \"" + htmlEscape(cam.name) +
              "\" - a different camera already uses that name.";
     return false;
   }
+
+  if (idx >= 0 && liveStates && idx < (int)liveStates->size()) {
+    String safeName = htmlEscape(cam.name);
+    if (wasRunning && cam.enabled) {
+      // Still enabled before and after - stage the new config for the
+      // already-running task to pick up itself. See requestLiveConfigReload
+      // (camera.h) for why this webserver task must never write the live
+      // CameraConfig's String fields directly.
+      requestLiveConfigReload((*liveStates)[idx], cam);
+      applyNote = "\"" + safeName + "\" updated - applying live, reconnecting now (no reboot needed).";
+    } else if (!wasRunning && cam.enabled) {
+      // Was disabled (or simply never got a task at boot) and this edit
+      // just enabled it. Staged via the same pendingConfig mechanism a
+      // running camera's edit uses, NOT written into (*liveCameras)[idx]
+      // directly from here - even though no task owns this slot yet,
+      // CameraConfig itself has no locking of its own, and other tasks
+      // (heartbeat, /status, this same dashboard) may read
+      // cameras[i].enabled/.name for it without a lock the instant it
+      // flips to enabled. cameraStateInit() first, so that lock actually
+      // means something (a never-spawned camera's mutex doesn't exist
+      // yet) - see requestLiveConfigReload's comment.
+      cameraStateInit((*liveStates)[idx]);
+      requestLiveConfigReload((*liveStates)[idx], cam);
+      spawnCameraTask(idx); // its own startup applies the staged config - see applyPendingConfigIfAny
+      logEvent(cam.name + ": enabled via dashboard, monitoring started live");
+      applyNote = "\"" + safeName + "\" enabled - monitoring started live (no reboot needed).";
+    } else if (wasRunning && !cam.enabled) {
+      // Every other field change here (if any) still needs a reboot to
+      // take effect too - there's no live task-teardown path yet, so
+      // rather than apply a half-edit, this whole save waits for a
+      // reboot, exactly like it always has for a disable.
+      applyNote = "\"" + safeName + "\" disabled, but its task is still running - reboot to fully stop it.";
+    }
+    // else: wasn't running, still not enabled - nothing live to do.
+  }
+  // else: idx < 0 - this camera isn't in liveCameras at all (added to NVS
+  // after this board's current boot) - still needs a reboot to get a live
+  // slot in the first place, same as always.
+
+  xSemaphoreGive(g_saveMutex);
   return true;
 }
 

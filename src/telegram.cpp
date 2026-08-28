@@ -4,6 +4,7 @@
 #include "telegram_parse.h"
 #include "telegram_multipart.h"
 #include "format_utils.h"
+#include "event_log_store.h"
 #include <ArduinoJson.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
@@ -357,6 +358,8 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st) {
   { CameraStateLock lock(st); st.lastAlert = nowMs; st.hasAlerted = true; }
 
   unsigned int shots = (cfg.snapshotBurstCount > 0) ? cfg.snapshotBurstCount : 1;
+  logEvent(cfg.name + ": motion alert, " + String(shots) + " shot(s) to " +
+           String(recipients.size()) + " recipient(s)");
 
   // Each shot is its own fetch (re-fetching is what makes consecutive
   // shots differ) and its own fan-out to every recipient - re-fetching per
@@ -390,10 +393,12 @@ void checkCameraOnlineStatus(const CameraConfig& cfg, CameraState& st) {
   { CameraStateLock lock(st); st.isOffline = offlineNow; }
   if (offlineNow) {
     Serial.printf("[%s] OFFLINE - no response for over %lus.\n", cfg.name.c_str(), cfg.offlineThresholdMs / 1000UL);
+    logEvent(cfg.name + ": OFFLINE (no response for over " + String(cfg.offlineThresholdMs / 60000UL) + "m)");
     sendTelegramMessage("\xE2\x9A\xA0\xEF\xB8\x8F " + cfg.name + " is OFFLINE - no response for over " +
                          String(cfg.offlineThresholdMs / 60000UL) + " minute(s).");
   } else {
     Serial.printf("[%s] Back ONLINE.\n", cfg.name.c_str());
+    logEvent(cfg.name + ": back ONLINE");
     sendTelegramMessage("\xE2\x9C\x85 " + cfg.name + " is back ONLINE.");
   }
 }
@@ -539,12 +544,33 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
 
   switch (parsed.command) {
     case TelegramCommand::Status: {
-      // alertsEnabled is only ever written from this same task (below, and
-      // main.cpp's boot-time restore), so this self-read needs no lock.
+      // isOffline and the timer fields are written by other tasks
+      // (camera.cpp's own task, and loop()'s task via handleTelegramCommand
+      // /checkScheduledAlertReverts - this read runs on loop()'s task too,
+      // but isOffline specifically crosses from the camera's own task, so
+      // the whole group is read under one lock for simplicity rather than
+      // splitting into a locked and an unlocked half. See
+      // CameraState::stateMutex.
       String msg = "Camera alert status:\n";
       for (size_t i = 0; i < numCameras; i++) {
         if (!cameras[i].enabled) continue;
-        msg += String(cameras[i].name) + ": " + (states[i].alertsEnabled ? "ON" : "OFF") + "\n";
+        bool alertsEnabled, offline;
+        unsigned long revertDueMs;
+        bool revertToOn;
+        {
+          CameraStateLock lock(states[i]);
+          alertsEnabled = states[i].alertsEnabled;
+          offline = states[i].isOffline;
+          revertDueMs = states[i].scheduledRevertDueMs;
+          revertToOn = states[i].scheduledRevertToOn;
+        }
+        msg += String(cameras[i].name) + ": " + (alertsEnabled ? "ON" : "OFF");
+        if (offline) msg += " - OFFLINE";
+        if (revertDueMs != 0 && (long)(millis() - revertDueMs) < 0) {
+          msg += " (auto " + String(revertToOn ? "ON" : "OFF") + " in " +
+                 formatUptime(revertDueMs - millis()) + ")";
+        }
+        msg += "\n";
       }
       Serial.printf("[Telegram] Replying to user \"%s\" with camera status.\n", sender.name.c_str());
       sendTelegramMessageTo(sender.chatId, msg);
@@ -650,6 +676,7 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
   saveAlertEnabledPref(i, turnOn);
   Serial.printf("[%s] Alerts turned %s via Telegram by user \"%s\"%s.\n", cameras[i].name.c_str(),
                 turnOn ? "ON" : "OFF", sender.name.c_str(), hasTimer ? " (timed)" : "");
+  logEvent(String(cameras[i].name) + " alerts: " + (turnOn ? "ON" : "OFF") + " via " + sender.name + timerSuffix);
   sendTelegramMessageTo(sender.chatId,
                          String(cameras[i].name) + " alerts: " + (turnOn ? "ON" : "OFF") + timerSuffix);
 }
@@ -674,6 +701,7 @@ void checkScheduledAlertReverts(const CameraConfig cameras[], CameraState states
     saveAlertEnabledPref(i, revertToOn);
     Serial.printf("[%s] Timed alert window expired - alerts turned %s automatically.\n",
                   cameras[i].name.c_str(), revertToOn ? "ON" : "OFF");
+    logEvent(String(cameras[i].name) + " alerts: " + (revertToOn ? "ON" : "OFF") + " (timer expired)");
     sendTelegramMessage(String(cameras[i].name) + " alerts: " + (revertToOn ? "ON" : "OFF") + " (timer expired)");
   }
 }

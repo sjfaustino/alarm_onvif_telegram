@@ -3,12 +3,61 @@
 #include "telegram.h"
 #include "backoff.h"
 #include "camera_parse.h"
+#include "event_log_store.h"
 #include <WiFi.h>
 #include <vector>
 #include <cstring>
 
 void cameraStateInit(CameraState& st) {
   if (!st.stateMutex) st.stateMutex = xSemaphoreCreateMutex();
+}
+
+void requestLiveConfigReload(CameraState& st, const CameraConfig& newConfig) {
+  CameraConfig* copy = new CameraConfig(newConfig);
+  CameraConfig* old = nullptr;
+  {
+    CameraStateLock lock(st);
+    old = st.pendingConfig; // whatever wasn't applied yet loses to this newer edit
+    st.pendingConfig = copy;
+  }
+  delete old; // safe outside the lock - no longer reachable via st.pendingConfig once swapped above
+}
+
+// Applies a staged pendingConfig, if any, to cfg/st - shared by
+// cameraTaskFn's startup (for a task spawned straight into an already-
+// enabled camera - see webserver_cameras.cpp's live-spawn path, which
+// stages the real config here rather than writing g_cameras[idx] directly
+// from the webserver task) and its main loop (for an edit applied while
+// the task is already running). Returns whether one was applied - the
+// loop uses that to know whether to also reset subscription/retry state,
+// which the startup path doesn't need (nothing's been set up yet there).
+//
+// See requestLiveConfigReload's comment (camera.h) for why only this
+// owning task may ever perform cfg's assignment - and just as
+// importantly, why nothing else may ever write cfg unlocked either: a
+// camera spawned live starts this function with cfg still holding
+// whatever g_cameras[idx] held before (a stale, previously-disabled
+// snapshot) until this runs, rather than main.cpp/webserver_cameras.cpp
+// writing the real values into g_cameras[idx] directly and racing any
+// other task that reads cameras[i].enabled/.name for that slot without a
+// lock (CameraConfig itself has no locking of its own - only the fields
+// listed on CameraState::stateMutex do).
+static bool applyPendingConfigIfAny(CameraConfig& cfg, CameraState& st) {
+  CameraConfig* pending = nullptr;
+  { CameraStateLock lock(st); pending = st.pendingConfig; st.pendingConfig = nullptr; }
+  if (!pending) return false;
+
+  cfg = *pending; // safe: this task is the sole writer of its own cfg - see requestLiveConfigReload's comment
+  delete pending;
+
+  // Unconditional, regardless of whether the new credentials turn out to
+  // be valid - st.user/st.pass are raw pointers into cfg.user/cfg.pass's
+  // buffers, and the assignment above may have just freed/reallocated the
+  // old ones. Leaving them stale even briefly, gated behind a validity
+  // check, would be a use-after-free the instant anything reads through
+  // them again.
+  { CameraStateLock lock(st); st.user = cfg.user.c_str(); st.pass = cfg.pass.c_str(); }
+  return true;
 }
 
 bool resolveCameraCredentials(const CameraConfig& cfg, CameraState& st) {
@@ -326,9 +375,16 @@ static const unsigned long RETRY_BACKOFF_MAX_MS = 300000UL; // 5 minutes between
 // ============================================================
 void cameraTaskFn(void* pvParameters) {
   CameraTaskContext* ctx = static_cast<CameraTaskContext*>(pvParameters);
-  const CameraConfig& cfg = *ctx->cfg;
+  CameraConfig& cfg = *ctx->cfg; // non-const - see CameraTaskContext::cfg's comment
   CameraState& st = *ctx->st;
   delete ctx; // context struct's job is done once we've unpacked it
+
+  // A camera spawned live (webserver_cameras.cpp enabling a previously-
+  // disabled one) stages its real configuration via pendingConfig instead
+  // of it being written into g_cameras[idx] directly by the webserver
+  // task - see applyPendingConfigIfAny's comment for why. No-op (cfg is
+  // used as-is) for the normal boot-time spawn path, which never stages one.
+  applyPendingConfigIfAny(cfg, st);
 
   Serial.printf("[%s] Task started.\n", cfg.name.c_str());
 
@@ -352,6 +408,45 @@ void cameraTaskFn(void* pvParameters) {
   }
 
   for (;;) {
+    // Live-reload from a dashboard edit (webserver_cameras.cpp's save
+    // handler, via requestLiveConfigReload) - checked first, every pass,
+    // so it takes effect within one ~10ms loop tick of being staged.
+    if (applyPendingConfigIfAny(cfg, st)) {
+      Serial.printf("[%s] Configuration changed via dashboard - reconnecting with the new settings.\n",
+                    cfg.name.c_str());
+      logEvent(cfg.name + ": configuration updated live, reconnecting");
+      // Every discovered URL/token is potentially stale once the device
+      // URL, credentials, or WS-Security mode change - full rediscovery
+      // (via the "not subscribed" retry path below, same one a fresh boot
+      // or a lost subscription already takes) is the only safe path, not
+      // a partial patch-up.
+      // snapshotUri specifically needs the lock (unlike eventServiceUrl/
+      // mediaServiceUrl/pullPointUrl/profileToken below, which - like
+      // every other field this task touches unlocked elsewhere in this
+      // file - are read only by this same task): a Telegram /snap
+      // command on loop()'s task reads it cross-task via
+      // fetchOneSnapshot/sendOnDemandSnapshot (telegram.cpp), under this
+      // same lock, and could otherwise race a plain String assignment
+      // here mid-read.
+      { CameraStateLock lock(st); st.subscriptionActive = false; st.snapshotUri = ""; }
+      st.eventServiceUrl = ""; st.mediaServiceUrl = ""; st.pullPointUrl = ""; st.profileToken = "";
+      st.retryDelayMs = 0; st.retryStreak = 0; st.lastRetry = 0; // retry immediately, not after a stale backoff
+
+      if (cfg.user.length() == 0 || cfg.pass.length() == 0) {
+        // Unlike the same check at task startup above, this does NOT exit
+        // the task - a task that's already been happily monitoring a
+        // camera for weeks shouldn't die outright over one bad edit. It
+        // just stays not-subscribed (every SOAP call below will cleanly
+        // fail and retry, same as an unreachable camera) until fixed via
+        // another edit.
+        Serial.printf("[%s] ERROR: no username/password after this edit - camera will NOT be monitored "
+                      "until this is fixed via the web UI.\n", cfg.name.c_str());
+        sendTelegramMessage("\xE2\x9A\xA0\xEF\xB8\x8F " + cfg.name +
+                             ": no username/password set for this camera after the last edit - it is "
+                             "NOT being monitored. Fix it via the dashboard.");
+      }
+    }
+
     if (WiFi.status() != WL_CONNECTED) {
       // main.cpp's loop() owns reconnecting; this task just waits and, once
       // back, treats itself as needing a fresh subscription (the old one

@@ -15,6 +15,8 @@
 #include "webserver.h"
 #include "backoff.h"
 #include "format_utils.h"
+#include "event_log_store.h"
+#include "camera_tasks.h"
 
 static std::vector<CameraConfig> g_cameras;
 static std::vector<CameraState> g_cameraStates;
@@ -263,6 +265,34 @@ static void sendHeartbeat() {
   }
 }
 
+// Spawns g_cameras[index]'s monitoring task - see camera_tasks.h for the
+// external-linkage contract (index must already be a valid, existing slot;
+// this never grows g_cameras/g_cameraStates, only starts a task for a slot
+// that doesn't have one yet). Called from startMonitoring()'s boot-time
+// loop below for every enabled camera, and from webserver_cameras.cpp's
+// save handler for a single camera live, when an edit newly enables one
+// that had no task before.
+void spawnCameraTask(size_t index) {
+  cameraStateInit(g_cameraStates[index]); // must run before any other task can see this camera - see camera.h
+  {
+    // The web server may already be live and rendering /cameras
+    // concurrently by the time this runs (true for both call sites - the
+    // boot loop runs after startWebServer(), and the live-add path runs
+    // while the server's obviously already up) - this write needs the
+    // lock too, same as any other cross-task access.
+    CameraStateLock lock(g_cameraStates[index]);
+    g_cameraStates[index].alertsEnabled = loadAlertEnabledPref(index); // restore any /on or /off from before a reboot
+  }
+  CameraTaskContext* ctx = new CameraTaskContext{&g_cameras[index], &g_cameraStates[index]};
+  char taskName[16];
+  snprintf(taskName, sizeof(taskName), "cam%u", (unsigned)index);
+  // 10KB stack covers the SOAP String churn plus a WiFiClientSecure TLS
+  // handshake with headroom - bump if stack-canary warnings show up.
+  // Pinned to core 1 so camera tasks get real parallel execution instead
+  // of competing with the WiFi/BT stack and loopTask on core 0.
+  xTaskCreatePinnedToCore(cameraTaskFn, taskName, 10240, ctx, tskIDLE_PRIORITY + 1, nullptr, 1);
+}
+
 // Everything that needs a working network connection: NTP, mDNS, the web
 // dashboard, and one FreeRTOS task per enabled camera. Runs once, either
 // right after setup()'s first successful connectWiFi(), or - if WiFi isn't
@@ -282,38 +312,30 @@ static void startMonitoring() {
   startWebServer(&g_cameras, &g_cameraStates);
   Serial.printf("Web UI: http://%s/\n", WiFi.localIP().toString().c_str());
 
-  // One FreeRTOS task per enabled camera, pinned to core 1 (see
-  // cameraTaskFn in camera.cpp) - each runs its own cameraSetupSequence
-  // before entering its loop. The delay() after each spawn staggers those
-  // initial GetCapabilities calls: several cameras' embedded HTTP stacks
-  // only accept 1-2 concurrent connections, so hitting all N at once
-  // caused a thundering herd of "Connection reset by peer" at boot.
+  // One FreeRTOS task per enabled camera, pinned to core 1 - see
+  // spawnCameraTask below. The delay() after each spawn staggers initial
+  // GetCapabilities calls: several cameras' embedded HTTP stacks only
+  // accept 1-2 concurrent connections, so hitting all N at once caused a
+  // thundering herd of "Connection reset by peer" at boot.
   for (size_t i = 0; i < g_cameras.size(); i++) {
     if (!g_cameras[i].enabled) {
       Serial.printf("[%s] Disabled - no task created.\n", g_cameras[i].name.c_str());
       continue;
     }
-    cameraStateInit(g_cameraStates[i]); // must run before any other task can see this camera - see camera.h
-    {
-      // The web server is already live at this point (started above) and
-      // could be rendering /cameras concurrently, so this write needs the
-      // lock too, same as any other cross-task access.
-      CameraStateLock lock(g_cameraStates[i]);
-      g_cameraStates[i].alertsEnabled = loadAlertEnabledPref(i); // restore any /on or /off from before a reboot
-    }
-    CameraTaskContext* ctx = new CameraTaskContext{&g_cameras[i], &g_cameraStates[i]};
-    char taskName[16];
-    snprintf(taskName, sizeof(taskName), "cam%u", (unsigned)i);
-    // 10KB stack covers the SOAP String churn plus a WiFiClientSecure TLS
-    // handshake with headroom - bump if stack-canary warnings show up.
-    // Pinned to core 1 so camera tasks get real parallel execution instead
-    // of competing with the WiFi/BT stack and loopTask on core 0.
-    xTaskCreatePinnedToCore(cameraTaskFn, taskName, 10240, ctx, tskIDLE_PRIORITY + 1, nullptr, 1);
+    spawnCameraTask(i);
     delay(750); // stagger initial GetCapabilities calls - see comment above
   }
 
   int enabledCount = 0;
   for (size_t i = 0; i < g_cameras.size(); i++) if (g_cameras[i].enabled) enabledCount++;
+
+  // Logged here, not earlier in setup() - the event log (event_log_store.h)
+  // is itself purely in-RAM and wiped by the very reboot a /reset or OTA
+  // update causes, so logging *those* would never actually be seen; this
+  // boot line is the one event in this project's whole event-log wiring
+  // that's guaranteed to survive into the new session, and doubles as the
+  // "did it actually restart" marker for whichever of them just happened.
+  logEvent("Booted: " + describeResetReason());
 
   String bootMsg = "\xF0\x9F\x93\xB7 Camera monitor online\n";
   bootMsg += "Reboot reason: " + describeResetReason() + "\n";

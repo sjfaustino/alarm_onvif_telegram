@@ -37,8 +37,18 @@ Arduino-ESP32/IDF releases.
   change either. Cameras can be added, edited, and deleted (edits can rename a
   camera too); a Test Connection button runs a live GetCapabilities/
   GetEventProperties/GetSnapshotUri check against whatever's currently typed in
-  the form, before you save or reboot. Camera changes take effect after a
-  reboot; Telegram user changes apply immediately.
+  the form, before you save or reboot. Telegram user changes always apply
+  immediately. Camera changes apply immediately too when the edited camera was
+  already running and stays enabled (the task reconnects with the new settings
+  within about a tick of saving) or when the edit enables a previously-disabled
+  camera (its task starts live); a brand new camera, or disabling one that's
+  currently running, still needs a reboot - the dashboard tells you which
+  happened after you save.
+- A small in-memory Activity log (Activity page) - the most recent ~40 events
+  (motion alerts, offline/online transitions, on/off changes including timed
+  ones, live config reloads, boot) with a relative timestamp, for a quick "what
+  happened recently" view without a serial cable. Not persisted - resets on
+  reboot, same as the rest of this board's runtime state.
 - Firmware updates over the dashboard: upload a `.bin` built with
   `pio run -e esp32s3` on the Firmware page instead of reflashing over USB. Uses
   the board's dual OTA app partitions - a failed or aborted upload leaves the
@@ -66,7 +76,10 @@ Arduino-ESP32/IDF releases.
   and a standing banner nagging you to set one, on every page, until you do. Once
   set (Security page), HTTP Basic Auth is required on every dashboard route,
   including the Firmware upload, and takes effect on your very next request - no
-  reboot needed.
+  reboot needed. Login attempts are rate-limited per source IP (5 consecutive
+  failures locks that IP out, starting at 30s and doubling on repeat offenses up
+  to 30 minutes) - HTTP Basic Auth has no throttling of its own, so without this
+  a wrong-password guess would otherwise cost an attacker nothing.
 
 ## Hardware
 
@@ -187,33 +200,42 @@ include/
   telegram_users.h  # TelegramUser struct + NVS load/save (recipients, per-user permissions)
   network_store.h    # WiFi credentials, NVS load/save (editable from the dashboard)
   auth_store.h       # dashboard Basic Auth username/password, NVS load/save
-  webserver.h       # sidebar dashboard - Network/Cameras/Users/Firmware/Security (PsychicHttp)
-  webserver_network.h, webserver_cameras.h, webserver_users.h,
+  event_log_store.h  # thread-safe global wrapper around lib/event_log's ring buffer
+  camera_tasks.h      # spawnCameraTask() - exposed from main.cpp so a dashboard edit can
+                       # start a camera's task live, without a reboot
+  webserver.h       # sidebar dashboard - Network/Cameras/Users/Activity/Firmware/Security (PsychicHttp)
+  webserver_network.h, webserver_cameras.h, webserver_users.h, webserver_activity.h,
   webserver_firmware.h, webserver_security.h # each panel's own rendering/form-handling
   secrets.h.example # template for secrets.h (copy, fill in, gitignored)
   telegram_ca.h      # Telegram's root CA for TLS pinning (committed, not secret)
   camera.h, telegram.h, onvif_soap.h
 src/
-  main.cpp          # boot sequence, PSRAM check, WiFi/NTP, per-camera task spawn, heartbeat
-  camera.cpp        # ONVIF SOAP calls, event parsing, per-camera FreeRTOS task
+  main.cpp          # boot sequence, PSRAM check, WiFi/NTP, per-camera task spawn, heartbeat,
+                      # reboot-reason reporting, OTA rollback confirmation
+  camera.cpp        # ONVIF SOAP calls, event parsing, per-camera FreeRTOS task, live config reload
   camera_store.cpp   # NVS-backed camera list (load/save/add/delete, one-time seed)
   telegram_users.cpp # NVS-backed Telegram user list (load/save/add/delete, one-time seed)
   network_store.cpp  # NVS-backed WiFi credentials (load/save, one-time seed)
   auth_store.cpp      # NVS-backed dashboard login (load/save)
-  webserver.cpp      # routing table, dashboard shell, OTA upload state - see webserver_*.cpp for panels
-  webserver_network.cpp, webserver_cameras.cpp, webserver_users.cpp,
+  event_log_store.cpp # thread-safe global event log (FreeRTOS mutex + lib/event_log's ring buffer)
+  webserver.cpp      # routing table, dashboard shell, OTA upload state, login rate-limiting
+                       # middleware - see webserver_*.cpp for panels
+  webserver_network.cpp, webserver_cameras.cpp, webserver_users.cpp, webserver_activity.cpp,
   webserver_firmware.cpp, webserver_security.cpp # each panel's rendering/form-handling, split out of
                                                    # what used to be one 946-line webserver.cpp
   telegram.cpp       # photo/message send paths, multi-recipient fan-out, remote commands
+                       # (including timed /on//off), scheduled-revert checking
   onvif_soap.cpp     # SOAP envelope building, WS-Security digest
 lib/                 # pure-logic modules with no hardware dependencies, split out of the
                       # files above specifically so they're unit-testable - see test/README.md
   xml_helpers/            # ONVIF response substring parsing + XML escaping
   camera_serialize/       # CameraConfig <-> NVS blob (de)serialization, schema-versioned
   telegram_user_serialize/ # TelegramUser <-> NVS blob (de)serialization, schema-versioned
-  telegram_parse/         # Telegram JSON escaping + /on,/off,/snap camera-name matching
-  backoff/                # the doubling-with-a-cap retry delay formula (shared by main.cpp
-                           # and camera.cpp, previously duplicated)
+  telegram_parse/         # Telegram JSON escaping, /on,/off,/snap camera-name matching, and
+                           # /on,/off timer-token parsing (minutes or HH:MM)
+  backoff/                # the doubling-with-a-cap retry delay formula (shared by main.cpp,
+                           # camera.cpp, and webserver.cpp's login rate-limiter)
+  event_log/               # fixed-capacity ring buffer backing the Activity page
 test/                 # native unit tests for lib/* - `pio test -e native`, no hardware needed
 ```
 
