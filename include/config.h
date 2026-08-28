@@ -91,3 +91,9 @@ static const size_t SD_PRUNE_MAX_FILES_PER_WRITE = 5;
 // genuinely wedged SD operation doesn't leave someone who pressed
 // "reboot" stuck waiting indefinitely.
 static const unsigned long SD_IDLE_WAIT_TIMEOUT_MS = 10000UL;
+
+// Clamp for the dashboard's "automatic full storage check" interval
+// (SdSettings::checkIntervalHours, Storage page) - just a sanity bound on
+// the number field, same idea as CameraConfig's snapshotBurstCount clamp.
+// 720h = 30 days.
+static const uint32_t SD_CHECK_INTERVAL_MAX_HOURS = 720;

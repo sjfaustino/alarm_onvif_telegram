@@ -24,6 +24,7 @@ static std::vector<CameraState> g_cameraStates;
 static WifiCredentials g_wifiCredentials;
 static unsigned long lastHeartbeatMs = 0;
 static unsigned long lastCommandPollMs = 0;
+static unsigned long lastSdCheckMs = 0;
 
 // True once startMonitoring() has actually run - see its comment for why
 // this can happen later than setup() if WiFi wasn't up yet at boot.
@@ -355,6 +356,11 @@ static void startMonitoring() {
   }
 
   lastHeartbeatMs = millis(); // first heartbeat fires HEARTBEAT_INTERVAL_MS from now, not immediately
+  // Same idea for the automatic SD check (if enabled): first one fires a
+  // full sdCheckIntervalHours() from now, not immediately - the boot-time
+  // checkNewestSnapshots() call in initSdStorage() already just covered
+  // the newest file in every camera directory.
+  lastSdCheckMs = millis();
   g_monitoringStarted = true;
 }
 
@@ -493,6 +499,21 @@ void loop() {
   if (WiFi.status() == WL_CONNECTED && millis() - lastCommandPollMs >= TELEGRAM_COMMAND_POLL_MS) {
     lastCommandPollMs = millis();
     pollTelegramCommands(g_cameras.data(), g_cameraStates.data(), g_cameras.size());
+  }
+
+  // Automatic full SD storage check - off by default (sdCheckIntervalHours()
+  // == 0), opt-in via the Storage page. Runs from loop() rather than a
+  // dedicated task since it's inherently a background/webserver-tier
+  // concern, not camera-critical - same "human works in seconds, cameras
+  // work in milliseconds" priority the rest of the webserver work already
+  // follows. checkSnapshotStorage() holds the SD mutex for its entire walk
+  // (see its own comment), so a large history can briefly delay a camera's
+  // own SD write while this runs - the tradeoff of running it unattended at
+  // all, same one the manual "check storage" button always had.
+  if (WiFi.status() == WL_CONNECTED && sdActive() && sdCheckIntervalHours() > 0 &&
+      millis() - lastSdCheckMs >= sdCheckIntervalHours() * 3600000UL) {
+    lastSdCheckMs = millis();
+    checkSnapshotStorage();
   }
 
   // Every tick, not gated behind its own interval like the poll above -

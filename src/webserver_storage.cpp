@@ -31,10 +31,16 @@ String renderStoragePanel() {
   html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"enabled\"" +
           String(status.settingEnabled ? " checked" : "") +
           "> Use SD card storage for snapshot history</label>";
+  html += "<p><label>Automatic full storage check every "
+          "<input type=\"number\" name=\"checkIntervalHours\" min=\"0\" max=\"720\" style=\"width:5em\" "
+          "value=\"" + String((unsigned)status.checkIntervalHours) + "\"> hour(s) (0 = off)</label></p>";
   html += "<p><button type=\"submit\">Save</button></p></form>";
-  html += "<p class=\"hint\">Takes effect after a reboot - toggling this doesn't touch the SPI bus "
-          "live while a camera task might be mid-write, and these modules aren't reliably hot-"
-          "swappable anyway.</p>";
+  html += "<p class=\"hint\">The enable checkbox takes effect after a reboot - toggling it doesn't "
+          "touch the SPI bus live while a camera task might be mid-write, and these modules aren't "
+          "reliably hot-swappable anyway. The check interval takes effect immediately. A full check "
+          "walks every stored file (same as the manual \"check storage\" button below) and can briefly "
+          "delay a camera's own SD write on a card with a lot of history - keep the interval long "
+          "(e.g. daily) unless you have a specific reason not to.</p>";
   html += "</fieldset>";
 
   if (status.available) {

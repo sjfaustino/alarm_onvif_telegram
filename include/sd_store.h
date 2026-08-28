@@ -19,6 +19,15 @@
 // persisted preference, applied on the next boot.
 struct SdSettings {
   bool enabled = false;
+  // Hours between automatic full storage checks (checkSnapshotStorage(),
+  // run from main.cpp's loop()) - 0 disables the automatic run entirely.
+  // Off by default: unlike the bounded boot-time check, a full walk's cost
+  // scales with total history stored, so an unattended default could
+  // surprise someone with an unexpectedly slow/blocking check on a large
+  // card (see checkSnapshotStorage()'s own comment on mutex hold time).
+  // Unlike `enabled`, this takes effect immediately on save - it only
+  // gates a millis() comparison in loop(), no SPI bus involved.
+  uint32_t checkIntervalHours = 0;
 };
 SdSettings loadSdSettings();
 bool saveSdSettings(const SdSettings& settings);
@@ -52,8 +61,15 @@ struct SdStatus {
                              // only wants to display status (e.g. webserver_storage.cpp)
   uint64_t totalBytes = 0;  // 0 if not available
   uint64_t usedBytes = 0;   // 0 if not available
+  uint32_t checkIntervalHours = 0; // persisted setting, reported regardless of `available`
 };
 SdStatus getSdStatus();
+
+// The persisted automatic-full-check interval (SdSettings::checkIntervalHours),
+// cached at boot and refreshed immediately by saveSdSettings() - main.cpp's
+// loop() reads this every tick to decide whether/when to run
+// checkSnapshotStorage() automatically. 0 = disabled.
+uint32_t sdCheckIntervalHours();
 
 // Takes ownership of jpg (caller must not free() it) - writes it as this
 // camera's newest snapshot on SD, pruning that camera's own oldest files
@@ -110,9 +126,10 @@ struct SnapshotStorageCheckResult {
 //
 // Broadcasts a Telegram alert (sendTelegramMessage, telegram.h) and logs
 // to the Activity page (logEvent, event_log_store.h) if any file turns
-// out unreadable - safe to call this directly, since the only caller is
-// the Storage page's "check storage" button, reachable only once the
-// webserver (and therefore WiFi) is already up.
+// out unreadable - safe to call this directly, since every caller (the
+// Storage page's "check storage" button, and main.cpp's loop() when
+// sdCheckIntervalHours() > 0) only runs once the webserver/WiFi is
+// already up.
 SnapshotStorageCheckResult checkSnapshotStorage();
 
 // Result of checkNewestSnapshots() below.

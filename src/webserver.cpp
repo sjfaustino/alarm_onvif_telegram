@@ -1,4 +1,5 @@
 #include "webserver.h"
+#include "config.h" // SD_CHECK_INTERVAL_MAX_HOURS
 #include "webserver_network.h"
 #include "webserver_cameras.h"
 #include "webserver_users.h"
@@ -540,8 +541,12 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
   server.on("/storage/save", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
     SdSettings settings;
     settings.enabled = request->hasParam("enabled");
+    long intervalHours = request->getParam("checkIntervalHours", "0").toInt();
+    if (intervalHours < 0) intervalHours = 0;
+    if (intervalHours > (long)SD_CHECK_INTERVAL_MAX_HOURS) intervalHours = (long)SD_CHECK_INTERVAL_MAX_HOURS;
+    settings.checkIntervalHours = (uint32_t)intervalHours;
     String banner = saveSdSettings(settings)
-        ? "Saved - reboot the board to apply."
+        ? "Saved - the enable/disable setting needs a reboot to apply; the check interval is active immediately."
         : "Failed to save - NVS write error (see Serial log). Setting was NOT changed.";
     return response->send(200, "text/html", renderShell(Tab::Storage, banner, renderStoragePanel()).c_str());
   });

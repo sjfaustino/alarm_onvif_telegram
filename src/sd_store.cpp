@@ -14,10 +14,12 @@
 
 static const char* NVS_NAMESPACE = "sdstore";
 static const char* NVS_KEY_ENABLED = "enabled";
+static const char* NVS_KEY_CHECK_HOURS = "checkHours"; // NVS keys are capped at 15 chars
 static const char* SNAPSHOTS_ROOT = "/snapshots"; // mount-relative - SD's FS methods prepend "/sd" internally
 
-static bool g_sdSettingEnabled = false; // cached at boot, see initSdStorage()
-static bool g_sdAvailable = false;      // see sdActive()'s comment
+static bool g_sdSettingEnabled = false;         // cached at boot, see initSdStorage()
+static uint32_t g_sdCheckIntervalHours = 0;      // cached, see sdCheckIntervalHours()
+static bool g_sdAvailable = false;              // see sdActive()'s comment
 static SemaphoreHandle_t g_sdMutex = xSemaphoreCreateMutex();
 static QuickSnapshotCheckResult g_lastBootCheckResult; // see lastBootCheckResult()'s own comment
 
@@ -26,6 +28,7 @@ SdSettings loadSdSettings() {
   prefs.begin(NVS_NAMESPACE, true); // read-only
   SdSettings settings;
   settings.enabled = prefs.getBool(NVS_KEY_ENABLED, false);
+  settings.checkIntervalHours = prefs.getUInt(NVS_KEY_CHECK_HOURS, 0);
   prefs.end();
   return settings;
 }
@@ -33,18 +36,25 @@ SdSettings loadSdSettings() {
 bool saveSdSettings(const SdSettings& settings) {
   Preferences prefs;
   if (!prefs.begin(NVS_NAMESPACE, false)) return false;
-  bool ok = prefs.putBool(NVS_KEY_ENABLED, settings.enabled) > 0;
+  bool ok = prefs.putBool(NVS_KEY_ENABLED, settings.enabled) > 0 &&
+            prefs.putUInt(NVS_KEY_CHECK_HOURS, settings.checkIntervalHours) > 0;
   prefs.end();
   if (!ok) {
     Serial.println("[sd_store] ERROR: failed to persist the SD storage setting to NVS - it will "
                     "revert to the previous value on the next reboot.");
+    return false;
   }
-  return ok;
+  // checkIntervalHours needs no reboot to take effect (unlike `enabled` -
+  // see the struct's own comment) - update the cache main.cpp's loop()
+  // reads immediately, not just on the next boot.
+  g_sdCheckIntervalHours = settings.checkIntervalHours;
+  return true;
 }
 
 void initSdStorage() {
   SdSettings settings = loadSdSettings();
   g_sdSettingEnabled = settings.enabled;
+  g_sdCheckIntervalHours = settings.checkIntervalHours;
 
   if (!g_sdSettingEnabled) {
     Serial.println("[sd_store] SD card storage is disabled - snapshot history uses the PSRAM ring only.");
@@ -92,10 +102,13 @@ bool sdActive() {
   return g_sdSettingEnabled && g_sdAvailable;
 }
 
+uint32_t sdCheckIntervalHours() { return g_sdCheckIntervalHours; }
+
 SdStatus getSdStatus() {
   SdStatus status;
   status.settingEnabled = g_sdSettingEnabled;
   status.available = g_sdAvailable;
+  status.checkIntervalHours = g_sdCheckIntervalHours;
   if (!g_sdAvailable) return status;
 
   xSemaphoreTake(g_sdMutex, portMAX_DELAY);

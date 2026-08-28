@@ -116,7 +116,10 @@ String buildConfigExport() {
   out += "POSIX TZ (blank = UTC): " + (net.posixTz.length() > 0 ? net.posixTz : String("(blank/UTC)")) + "\n";
 
   out += "\n--- Storage ---\n";
-  out += "SD card storage: " + String(loadSdSettings().enabled ? "enabled" : "disabled") + "\n";
+  SdSettings sdSettings = loadSdSettings();
+  out += "SD card storage: " + String(sdSettings.enabled ? "enabled" : "disabled") + "\n";
+  out += "SD automatic full check interval: " +
+         (sdSettings.checkIntervalHours > 0 ? String(sdSettings.checkIntervalHours) + "h" : String("off")) + "\n";
 
   return out;
 }

@@ -71,16 +71,21 @@ Arduino-ESP32/IDF releases.
   (deletes only what this project itself wrote, not a low-level card format).
   Any unreadable file found by that pass sends a Telegram alert (to every
   systemMessages-subscribed user) and logs an Activity page entry, same as a
-  runtime SD write/read failure does. A lighter version of that same
-  readability check - only each camera's *newest* file, not the whole
-  history - runs automatically once at boot, right after mounting: bounded
-  cost regardless of how much history is stored (unlike the full on-demand
-  check, which isn't run automatically for exactly that reason), and it
-  targets the specific failure mode a reboot interrupted mid-write would
-  actually produce. That boot-time check can't send its own Telegram alert
-  (it runs before WiFi connects), so any problem it finds instead gets
-  folded into the existing boot notification once WiFi is up. A deliberate
-  reboot
+  runtime SD write/read failure does. The same full check can also run on a
+  schedule instead of only on demand - the Storage page's "Automatic full
+  storage check every N hour(s)" field (0 = off, the default) - since its
+  cost scales with total history stored (not bounded like the boot check
+  below), it isn't turned on by default, and a large history can briefly
+  delay a camera's own SD write while it runs; set it (e.g. daily) only if
+  you want that tradeoff. The interval takes effect immediately on save, no
+  reboot needed. A lighter version of the same readability check - only each
+  camera's *newest* file, not the whole history - runs automatically once at
+  boot, right after mounting, regardless of the scheduled-check setting:
+  bounded cost regardless of how much history is stored, and it targets the
+  specific failure mode a reboot interrupted mid-write would actually
+  produce. That boot-time check can't send its own Telegram alert (it runs
+  before WiFi connects), so any problem it finds instead gets folded into
+  the existing boot notification once WiFi is up. A deliberate reboot
   (`/reset`, the Maintenance page, or a firmware update) now also waits for
   any in-flight SD write to finish first - `ESP.restart()` doesn't wait for
   other tasks on its own, and FAT isn't a journaling filesystem, so cutting
