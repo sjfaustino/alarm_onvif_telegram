@@ -307,6 +307,7 @@ static void parseEvents(const CameraConfig& cfg, CameraState& st, const String& 
   // camera_parse.h for the full reasoning and the field-hit bug this
   // pattern already fixed once for motion).
   if (motionEventFired(xml, ev)) {
+    st.lastMotionMs = millis(); // real motion signal, independent of mute/cooldown/quiet hours - see checkMotionWatchdog
     triggerMotionAlert(cfg, st);
   }
   if (ev.tamper && topicReportedTrue(xml, "TamperDetector")) {
@@ -428,6 +429,11 @@ void cameraTaskFn(void* pvParameters) {
     }
   }
 
+  // Baseline for checkMotionWatchdog - task-start time, not 0, so a camera
+  // that never fires within cfg.motionWatchdogHours after boot still
+  // trips (see CameraState::lastMotionMs's own comment).
+  st.lastMotionMs = millis();
+
   for (;;) {
     // Live-reload from a dashboard edit (webserver_cameras.cpp's save
     // handler, via requestLiveConfigReload) - checked first, every pass,
@@ -522,9 +528,19 @@ void cameraTaskFn(void* pvParameters) {
       if (millis() - st.lastRenew >= (SUBSCRIPTION_LIFETIME_MS - RENEW_MARGIN_MS)) {
         cameraRenewSubscription(cfg, st);
       }
+      // Only once actually subscribed - same reasoning as lastPull/
+      // lastRenew above, no point capturing before a snapshot URI even
+      // exists (triggerTimelapseCapture no-ops on that anyway, but no
+      // reason to even try before subscription succeeds once).
+      if (cfg.timelapseIntervalMin > 0 &&
+          millis() - st.lastTimelapseMs >= (unsigned long)cfg.timelapseIntervalMin * 60000UL) {
+        st.lastTimelapseMs = millis();
+        triggerTimelapseCapture(cfg, st);
+      }
     }
 
     checkCameraOnlineStatus(cfg, st);
+    checkMotionWatchdog(cfg, st);
 
     vTaskDelay(pdMS_TO_TICKS(10));
   }

@@ -6,6 +6,7 @@
 #include "snapshot_history.h"
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
+#include <cctype>
 
 // Serializes saveCameraSubmission's whole "decide whether this camera was
 // already running, then apply live or note a reboot's needed" section
@@ -20,6 +21,34 @@
 // serializing all of them (even ones for different cameras) costs nothing
 // worth avoiding a per-camera locking scheme for.
 static SemaphoreHandle_t g_saveMutex = xSemaphoreCreateMutex();
+
+// Formats minutes-since-midnight as "HH:MM" for pre-filling an
+// <input type="time"> value attribute.
+static String minutesToHHMM(uint16_t minutes) {
+  char buf[6];
+  snprintf(buf, sizeof(buf), "%02u:%02u", (unsigned)(minutes / 60) % 24, (unsigned)(minutes % 60));
+  return String(buf);
+}
+
+// Parses an <input type="time"> value ("HH:MM", 24h) into minutes since
+// midnight - NOT the same as this file's other numeric fields' plain
+// `.toInt()` (that would silently stop at the colon and drop the
+// minutes). Same length/digit/range validation parseDurationToken's own
+// HH:MM branch (lib/telegram_parse) already uses, duplicated here rather
+// than shared - different file/purpose, not worth a shared lib for one
+// call site. Returns 0 (midnight) on anything malformed, matching
+// isWithinQuietHours' own "0/0 means no active window" safe default.
+static uint16_t parseHHMMToMinutes(const String& hhmm) {
+  if (hhmm.length() != 5 || hhmm[2] != ':') return 0;
+  for (int i = 0; i < 5; i++) {
+    if (i == 2) continue;
+    if (!isdigit((unsigned char)hhmm[i])) return 0;
+  }
+  int h = hhmm.substring(0, 2).toInt();
+  int m = hhmm.substring(3, 5).toInt();
+  if (h > 23 || m > 59) return 0;
+  return (uint16_t)(h * 60 + m);
+}
 
 // Finds cfg's matching live (currently-running) index by name, or -1 if
 // this camera was added since the last reboot and isn't running yet, or was
@@ -76,6 +105,23 @@ static String renderCameraForm(const CameraConfig& v, bool isEdit) {
   html += "<label>Snapshots per alert (1-10) - how many consecutive photos to send when motion "
           "fires, each a fresh fetch from the camera; raise it to see more of what led up to the alert"
           "<input type=\"text\" name=\"snapshotBurstCount\" value=\"" + String(v.snapshotBurstCount) +
+          "\"></label>";
+  html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"quietHoursEnabled\"" +
+          String(v.quietHoursEnabled ? " checked" : "") +
+          "> Quiet hours (mutes motion alerts only - tamper/offline still alert)</label>";
+  html += "<label>Quiet hours start<input type=\"time\" name=\"quietStart\" value=\"" +
+          minutesToHHMM(v.quietStartMinute) + "\"></label>";
+  html += "<label>Quiet hours end<input type=\"time\" name=\"quietEnd\" value=\"" +
+          minutesToHHMM(v.quietEndMinute) +
+          "\"></label><p class=\"hint\">Leaving start and end the same (e.g. both 00:00) means no "
+          "active window - quiet hours needs a real start/end to do anything.</p>";
+  html += "<label>No-motion watchdog, hours (0 = off) - alerts if this camera hasn't seen ANY motion "
+          "in over this long, e.g. a dead PIR or a knocked-over camera"
+          "<input type=\"text\" name=\"motionWatchdogHours\" value=\"" + String(v.motionWatchdogHours) +
+          "\"></label>";
+  html += "<label>Timelapse capture, minutes (0 = off) - stores a snapshot on this interval "
+          "regardless of motion (never sent to Telegram, just kept in history/SD)"
+          "<input type=\"text\" name=\"timelapseIntervalMin\" value=\"" + String(v.timelapseIntervalMin) +
           "\"></label>";
   html += "<label>Notes<input type=\"text\" name=\"notes\" value=\"" + htmlEscape(v.notes) + "\"></label>";
   html += "<p><button type=\"submit\" formaction=\"/cameras/save\">" +
@@ -207,6 +253,25 @@ CameraConfig parseCameraForm(PsychicRequest* request) {
   if (burstCount < 1) burstCount = 1;
   if (burstCount > 10) burstCount = 10;
   c.snapshotBurstCount = (unsigned int)burstCount;
+
+  c.quietHoursEnabled = request->hasParam("quietHoursEnabled");
+  c.quietStartMinute  = parseHHMMToMinutes(request->getParam("quietStart", "00:00"));
+  c.quietEndMinute    = parseHHMMToMinutes(request->getParam("quietEnd", "00:00"));
+
+  // Unlike alertCooldownSec/offlineThresholdMin/snapshotBurstCount above,
+  // 0 is the deliberate, meaningful "off" value for both of these fields -
+  // it must never be substituted away, only clamped against a negative
+  // value (not reachable from a plain number input, but defensive) and an
+  // upper sanity cap.
+  long watchdogHours = request->getParam("motionWatchdogHours", "0").toInt();
+  if (watchdogHours < 0) watchdogHours = 0;
+  if (watchdogHours > 168) watchdogHours = 168; // 1 week
+  c.motionWatchdogHours = (uint16_t)watchdogHours;
+
+  long timelapseMin = request->getParam("timelapseIntervalMin", "0").toInt();
+  if (timelapseMin < 0) timelapseMin = 0;
+  if (timelapseMin > 1440) timelapseMin = 1440; // 24h
+  c.timelapseIntervalMin = (uint16_t)timelapseMin;
 
   return c;
 }

@@ -60,6 +60,20 @@ struct CameraState {
   // So checkCameraOnlineStatus only alerts on a state transition.
   bool     isOffline = false;
 
+  // Real motion detection timestamp (independent of mute/cooldown/quiet
+  // hours) - the "is this camera still actually seeing motion" signal for
+  // checkMotionWatchdog (camera.cpp). Same-task-only (written/read only by
+  // this camera's own task, like lastPull/retryStreak above), no lock
+  // needed. Baselined to task-start time, not 0, so a camera that never
+  // fires within cfg.motionWatchdogHours after boot still trips.
+  unsigned long lastMotionMs = 0;
+  bool     motionWatchdogTripped = false; // avoid repeat alerts until motion resumes
+
+  // Same-task-only (see above) - last scheduled timelapse capture
+  // (triggerTimelapseCapture, telegram.cpp), independent of the alert
+  // cooldown.
+  unsigned long lastTimelapseMs = 0;
+
   // Copied once from cfg.user/cfg.pass by resolveCameraCredentials() at
   // startup. Safe as const char*: cfg lives in main.cpp's camera vector,
   // never resized after boot, so these pointers stay valid for the process

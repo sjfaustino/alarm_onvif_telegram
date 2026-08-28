@@ -46,7 +46,12 @@ String serializeCamera(const CameraConfig& c) {
   s += stripSeparators(c.notes);                       s += FIELD_SEP;
   s += String(c.alertCooldownMs);                      s += FIELD_SEP;
   s += String(c.offlineThresholdMs);                   s += FIELD_SEP;
-  s += String(c.snapshotBurstCount);
+  s += String(c.snapshotBurstCount);                   s += FIELD_SEP;
+  s += (c.quietHoursEnabled ? "1" : "0");              s += FIELD_SEP;
+  s += String(c.quietStartMinute);                     s += FIELD_SEP;
+  s += String(c.quietEndMinute);                       s += FIELD_SEP;
+  s += String(c.motionWatchdogHours);                  s += FIELD_SEP;
+  s += String(c.timelapseIntervalMin);
   return s;
 }
 
@@ -84,12 +89,12 @@ static CameraConfig deserializeCameraV0(const std::vector<String>& fields) {
   return c;
 }
 
-// Version 1 (CAMERA_SCHEMA_VERSION): the current, fixed 14-field layout.
-// Unlike V0, this requires an *exact* field count - a record tagged as
-// this version with the wrong number of fields is corruption (or a
-// firmware downgrade after a newer version changed the layout), not
-// something to guess at, so it's rejected (empty name) rather than
-// partially/incorrectly populated.
+// Version 1: the 14-field layout this project shipped with before quiet
+// hours/motion watchdog/timelapse existed. Superseded by V2 below, but
+// kept as its own permanent branch (never edited) so a record still
+// tagged version 1 (not yet re-saved since upgrading) keeps parsing
+// correctly - camera_store.cpp re-persists everything as the current
+// version on its next save, same as V0 already did.
 static CameraConfig deserializeCameraV1(const std::vector<String>& fields) {
   CameraConfig c;
   if (fields.size() != 14) return c; // malformed - caller skips entries with an empty name
@@ -111,18 +116,53 @@ static CameraConfig deserializeCameraV1(const std::vector<String>& fields) {
   return c;
 }
 
+// Version 2 (CAMERA_SCHEMA_VERSION): V1's 14 fields plus quiet hours (3),
+// motion watchdog (1), and timelapse (1) - 19 fields total, added together
+// in one schema bump rather than one field at a time (see this project's
+// commit history: reshaping a single "current" version's layout more than
+// once is exactly the failure mode this versioning scheme exists to
+// prevent - every existing saved camera would silently fail to parse the
+// moment the field count changed again). Requires an *exact* field count,
+// same reasoning as V1's own comment.
+static CameraConfig deserializeCameraV2(const std::vector<String>& fields) {
+  CameraConfig c;
+  if (fields.size() != 19) return c; // malformed - caller skips entries with an empty name
+
+  c.name                          = fields[0];
+  c.deviceServiceUrl              = fields[1];
+  c.enabled                       = fields[2] == "1";
+  c.useWSSecurity                 = fields[3] == "1";
+  c.includeInitialTerminationTime = fields[4] == "1";
+  c.includeReplyToAnonymous       = fields[5] == "1";
+  c.snapshotUriOverride           = fields[6];
+  c.preferredProfileKeyword       = fields[7];
+  c.user                          = fields[8];
+  c.pass                          = fields[9];
+  c.notes                         = fields[10];
+  if (fields[11].length() > 0) c.alertCooldownMs    = (unsigned long)fields[11].toInt();
+  if (fields[12].length() > 0) c.offlineThresholdMs  = (unsigned long)fields[12].toInt();
+  if (fields[13].length() > 0) c.snapshotBurstCount  = (unsigned int)fields[13].toInt();
+  c.quietHoursEnabled              = fields[14] == "1";
+  if (fields[15].length() > 0) c.quietStartMinute    = (uint16_t)fields[15].toInt();
+  if (fields[16].length() > 0) c.quietEndMinute      = (uint16_t)fields[16].toInt();
+  if (fields[17].length() > 0) c.motionWatchdogHours = (uint16_t)fields[17].toInt();
+  if (fields[18].length() > 0) c.timelapseIntervalMin = (uint16_t)fields[18].toInt();
+  return c;
+}
+
 CameraConfig deserializeCamera(const String& record, uint16_t recordVersion) {
   std::vector<String> fields = splitFields(record);
 
   if (recordVersion == 0) return deserializeCameraV0(fields);
-  if (recordVersion == CAMERA_SCHEMA_VERSION) return deserializeCameraV1(fields);
+  if (recordVersion == 1) return deserializeCameraV1(fields);
+  if (recordVersion == CAMERA_SCHEMA_VERSION) return deserializeCameraV2(fields);
 
   // Unknown version, newer than anything this firmware knows about (most
   // likely: downgraded after a later firmware version changed the layout).
   // Best-effort fall through to the newest known layout instead of
   // discarding the record outright - camera_store.cpp logs a clear
   // warning when this happens so it doesn't go unnoticed.
-  return deserializeCameraV1(fields);
+  return deserializeCameraV2(fields);
 }
 
 size_t cameraRecordFieldCount(const String& record) {

@@ -51,6 +51,28 @@ struct CameraConfig {
   // Consecutive fresh snapshots to send per motion event (captioned
   // "(n/N)" once more than one).
   unsigned int snapshotBurstCount = 1;
+
+  // Recurring daily do-not-disturb window - motion alerts only (tamper/
+  // signal-loss stay always-on, see telegram.cpp's triggerMotionAlert).
+  // quietStartMinute/quietEndMinute are minutes since local midnight
+  // (0-1439). quietStartMinute == quietEndMinute means "no active window"
+  // (see lib/quiet_hours' own comment for why that's the safe default,
+  // not "always quiet").
+  bool quietHoursEnabled = false;
+  uint16_t quietStartMinute = 0;
+  uint16_t quietEndMinute = 0;
+
+  // Alerts (Telegram + Activity log) if this camera hasn't seen a real
+  // motion event in over this many hours - catches a dead PIR or a camera
+  // knocked to face the wrong way, which otherwise looks identical to "a
+  // quiet day". 0 = off (default - many cameras legitimately go long
+  // stretches without motion).
+  uint16_t motionWatchdogHours = 0;
+
+  // Captures one snapshot on this interval regardless of motion, stored
+  // the same way as an alert snapshot (SD if active, RAM ring otherwise) -
+  // never sent to Telegram. 0 = off (default).
+  uint16_t timelapseIntervalMin = 0;
 };
 
 // Loads the camera list from NVS, seeding once from CAMERA_SEED in

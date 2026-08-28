@@ -26,7 +26,7 @@
 // with no error - fields.size() tolerance alone can't tell "an old record
 // missing trailing fields" apart from "a record whose fields just moved."
 // Versioning makes that distinction explicit instead of assumed.
-static const uint16_t CAMERA_SCHEMA_VERSION = 1;
+static const uint16_t CAMERA_SCHEMA_VERSION = 2;
 
 // Always writes CAMERA_SCHEMA_VERSION's current field layout.
 String serializeCamera(const CameraConfig& c);

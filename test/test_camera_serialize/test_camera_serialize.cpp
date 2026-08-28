@@ -36,6 +36,11 @@ static CameraConfig sampleCamera() {
   c.alertCooldownMs = 45000;
   c.offlineThresholdMs = 120000;
   c.snapshotBurstCount = 3;
+  c.quietHoursEnabled = true;
+  c.quietStartMinute = 1320; // 22:00
+  c.quietEndMinute = 360;    // 06:00
+  c.motionWatchdogHours = 24;
+  c.timelapseIntervalMin = 15;
   return c;
 }
 
@@ -64,6 +69,11 @@ void test_round_trip_preserves_every_field(void) {
   TEST_ASSERT_EQUAL_UINT32(original.alertCooldownMs, restored.alertCooldownMs);
   TEST_ASSERT_EQUAL_UINT32(original.offlineThresholdMs, restored.offlineThresholdMs);
   TEST_ASSERT_EQUAL_UINT32(original.snapshotBurstCount, restored.snapshotBurstCount);
+  TEST_ASSERT_EQUAL(original.quietHoursEnabled, restored.quietHoursEnabled);
+  TEST_ASSERT_EQUAL_UINT32(original.quietStartMinute, restored.quietStartMinute);
+  TEST_ASSERT_EQUAL_UINT32(original.quietEndMinute, restored.quietEndMinute);
+  TEST_ASSERT_EQUAL_UINT32(original.motionWatchdogHours, restored.motionWatchdogHours);
+  TEST_ASSERT_EQUAL_UINT32(original.timelapseIntervalMin, restored.timelapseIntervalMin);
 }
 
 void test_round_trip_with_falsy_flags_and_empty_optionals(void) {
@@ -135,39 +145,64 @@ void test_v0_13_field_record_defaults_only_snapshotBurstCount(void) {
   TEST_ASSERT_EQUAL_UINT32(fresh.snapshotBurstCount, restored.snapshotBurstCount);
 }
 
-// ---- Version CAMERA_SCHEMA_VERSION (current, strict) ----
+// ---- Version 1 (superseded, but still readable - not the current version) ----
 
-// This is the actual fix: unlike version 0, a record tagged as the
-// *current* schema version must have exactly the current field count.
-// Before schema versioning existed, this same 13-field record would have
-// been silently accepted and misparsed as "missing snapshotBurstCount"
-// (which happened to be correct by luck, since the only historical field
-// changes were pure appends) - now that acceptance is deliberate and
-// scoped to version 0 only. A record explicitly tagged as the current
-// version with the wrong count is corruption, not "an older save".
+// A record explicitly tagged version 1 keeps parsing under V1's own
+// 14-field layout, even though CAMERA_SCHEMA_VERSION has moved on to 2 -
+// this is what lets an un-migrated NVS record from before quiet hours/
+// watchdog/timelapse existed keep loading correctly (camera_store.cpp
+// re-saves it as the current version on its next write).
 void test_v1_wrong_field_count_is_rejected_not_reinterpreted(void) {
   String wrongCount = joinFields({"D05", "http://192.168.1.54/onvif/device_service", "1", "1", "0", "0",
                                    "", "", "user", "pass", "notes", "60000", "300000"}); // 13 fields
-  CameraConfig restored = deserializeCamera(wrongCount, CAMERA_SCHEMA_VERSION);
+  CameraConfig restored = deserializeCamera(wrongCount, 1);
   TEST_ASSERT_EQUAL_STRING("", restored.name.c_str());
 }
 
 void test_v1_exact_field_count_is_accepted(void) {
   String exact = joinFields({"D05", "http://192.168.1.54/onvif/device_service", "1", "1", "0", "0",
                               "", "", "user", "pass", "notes", "60000", "300000", "2"}); // 14 fields
-  CameraConfig restored = deserializeCamera(exact, CAMERA_SCHEMA_VERSION);
+  CameraConfig restored = deserializeCamera(exact, 1);
   TEST_ASSERT_EQUAL_STRING("D05", restored.name.c_str());
   TEST_ASSERT_EQUAL_UINT32(2, restored.snapshotBurstCount);
 }
 
+// ---- Version CAMERA_SCHEMA_VERSION (current, strict) ----
+
+// Same "exact count or rejected" rule as V1, now for V2's 19 fields - a
+// record tagged as the current version with V1's old 14-field shape (or
+// any other wrong count) is corruption/a downgrade artifact, not "an
+// older save" (that's what the recordVersion tag itself is for).
+void test_v2_wrong_field_count_is_rejected_not_reinterpreted(void) {
+  String wrongCount = joinFields({"D07", "http://192.168.1.56/onvif/device_service", "1", "1", "0", "0",
+                                   "", "", "user", "pass", "notes", "60000", "300000", "2"}); // 14 fields
+  CameraConfig restored = deserializeCamera(wrongCount, CAMERA_SCHEMA_VERSION);
+  TEST_ASSERT_EQUAL_STRING("", restored.name.c_str());
+}
+
+void test_v2_exact_field_count_is_accepted(void) {
+  String exact = joinFields({"D07", "http://192.168.1.56/onvif/device_service", "1", "1", "0", "0",
+                              "", "", "user", "pass", "notes", "60000", "300000", "2",
+                              "1", "1320", "360", "24", "15"}); // 19 fields
+  CameraConfig restored = deserializeCamera(exact, CAMERA_SCHEMA_VERSION);
+  TEST_ASSERT_EQUAL_STRING("D07", restored.name.c_str());
+  TEST_ASSERT_EQUAL_UINT32(2, restored.snapshotBurstCount);
+  TEST_ASSERT_TRUE(restored.quietHoursEnabled);
+  TEST_ASSERT_EQUAL_UINT32(1320, restored.quietStartMinute);
+  TEST_ASSERT_EQUAL_UINT32(360, restored.quietEndMinute);
+  TEST_ASSERT_EQUAL_UINT32(24, restored.motionWatchdogHours);
+  TEST_ASSERT_EQUAL_UINT32(15, restored.timelapseIntervalMin);
+}
+
 // A version newer than this build knows about (firmware downgraded after
 // a later version changed the layout) falls through to the newest known
-// layout rather than being discarded outright - camera_store.cpp is
+// (V2) layout rather than being discarded outright - camera_store.cpp is
 // responsible for logging a warning when this happens, so this test only
 // covers that it doesn't crash and still extracts something.
 void test_unknown_future_version_falls_back_to_newest_known_layout(void) {
   String record = joinFields({"D06", "http://192.168.1.55/onvif/device_service", "1", "1", "0", "0",
-                               "", "", "user", "pass", "notes", "60000", "300000", "5"});
+                               "", "", "user", "pass", "notes", "60000", "300000", "5",
+                               "0", "0", "0", "0", "0"}); // 19 fields
   CameraConfig restored = deserializeCamera(record, (uint16_t)(CAMERA_SCHEMA_VERSION + 1));
   TEST_ASSERT_EQUAL_STRING("D06", restored.name.c_str());
   TEST_ASSERT_EQUAL_UINT32(5, restored.snapshotBurstCount);
@@ -231,6 +266,8 @@ int main(int argc, char** argv) {
   RUN_TEST(test_v0_13_field_record_defaults_only_snapshotBurstCount);
   RUN_TEST(test_v1_wrong_field_count_is_rejected_not_reinterpreted);
   RUN_TEST(test_v1_exact_field_count_is_accepted);
+  RUN_TEST(test_v2_wrong_field_count_is_rejected_not_reinterpreted);
+  RUN_TEST(test_v2_exact_field_count_is_accepted);
   RUN_TEST(test_unknown_future_version_falls_back_to_newest_known_layout);
   RUN_TEST(test_field_separator_character_in_input_is_stripped_not_corrupting);
   RUN_TEST(test_sortCamerasByName_orders_alphabetically);

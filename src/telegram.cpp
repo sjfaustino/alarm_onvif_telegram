@@ -7,6 +7,7 @@
 #include "event_log_store.h"
 #include "snapshot_history.h"
 #include "sd_store.h"
+#include "quiet_hours.h"
 #include <esp_task_wdt.h>
 #include <ArduinoJson.h>
 #include <WiFi.h>
@@ -210,6 +211,23 @@ static String nowTimestampString() {
   return String(buf);
 }
 
+// Same "has NTP actually set the clock at least once" check
+// parseDurationToken (telegram_parse.h) already uses for its own HH:MM
+// resolution - quiet hours must fail OPEN (alerts still send normally)
+// against an unsynced, near-epoch clock, not silently misjudge the
+// window on a security-relevant feature.
+static bool localClockSynced() {
+  time_t now; time(&now);
+  struct tm tmStruct; localtime_r(&now, &tmStruct);
+  return tmStruct.tm_year > (2016 - 1900);
+}
+
+static int currentLocalMinuteOfDay() {
+  time_t now; time(&now);
+  struct tm tmStruct; localtime_r(&now, &tmStruct);
+  return tmStruct.tm_hour * 60 + tmStruct.tm_min;
+}
+
 // Low-level single-recipient send (JSON body, no photo) - the actual HTTPS
 // round trip. Used both directly (command replies go back to whoever sent
 // the command, not everyone) and by sendTelegramMessage() below (broadcast).
@@ -340,6 +358,26 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st) {
   uint32_t nowMs = millis();
   if (st.hasAlerted && nowMs - st.lastAlert < cfg.alertCooldownMs) return; // cooling down
 
+  // Quiet hours suppresses the Telegram send only - motion is still
+  // detected/cooldown-gated/recorded (Activity log + snapshot history),
+  // just doesn't page anyone. Deliberately scoped to motion alerts only -
+  // triggerTamperAlert/triggerSignalLossAlert stay always-on (security/
+  // connectivity-critical, not "noise").
+  bool quiet = cfg.quietHoursEnabled && localClockSynced() &&
+               isWithinQuietHours(currentLocalMinuteOfDay(), cfg.quietStartMinute, cfg.quietEndMinute);
+  if (quiet) {
+    // Mirrors this function's own "don't spend the cooldown on a no-op"
+    // rule below - nothing to capture yet if the snapshot URI hasn't
+    // resolved, so don't burn the cooldown window on nothing.
+    if (st.snapshotUri.length() == 0) return;
+    { CameraStateLock lock(st); st.lastAlert = nowMs; st.hasAlerted = true; }
+    logEvent(cfg.name + ": motion detected (quiet hours - no Telegram alert)");
+    size_t jpgLen = 0;
+    uint8_t* jpg = fetchOneSnapshot(cfg, st, jpgLen);
+    if (jpg) pushCameraSnapshot(cfg, st, jpg, jpgLen); // takes ownership - do not free(jpg) here
+    return;
+  }
+
   std::vector<String> recipients;
   for (auto& u : loadTelegramUsers()) {
     if (telegramUserWantsCamera(u, cfg.name)) recipients.push_back(u.chatId);
@@ -387,6 +425,18 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st) {
     }
     pushCameraSnapshot(cfg, st, jpg, jpgLen); // takes ownership - do not free(jpg) here
   }
+}
+
+void triggerTimelapseCapture(const CameraConfig& cfg, CameraState& st) {
+  // snapshotUri is written only by this camera's own task (camera.cpp),
+  // same-task self-read, no lock needed - same reasoning as
+  // triggerMotionAlert's own check.
+  if (st.snapshotUri.length() == 0) return;
+
+  size_t jpgLen = 0;
+  uint8_t* jpg = fetchOneSnapshot(cfg, st, jpgLen);
+  if (!jpg) return; // logged by fetchOneSnapshot itself
+  pushCameraSnapshot(cfg, st, jpg, jpgLen); // takes ownership - do not free(jpg) here
 }
 
 // Gathers this camera's subscribed recipients and, if there are any and
@@ -473,6 +523,27 @@ void checkCameraOnlineStatus(const CameraConfig& cfg, CameraState& st) {
     logEvent(cfg.name + ": back ONLINE");
     sendTelegramMessage("\xE2\x9C\x85 " + cfg.name + " is back ONLINE.");
   }
+}
+
+// lastMotionMs/motionWatchdogTripped are same-task-only (see CameraState's
+// own comment) - this runs on the camera's own task, same as
+// checkCameraOnlineStatus above, no lock needed.
+void checkMotionWatchdog(const CameraConfig& cfg, CameraState& st) {
+  if (cfg.motionWatchdogHours == 0) return; // disabled
+
+  unsigned long thresholdMs = (unsigned long)cfg.motionWatchdogHours * 3600000UL;
+  if (millis() - st.lastMotionMs < thresholdMs) {
+    st.motionWatchdogTripped = false; // motion resumed since the last trip - re-arm
+    return;
+  }
+  if (st.motionWatchdogTripped) return; // already alerted for this stretch of silence
+
+  st.motionWatchdogTripped = true;
+  Serial.printf("[%s] No motion detected in over %u hour(s).\n", cfg.name.c_str(),
+                (unsigned)cfg.motionWatchdogHours);
+  logEvent(cfg.name + ": no motion detected in over " + String((unsigned)cfg.motionWatchdogHours) + "h");
+  sendTelegramMessage("\xE2\x9A\xA0\xEF\xB8\x8F " + cfg.name + ": no motion detected in over " +
+                       String((unsigned)cfg.motionWatchdogHours) + " hour(s) - check the camera/PIR.");
 }
 
 // ============================================================

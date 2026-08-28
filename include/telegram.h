@@ -28,6 +28,20 @@ void triggerSignalLossAlert(const CameraConfig& cfg, CameraState& st);
 // state transition. Cheap enough to call every cameraTaskFn loop iteration.
 void checkCameraOnlineStatus(const CameraConfig& cfg, CameraState& st);
 
+// Broadcasts an alert if this camera hasn't seen a real motion event
+// (CameraState::lastMotionMs, updated independently of mute/cooldown/quiet
+// hours) in over cfg.motionWatchdogHours - a no-op if that's 0 (off,
+// default). Re-arms (won't alert again) once motion resumes. Cheap enough
+// to call every cameraTaskFn loop iteration, same as checkCameraOnlineStatus.
+void checkMotionWatchdog(const CameraConfig& cfg, CameraState& st);
+
+// Captures exactly one snapshot and stores it via pushCameraSnapshot (SD
+// if active, RAM ring otherwise) - never sent to Telegram, no recipients,
+// no cooldown interaction. No-op if st.snapshotUri hasn't resolved yet.
+// Called from cameraTaskFn on cfg.timelapseIntervalMin's own interval,
+// independent of motion/alerts entirely.
+void triggerTimelapseCapture(const CameraConfig& cfg, CameraState& st);
+
 // Sends text to every user with systemMessages enabled. Returns false if
 // no user has it enabled, or every send failed.
 bool sendTelegramMessage(const String& text);
