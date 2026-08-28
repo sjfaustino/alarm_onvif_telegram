@@ -338,3 +338,20 @@ SnapshotStorageCheckResult checkSnapshotStorage() {
                 (unsigned)result.unreadableFiles);
   return result;
 }
+
+void waitForSdIdle() {
+  if (!sdActive()) return;
+
+  if (xSemaphoreTake(g_sdMutex, pdMS_TO_TICKS(SD_IDLE_WAIT_TIMEOUT_MS)) == pdTRUE) {
+    xSemaphoreGive(g_sdMutex);
+  } else {
+    // Every SD-touching function in this module takes g_sdMutex for its
+    // whole operation, so failing to acquire it within the timeout means
+    // something has genuinely been mid-operation (or wedged) for that
+    // whole span - logged, not treated as fatal: the caller asked for a
+    // reboot, and a stuck SD operation is itself a reason to grant it,
+    // not withhold it.
+    Serial.println("[sd_store] waitForSdIdle: timed out waiting for an in-flight SD operation - "
+                    "proceeding with the reboot anyway.");
+  }
+}

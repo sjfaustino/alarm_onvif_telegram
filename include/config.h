@@ -83,3 +83,11 @@ static const size_t SD_MAX_FILES_PER_CAMERA = 300;
 // during pruning. If one call's cap isn't enough, the next write's own
 // prune pass continues the job.
 static const size_t SD_PRUNE_MAX_FILES_PER_WRITE = 5;
+
+// How long waitForSdIdle() (sd_store.h) waits for an in-flight SD
+// operation to finish before a deliberate reboot proceeds anyway.
+// Generous enough to cover a legitimately slow erase-all pass across
+// several cameras' worth of files on a slow card, short enough that a
+// genuinely wedged SD operation doesn't leave someone who pressed
+// "reboot" stuck waiting indefinitely.
+static const unsigned long SD_IDLE_WAIT_TIMEOUT_MS = 10000UL;

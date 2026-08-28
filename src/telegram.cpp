@@ -6,6 +6,7 @@
 #include "format_utils.h"
 #include "event_log_store.h"
 #include "snapshot_history.h"
+#include "sd_store.h"
 #include <esp_task_wdt.h>
 #include <ArduinoJson.h>
 #include <WiFiClientSecure.h>
@@ -751,6 +752,13 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
       // the last chance to confirm the command was actually received.
       sendTelegramMessageTo(sender.chatId, "\xE2\x99\xBB\xEF\xB8\x8F Rebooting now...");
       delay(500); // let the TLS send above finish flushing before the reboot tears down WiFi
+      // ESP.restart() doesn't wait for other FreeRTOS tasks to finish
+      // whatever they're doing - if a camera task is mid-write to SD at
+      // this exact moment, an uncoordinated reset could corrupt more than
+      // just that one file (FAT isn't a journaling filesystem). See
+      // waitForSdIdle's own comment (sd_store.h) for the full reasoning;
+      // no-op if SD isn't active.
+      waitForSdIdle();
       ESP.restart();
       return; // unreachable - ESP.restart() doesn't return - kept for a tidy switch
 

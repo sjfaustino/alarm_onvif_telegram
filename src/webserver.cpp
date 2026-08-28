@@ -263,6 +263,13 @@ static String renderShell(Tab active, const String& banner, const String& conten
 // below - nothing about the delay-then-restart itself is OTA-specific.
 static void delayedRebootTask(void*) {
   vTaskDelay(pdMS_TO_TICKS(1000));
+  // ESP.restart() doesn't wait for other FreeRTOS tasks to finish
+  // whatever they're doing - if a camera task is mid-write to SD at this
+  // exact moment, an uncoordinated reset could corrupt more than just
+  // that one file (FAT isn't a journaling filesystem). Covers both
+  // callers of this function (OTA and Maintenance) automatically. See
+  // waitForSdIdle's own comment (sd_store.h); no-op if SD isn't active.
+  waitForSdIdle();
   ESP.restart();
 }
 

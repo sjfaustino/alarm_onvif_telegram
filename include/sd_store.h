@@ -103,3 +103,23 @@ struct SnapshotStorageCheckResult {
 // individually readable - said plainly on the Storage page too, so this
 // isn't mistaken for a real chkdsk/fsck.
 SnapshotStorageCheckResult checkSnapshotStorage();
+
+// Blocks (up to a bounded timeout) until no SD operation is in flight,
+// then returns - call this immediately before any *deliberate* reboot
+// (ESP.restart(), from /reset, the Maintenance page, or a firmware
+// update), if there's any chance a camera task could be mid-write.
+// ESP.restart() doesn't wait for other FreeRTOS tasks to finish
+// whatever they're doing - a camera task interrupted mid-SD.write() or
+// mid-prune (deleting several files) isn't just a lost snapshot: FAT
+// (what this project's SD support ultimately runs on) isn't a
+// journaling filesystem, so a write or a multi-file prune/erase pass
+// cut off partway through can leave an inconsistent allocation table
+// (lost clusters, occasionally an unreadable directory), not just a
+// truncated file. Every SD-touching function in this module already
+// takes the same internal mutex this waits on, so successfully
+// acquiring it here guarantees nothing was mid-operation at that
+// instant. No-op (returns immediately) if SD isn't active. A timeout
+// (something is stuck) is logged but does NOT block the reboot - the
+// caller asked for one, and a wedged SD operation is itself a reason to
+// reboot, not a reason to refuse to.
+void waitForSdIdle();
