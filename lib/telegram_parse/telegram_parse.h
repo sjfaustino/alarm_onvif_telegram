@@ -49,10 +49,10 @@ std::vector<size_t> matchCamerasByPrefix(const CameraConfig cameras[], size_t nu
 
 // The specific command a message's text was recognized as - Unknown means
 // it isn't a recognized command at all.
-enum class TelegramCommand { Unknown, Status, Uptime, Reset, On, Off, Snap, Help, Health };
+enum class TelegramCommand { Unknown, Status, Uptime, Reset, On, Off, Snap, Help, Health, Log };
 
 // Which TelegramUser permission a command requires - /status, /uptime,
-// /health, /on, /off need canCommand; /snap needs canSnap; /reset needs
+// /health, /log, /on, /off need canCommand; /snap needs canSnap; /reset needs
 // canReset; /help needs none (Unknown, same value the fallback "not a
 // recognized command at all" case uses - a legitimate double meaning:
 // Unknown means "no specific permission maps to this command," true for
@@ -92,6 +92,13 @@ struct ParsedTelegramCommand {
   // time and so can't live in this otherwise time-independent parser.
   // Unused (always "") for every other command.
   String durationText;
+
+  // /log only: the optional trailing count, e.g. "/log 20" -> "20"; ""
+  // for a bare "/log" (telegram.cpp defaults and clamps it). Unused
+  // (always "") for every other command - dedicated field rather than
+  // reusing durationText, same "one field per command's own specific
+  // need" reasoning that field's own comment documents.
+  String logCountText;
 };
 
 // The single place message text is matched against command syntax.

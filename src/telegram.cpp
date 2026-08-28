@@ -850,6 +850,8 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
           "/off <camera|all> [duration] - mute alerts\n"
           "/snap <camera|all> - fresh photo now, ignoring mute/cooldown\n"
           "/health - board health (heap, PSRAM, NVS, WiFi signal, SD storage)\n"
+          "/log [N] - the N most recent Activity log entries (default 10, max " +
+          String((unsigned)EVENT_LOG_CAPACITY) + ")\n"
           "/reset - reboot the board immediately\n"
           "/help - this message\n\n"
           "<camera> matches by name or prefix; \"all\" applies to every enabled camera.\n"
@@ -893,6 +895,28 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
       msg += "WiFi signal: " + String(WiFi.RSSI()) + " dBm\n";
       msg += "SD storage: " + sdLine;
 
+      sendTelegramMessageTo(sender.chatId, msg);
+      return;
+    }
+
+    case TelegramCommand::Log: {
+      long count = parsed.logCountText.length() > 0 ? parsed.logCountText.toInt() : 10;
+      if (count < 1) count = 10; // garbage/zero/negative falls back to the default, not an error
+      if (count > (long)EVENT_LOG_CAPACITY) count = (long)EVENT_LOG_CAPACITY;
+
+      std::vector<EventLogEntry> events = recentEvents(); // oldest-first
+      String msg = "Recent activity:\n";
+      if (events.empty()) {
+        msg += "Nothing logged yet.";
+      } else {
+        // Newest first, same as webserver_activity.cpp's render - reverse
+        // iterate, capped at `count`.
+        long shown = 0;
+        for (auto it = events.rbegin(); it != events.rend() && shown < count; ++it, ++shown) {
+          msg += formatElapsedSince(it->ms, millis()) + " - " + it->text + "\n";
+        }
+      }
+      Serial.printf("[Telegram] Replying to user \"%s\" with /log.\n", sender.name.c_str());
       sendTelegramMessageTo(sender.chatId, msg);
       return;
     }
