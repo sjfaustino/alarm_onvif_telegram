@@ -5,6 +5,7 @@
 #include "telegram_users.h"
 #include "network_store.h"
 #include "sd_store.h"
+#include "config.h" // FIRMWARE_VERSION
 
 // snapshotUriOverride (buildConfigExport, below) is free text, not
 // necessarily using the intended {USER}/{PASS} placeholder pattern - a
@@ -69,7 +70,7 @@ String buildConfigExport() {
   WifiCredentials net = loadWifiCredentials();
 
   String out;
-  out += "=== Camera Monitor Configuration Export ===\n";
+  out += "=== Camera Monitor v" + String(FIRMWARE_VERSION) + " Configuration Export ===\n";
   out += "Firmware build: " + String(__DATE__) + " " + String(__TIME__) + "\n";
   out += "Board uptime at export: " + formatUptime(millis()) + "\n\n";
   out += "Passwords (camera and WiFi) are deliberately NOT included below - re-enter them\n";

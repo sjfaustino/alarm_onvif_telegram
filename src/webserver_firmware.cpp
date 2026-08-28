@@ -1,4 +1,5 @@
 #include "webserver_firmware.h"
+#include "config.h" // FIRMWARE_VERSION
 #include <esp_ota_ops.h>
 #include <nvs_flash.h>
 #include <nvs.h>
@@ -8,6 +9,7 @@ String renderFirmwarePanel() {
 
   String html = "<h1>Firmware</h1>";
   html += "<table>";
+  html += "<tr><th>Version</th><td>" + String(FIRMWARE_VERSION) + "</td></tr>";
   html += "<tr><th>Build</th><td>" + String(__DATE__) + " " + String(__TIME__) + "</td></tr>";
   html += "<tr><th>Running partition</th><td>" + String(running ? running->label : "?") + "</td></tr>";
   html += "<tr><th>Sketch size</th><td>" + String(ESP.getSketchSize() / 1024) + " KB</td></tr>";

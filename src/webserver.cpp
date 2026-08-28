@@ -173,7 +173,7 @@ static String renderShell(Tab active, const String& banner, const String& conten
   String html;
   html += "<!DOCTYPE html><html><head><meta charset=\"utf-8\">";
   html += "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">";
-  html += "<title>Camera Monitor</title><style>";
+  html += "<title>Camera Monitor v" + String(FIRMWARE_VERSION) + "</title><style>";
   html += "*{box-sizing:border-box;}";
   html += "body{font-family:sans-serif;margin:0;display:flex;min-height:100vh;color:#222;}";
   html += ".sidebar{width:200px;flex-shrink:0;background:#1f2937;color:#e5e7eb;padding:20px 0;}";
@@ -211,7 +211,7 @@ static String renderShell(Tab active, const String& banner, const String& conten
   // on a full-page-reload site.
   bool systemOpen = (active == Tab::Firmware || active == Tab::Maintenance || active == Tab::Storage);
 
-  html += "<nav class=\"sidebar\"><div class=\"brand\">Camera Monitor</div>";
+  html += "<nav class=\"sidebar\"><div class=\"brand\">Camera Monitor v" + String(FIRMWARE_VERSION) + "</div>";
   html += "<a href=\"/network\" class=\"";
   html += (active == Tab::Network) ? "active" : "";
   html += "\">Network</a>";
@@ -298,7 +298,7 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
   DashboardAuth auth = loadDashboardAuth();
   g_authMiddleware.setUsername(auth.username.c_str())
       .setPassword(auth.password.c_str())
-      .setRealm("Camera Monitor")
+      .setRealm(("Camera Monitor v" + String(FIRMWARE_VERSION)).c_str())
       .setAuthMethod(BASIC_AUTH);
   g_rateLimitMiddleware.setAuth(&g_authMiddleware);
   // Rate limiter registered first - PsychicMiddlewareChain runs middleware
@@ -310,7 +310,8 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
   server.addMiddleware(&g_authMiddleware);
 
   server.on("/", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
-    String landing = "<h1>Camera Monitor</h1><p class=\"hint\">Select a section from the left.</p>";
+    String landing = "<h1>Camera Monitor v" + String(FIRMWARE_VERSION) +
+                      "</h1><p class=\"hint\">Select a section from the left.</p>";
     return response->send(200, "text/html", renderShell(Tab::None, "", landing).c_str());
   });
 

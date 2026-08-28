@@ -10,6 +10,14 @@
 // seeds NVS on first boot; after that the web UI is the only way to
 // change them.
 
+// Bump manually whenever you want to mark a release - shown alongside
+// every "Camera Monitor" label this project displays (dashboard title/
+// sidebar/login prompt, Telegram heartbeat/boot messages, the config
+// export header), so it's easy to tell at a glance which build is
+// actually running without checking the Firmware page's build
+// date/time. Not tied to git or the build system automatically.
+static const char* FIRMWARE_VERSION = "1.0";
+
 // ============================================================
 // Timing (all in ms unless noted)
 // ============================================================

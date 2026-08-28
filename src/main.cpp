@@ -241,7 +241,7 @@ static void setupTime() {
 // Periodic "still alive" ping - a missing heartbeat (or an unexpected boot
 // message between expected ones) is the signal something's wrong.
 static void sendHeartbeat() {
-  String msg = "\xF0\x9F\x92\x93 Camera monitor heartbeat\n";
+  String msg = "\xF0\x9F\x92\x93 Camera monitor v" + String(FIRMWARE_VERSION) + " heartbeat\n";
   msg += "Uptime: " + formatUptime(millis()) + "\n";
   // The lifetime minimum next to the current value is what reveals a slow
   // leak: dropping every heartbeat means something's leaking; flat means
@@ -340,7 +340,7 @@ static void startMonitoring() {
   // "did it actually restart" marker for whichever of them just happened.
   logEvent("Booted: " + describeResetReason());
 
-  String bootMsg = "\xF0\x9F\x93\xB7 Camera monitor online\n";
+  String bootMsg = "\xF0\x9F\x93\xB7 Camera monitor v" + String(FIRMWARE_VERSION) + " online\n";
   bootMsg += "Reboot reason: " + describeResetReason() + "\n";
   bootMsg += String(enabledCount) + "/" + String((int)g_cameras.size()) + " cameras enabled\n";
   bootMsg += buildCameraListMessage();
