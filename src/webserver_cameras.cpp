@@ -3,6 +3,7 @@
 #include "webserver_html.h"
 #include "camera_tasks.h"
 #include "event_log_store.h"
+#include "snapshot_history.h"
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
@@ -106,8 +107,6 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
       uint32_t lastAlert;
       unsigned long revertDueMs;
       bool revertToOn;
-      size_t historyCount;
-      unsigned long historyMs[SNAPSHOT_HISTORY_SIZE];
       {
         CameraStateLock lock(st);
         subscribed = st.subscriptionActive;
@@ -117,11 +116,6 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
         lastAlert = st.lastAlert;
         revertDueMs = st.scheduledRevertDueMs;
         revertToOn = st.scheduledRevertToOn;
-        historyCount = st.snapshotHistoryCount;
-        for (size_t age = 0; age < historyCount; age++) {
-          size_t ringIdx = (st.snapshotHistoryNext + SNAPSHOT_HISTORY_SIZE - 1 - age) % SNAPSHOT_HISTORY_SIZE;
-          historyMs[age] = st.snapshotHistory[ringIdx].ms;
-        }
       }
       liveStatus = subscribed ? "subscribed" : "not subscribed";
       if (offline) liveStatus += " - OFFLINE";
@@ -134,16 +128,21 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
                       formatUptime(revertDueMs - millis());
       }
       if (hasAlerted) lastAlertStr = formatElapsedSince(lastAlert, millis());
+
+      // cameraSnapshotCount/the "age" param dispatch to whichever backing
+      // store is active (SD or the PSRAM ring) - see snapshot_history.h.
+      size_t historyCount = cameraSnapshotCount(c, st);
       if (historyCount > 0) {
-        // Newest first (age 0). historyMs[age] as a cache-busting query
-        // param, not read server-side - its only job is making each
-        // thumbnail's URL a different resource once a new snapshot is
-        // captured, so the browser doesn't keep showing a stale cached
-        // image across page loads.
+        // Newest first (age 0). One shared render-time value cache-busts
+        // every thumbnail on this page load - simpler than a per-entry
+        // key, and just as effective: a full page reload always gets a
+        // fresh renderMs, so the browser never shows a stale image across
+        // page loads, which is all this needs to guarantee.
+        unsigned long renderMs = millis();
         previewCell = "";
         for (size_t age = 0; age < historyCount; age++) {
           String url = "/cameras/snapshot?name=" + urlEncode(c.name) + "&age=" + String((unsigned)age) +
-                        "&t=" + String(historyMs[age]);
+                        "&t=" + String(renderMs);
           previewCell += "<a href=\"" + url + "\" target=\"_blank\">"
                          "<img src=\"" + url + "\" style=\"max-width:48px;max-height:36px;margin:1px;\" "
                          "alt=\"preview\"></a>";

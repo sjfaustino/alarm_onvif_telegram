@@ -51,21 +51,37 @@ Arduino-ESP32/IDF releases.
   camera (its task starts live); a brand new camera, or disabling one that's
   currently running, still needs a reboot - the dashboard tells you which
   happened after you save. The Cameras page also shows a small strip of the most
-  recent snapshots per camera (up to 5, newest first - motion, tamper, or an
-  on-demand `/snap`) - cached in PSRAM, not re-fetched from the camera just to
-  render the dashboard. Retaining that history is a real, ongoing PSRAM cost
-  that scales with camera count and snapshot size, unlike the pre-history
-  design (where a sent snapshot was freed immediately after upload) - rather
-  than guess a "safe" history size for an unknown number of cameras, it checks
-  actual free PSRAM before keeping each one and just stops retaining new
-  snapshots (falling back to the old free-immediately behavior) if that would
-  leave less than one more full-size fetch's worth free.
+  recent snapshots per camera (motion, tamper, or an on-demand `/snap`), backed
+  by whichever of the two snapshot-history stores below is active.
+- Snapshot history is stored either in a small PSRAM ring (last 5 per camera,
+  lost on reboot - the default, no extra hardware needed) or, if you add an
+  optional SD card (System > Storage page), on the card instead - far more
+  history, and it survives a reboot. Entirely opt-in and absence-tolerant: off
+  by default, and even if enabled, a missing/undetected module or card at boot
+  just falls back to the PSRAM ring with a clear status message - camera
+  monitoring itself is never affected either way. SD storage is per-camera
+  directory, capped both by a free-space reserve (prunes that camera's own
+  oldest files first, adaptive to whatever card size is actually inserted -
+  the same "check real free resources, don't guess a fixed number" approach
+  the PSRAM ring uses) and by a per-camera file-count ceiling (so one chatty
+  camera can't crowd out a quiet camera's history on the same card). The
+  Storage page also has a "check storage" pass (confirms every stored file is
+  still readable - not a full filesystem check, this project's SD support has
+  no fsck/chkdsk equivalent) and an "erase all snapshot history" action
+  (deletes only what this project itself wrote, not a low-level card format).
+  Retaining every sent snapshot at all (in either store) is a real, ongoing
+  memory/storage cost that scales with camera count and snapshot size, unlike
+  the very first version of this feature (where a sent snapshot was freed
+  immediately after upload) - the PSRAM ring checks actual free PSRAM before
+  keeping each one and just stops retaining new snapshots if that would leave
+  less than one more full-size fetch's worth free, same adaptive idea SD
+  storage's own pruning uses.
 - A small in-memory Activity log (Activity page) - the most recent ~40 events
   (motion alerts, offline/online transitions, on/off changes including timed
   ones, live config reloads, boot) with a relative timestamp, for a quick "what
   happened recently" view without a serial cable. Not persisted - resets on
   reboot, same as the rest of this board's runtime state.
-- Firmware and Maintenance live under a "System" submenu in the sidebar.
+- Firmware, Maintenance, and Storage live under a "System" submenu in the sidebar.
   Firmware updates over the dashboard: upload a `.bin` built with
   `pio run -e esp32s3` on the Firmware page instead of reflashing over USB. Uses
   the board's dual OTA app partitions - a failed or aborted upload leaves the
@@ -124,6 +140,15 @@ Tested on an ESP32-S3 with 8MB embedded octal PSRAM — `[env:esp32s3]`. Also ne
 second core (`src/main.cpp` pins one FreeRTOS task per camera to core 1), which every
 PSRAM-equipped ESP32-S3 variant has, so this hasn't been a real constraint in
 practice; a single-core PSRAM chip is untested.
+
+**A microSD card is optional.** A generic SPI breakout module (SCK/MISO/MOSI/CS +
+power) wired to the pins in `include/config.h` (`SD_CS_PIN`/`SD_SCK_PIN`/
+`SD_MISO_PIN`/`SD_MOSI_PIN` — **verify and adjust these for your actual wiring
+before flashing**; they're common ESP32-S3 SPI2 defaults, not guaranteed for your
+specific board) and enabled on the System > Storage dashboard page turns on
+larger, reboot-persistent snapshot history (see Features above). Nothing else in
+this project uses SPI. Entirely optional - everything works exactly as it always
+has, on the PSRAM-only ring, without one.
 
 ## Setup
 
@@ -234,11 +259,15 @@ include/
   event_log_store.h  # thread-safe global wrapper around lib/event_log's ring buffer
   camera_tasks.h      # spawnCameraTask() - exposed from main.cpp so a dashboard edit can
                        # start a camera's task live, without a reboot
+  sd_store.h          # optional SD card mechanics (settings, mount, write/list/read/prune,
+                       # erase-all, readability check) - thread-safe, hardware-dependent
+  snapshot_history.h  # picks SD (sd_store.h) vs the PSRAM ring (camera.h) per camera - the
+                       # one place that decision is made
   webserver.h       # sidebar dashboard - Network/Cameras/Users/Activity/System (Firmware,
-                     # Maintenance)/Security (PsychicHttp)
+                     # Maintenance, Storage)/Security (PsychicHttp)
   webserver_network.h, webserver_cameras.h, webserver_users.h, webserver_activity.h,
-  webserver_firmware.h, webserver_maintenance.h, webserver_security.h # each panel's own
-                                                                        # rendering/form-handling
+  webserver_firmware.h, webserver_maintenance.h, webserver_storage.h, webserver_security.h
+                     # each panel's own rendering/form-handling
   secrets.h.example # template for secrets.h (copy, fill in, gitignored)
   telegram_ca.h      # Telegram's root CA for TLS pinning (committed, not secret)
   camera.h, telegram.h, onvif_soap.h
@@ -251,11 +280,15 @@ src/
   network_store.cpp  # NVS-backed WiFi credentials (load/save, one-time seed)
   auth_store.cpp      # NVS-backed dashboard login (load/save)
   event_log_store.cpp # thread-safe global event log (FreeRTOS mutex + lib/event_log's ring buffer)
+  sd_store.cpp        # SD.h/SPI.h usage lives only here - mount/write/list/read/prune/erase/check
+  snapshot_history.cpp # SD-vs-PSRAM-ring dispatch; also owns the PSRAM ring's own logic
+                        # (moved out of telegram.cpp when SD support was added)
   webserver.cpp      # routing table, dashboard shell, OTA upload state, login rate-limiting
                        # middleware - see webserver_*.cpp for panels
   webserver_network.cpp, webserver_cameras.cpp, webserver_users.cpp, webserver_activity.cpp,
-  webserver_firmware.cpp, webserver_maintenance.cpp, webserver_security.cpp # each panel's
-                            # rendering/form-handling, split out of what used to be one 946-line webserver.cpp
+  webserver_firmware.cpp, webserver_maintenance.cpp, webserver_storage.cpp, webserver_security.cpp
+                     # each panel's rendering/form-handling, split out of what used to be one
+                     # 946-line webserver.cpp
   telegram.cpp       # photo/message send paths, multi-recipient fan-out, remote commands
                        # (including timed /on//off), scheduled-revert checking
   onvif_soap.cpp     # SOAP envelope building, WS-Security digest
@@ -269,6 +302,9 @@ lib/                 # pure-logic modules with no hardware dependencies, split o
   backoff/                # the doubling-with-a-cap retry delay formula (shared by main.cpp,
                            # camera.cpp, and webserver.cpp's login rate-limiter)
   event_log/               # fixed-capacity ring buffer backing the Activity page
+  snapshot_storage/         # SD directory-name collision avoidance + prune-decision logic for
+                             # sd_store.cpp - the parts of SD support worth unit testing without
+                             # real hardware
 test/                 # native unit tests for lib/* - `pio test -e native`, no hardware needed
 ```
 

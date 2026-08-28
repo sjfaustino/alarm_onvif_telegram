@@ -17,6 +17,7 @@
 #include "format_utils.h"
 #include "event_log_store.h"
 #include "camera_tasks.h"
+#include "sd_store.h"
 
 static std::vector<CameraConfig> g_cameras;
 static std::vector<CameraState> g_cameraStates;
@@ -389,6 +390,12 @@ void setup() {
   // After the PSRAM gate, not before - that halt loop is a deliberate,
   // permanent refusal to boot, not a hang the watchdog should reboot out of.
   initWatchdog();
+
+  // Optional - does nothing at all unless the Storage page's setting is
+  // enabled (see sd_store.h). Must run before camera tasks start (below),
+  // since sdActive() needs to be settled before the first snapshot could
+  // possibly be pushed.
+  initSdStorage();
 
   g_wifiCredentials = loadWifiCredentials();
 

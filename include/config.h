@@ -39,3 +39,47 @@ static const bool          SUPPRESS_SOAP_SUCCESS_LOG = true;
 // camera.cpp's per-camera FreeRTOS tasks are pinned to core 1, requiring a
 // genuine second core - would need plain xTaskCreate if ever flashed to a
 // single-core chip.
+
+// ============================================================
+// Optional SD card storage (sd_store.h/.cpp) - a generic SPI microSD
+// breakout module, entirely optional and off by default (see
+// SdSettings::enabled, dashboard Storage page). When enabled AND a card
+// is actually detected at boot, snapshot history (webserver.cpp's
+// /cameras/snapshot, the Cameras page's preview strip) is stored here
+// instead of the small PSRAM ring, with far more history retained and
+// persisting across reboots. If disabled, or enabled but no module/card
+// responds at boot, monitoring is entirely unaffected - snapshot history
+// just falls back to the existing PSRAM ring, exactly as it already
+// works today.
+//
+// *** VERIFY AND ADJUST these for your actual wiring before flashing ***
+// These are common ESP32-S3 default SPI2 pins, not guaranteed for your
+// specific dev board - check your board's pinout/datasheet. Nothing else
+// in this project uses SPI, so any four free GPIOs work; these are just a
+// reasonable starting point.
+static const int SD_CS_PIN   = 10;
+static const int SD_SCK_PIN  = 12;
+static const int SD_MISO_PIN = 13;
+static const int SD_MOSI_PIN = 11;
+
+// Safety margin kept free on the card at all times - a write that would
+// drop free space below this triggers pruning first (see sd_store.cpp's
+// writeSnapshot). Not precisely tuned to any card size on purpose: large
+// enough to comfortably fit several more snapshots plus filesystem
+// overhead, small enough not to waste meaningful capacity on any card
+// worth using for this.
+static const uint64_t SD_FREE_SPACE_RESERVE_BYTES = 50UL * 1024UL * 1024UL; // 50MB
+
+// Per-camera fairness ceiling, independent of the free-space reserve
+// above - without this, one chatty camera could fill most of the card
+// and crowd out a quiet camera's retained history, since pruning is
+// deliberately per-camera (see sd_store.cpp) rather than a global,
+// cross-directory walk.
+static const size_t SD_MAX_FILES_PER_CAMERA = 300;
+
+// Caps how many files a single write's prune pass deletes, even if that
+// isn't enough to clear the reserve/ceiling above - bounds how long one
+// write can hold the SD mutex (blocking every other camera's own writes)
+// during pruning. If one call's cap isn't enough, the next write's own
+// prune pass continues the job.
+static const size_t SD_PRUNE_MAX_FILES_PER_WRITE = 5;

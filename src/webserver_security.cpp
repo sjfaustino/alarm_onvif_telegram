@@ -4,6 +4,7 @@
 #include "camera_store.h"
 #include "telegram_users.h"
 #include "network_store.h"
+#include "sd_store.h"
 
 String renderSecurityPanel() {
   DashboardAuth auth = loadDashboardAuth();
@@ -113,6 +114,9 @@ String buildConfigExport() {
   out += "NTP server: " + net.ntpServer + "\n";
   out += "NTP resync interval: " + String(net.ntpSyncIntervalMs / 60000UL) + "min\n";
   out += "POSIX TZ (blank = UTC): " + (net.posixTz.length() > 0 ? net.posixTz : String("(blank/UTC)")) + "\n";
+
+  out += "\n--- Storage ---\n";
+  out += "SD card storage: " + String(loadSdSettings().enabled ? "enabled" : "disabled") + "\n";
 
   return out;
 }

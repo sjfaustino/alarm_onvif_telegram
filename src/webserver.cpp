@@ -6,15 +6,16 @@
 #include "webserver_maintenance.h"
 #include "webserver_security.h"
 #include "webserver_activity.h"
+#include "webserver_storage.h"
 #include "event_log_store.h"
+#include "snapshot_history.h"
+#include "sd_store.h"
 #include "telegram_users.h"
 #include "auth_store.h"
 #include "backoff.h"
 #include "format_utils.h"
 #include <PsychicHttp.h>
 #include <Update.h>
-#include <esp_heap_caps.h>
-#include <cstring>
 
 // Routing table, the dashboard shell (sidebar + banner), and OTA
 // upload-in-progress state - the parts that are either genuinely about
@@ -164,7 +165,7 @@ static RateLimitMiddleware g_rateLimitMiddleware;
 // firmware binary rather than served from a filesystem, on purpose.
 // ============================================================
 
-enum class Tab { None, Network, Cameras, Users, Activity, Firmware, Maintenance, Security };
+enum class Tab { None, Network, Cameras, Users, Activity, Firmware, Maintenance, Storage, Security };
 
 static String renderShell(Tab active, const String& banner, const String& contentHtml) {
   String html;
@@ -206,7 +207,7 @@ static String renderShell(Tab active, const String& banner, const String& conten
   // separate <script> block - consistent with this project's "no client-
   // side framework" stance elsewhere, just enough JS to open/close a menu
   // on a full-page-reload site.
-  bool systemOpen = (active == Tab::Firmware || active == Tab::Maintenance);
+  bool systemOpen = (active == Tab::Firmware || active == Tab::Maintenance || active == Tab::Storage);
 
   html += "<nav class=\"sidebar\"><div class=\"brand\">Camera Monitor</div>";
   html += "<a href=\"/network\" class=\"";
@@ -232,6 +233,9 @@ static String renderShell(Tab active, const String& banner, const String& conten
   html += "<a href=\"/maintenance\" class=\"";
   html += (active == Tab::Maintenance) ? "active" : "";
   html += "\">Maintenance</a>";
+  html += "<a href=\"/storage\" class=\"";
+  html += (active == Tab::Storage) ? "active" : "";
+  html += "\">Storage</a>";
   html += "</div>";
   html += "<a href=\"/security\" class=\"";
   html += (active == Tab::Security) ? "active" : "";
@@ -242,8 +246,9 @@ static String renderShell(Tab active, const String& banner, const String& conten
   DashboardAuth currentAuth = loadDashboardAuth();
   if (currentAuth.username.length() == 0 || currentAuth.password.length() == 0) {
     html += "<div class=\"banner-warn\">No dashboard password is set - anyone on your LAN can view "
-            "and change everything here, including WiFi/camera credentials, the Firmware page, and "
-            "the Maintenance page's reboot button. <a href=\"/security\">Set one now</a>.</div>";
+            "and change everything here, including WiFi/camera credentials, the Firmware page, the "
+            "Maintenance page's reboot button, and the Storage page's erase-all-history button. "
+            "<a href=\"/security\">Set one now</a>.</div>";
   }
   if (banner.length() > 0) html += "<div class=\"banner\">" + banner + "</div>";
   html += contentHtml;
@@ -381,13 +386,12 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
             .c_str());
   });
 
-  // Serves one entry from the cached snapshot history
-  // (CameraState::snapshotHistory - see its own comment) for the Cameras
-  // panel's preview thumbnails. age=0 (default) is the most recent;
-  // higher ages go further back, up to SNAPSHOT_HISTORY_SIZE-1. Goes
-  // through the same global middleware chain as every other route
-  // (rate-limit, then auth) - deliberately not exempted, since it's
-  // exposing camera footage.
+  // Serves one entry from the camera's snapshot history - SD-backed if
+  // sdActive() (sd_store.h), else the PSRAM ring fallback; see
+  // snapshot_history.h, the single place that decides which. age=0
+  // (default) is the most recent. Goes through the same global middleware
+  // chain as every other route (rate-limit, then auth) - deliberately not
+  // exempted, since it's exposing camera footage.
   server.on("/cameras/snapshot", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) -> esp_err_t {
     String name = request->getParam("name", "");
     long age = request->getParam("age", "0").toInt();
@@ -397,34 +401,17 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
         if ((*g_liveCameras)[i].name.equalsIgnoreCase(name)) { idx = (int)i; break; }
       }
     }
-    if (idx < 0 || !g_liveStates || idx >= (int)g_liveStates->size()) {
+    if (idx < 0 || !g_liveStates || idx >= (int)g_liveStates->size() || age < 0) {
       return response->send(404, "text/plain", "No such camera.");
     }
 
-    // Copied out under a short lock rather than sent directly from the
-    // history entry's buffer - response->send() below does a blocking
-    // network write, and holding stateMutex for that long would stall the
-    // owning camera task (or any other reader) for however long this
-    // client takes to receive the image. See recentEvents()
-    // (event_log_store.cpp) for the same reasoning applied to the
-    // Activity log.
+    // readCameraSnapshot copies the bytes out itself (under whichever
+    // lock/mutex its backing store uses) before returning - this route
+    // never holds anything across the blocking network send() below.
     uint8_t* copy = nullptr;
     size_t len = 0;
-    {
-      CameraStateLock lock((*g_liveStates)[idx]);
-      CameraState& st = (*g_liveStates)[idx];
-      if (age >= 0 && (size_t)age < st.snapshotHistoryCount) {
-        size_t ringIdx = (st.snapshotHistoryNext + SNAPSHOT_HISTORY_SIZE - 1 - (size_t)age) % SNAPSHOT_HISTORY_SIZE;
-        len = st.snapshotHistory[ringIdx].len;
-        if (len > 0) {
-          copy = (uint8_t*)heap_caps_malloc(len, MALLOC_CAP_SPIRAM);
-          if (!copy) copy = (uint8_t*)malloc(len);
-          if (copy) memcpy(copy, st.snapshotHistory[ringIdx].jpg, len);
-          else len = 0;
-        }
-      }
-    }
-    if (!copy || len == 0) {
+    bool ok = readCameraSnapshot((*g_liveCameras)[idx], (*g_liveStates)[idx], (size_t)age, &copy, &len);
+    if (!ok || !copy || len == 0) {
       return response->send(404, "text/plain", "No snapshot captured yet for this camera.");
     }
     esp_err_t result = response->send(200, "image/jpeg", copy, len);
@@ -537,6 +524,41 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
             .c_str());
     xTaskCreate(delayedRebootTask, "maintReboot", 2048, nullptr, 1, nullptr);
     return result;
+  });
+
+  server.on("/storage", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
+    return response->send(200, "text/html", renderShell(Tab::Storage, "", renderStoragePanel()).c_str());
+  });
+
+  server.on("/storage/save", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
+    SdSettings settings;
+    settings.enabled = request->hasParam("enabled");
+    String banner = saveSdSettings(settings)
+        ? "Saved - reboot the board to apply."
+        : "Failed to save - NVS write error (see Serial log). Setting was NOT changed.";
+    return response->send(200, "text/html", renderShell(Tab::Storage, banner, renderStoragePanel()).c_str());
+  });
+
+  server.on("/storage/check", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
+    SnapshotStorageCheckResult result = checkSnapshotStorage();
+    String banner;
+    if (!result.ranAtAll) {
+      banner = "SD storage isn't active - nothing to check.";
+    } else if (result.ok) {
+      banner = "Checked " + String((unsigned)result.filesChecked) + " file(s) across " +
+               String((unsigned)result.directoriesChecked) + " camera(s) - all readable.";
+    } else {
+      banner = "Checked " + String((unsigned)result.filesChecked) + " file(s) - " +
+               String((unsigned)result.unreadableFiles) + " unreadable. See Serial log for which.";
+    }
+    return response->send(200, "text/html", renderShell(Tab::Storage, banner, renderStoragePanel()).c_str());
+  });
+
+  server.on("/storage/erase", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
+    Serial.println("[Storage] Erase all snapshot history requested via dashboard.");
+    bool ok = eraseAllSnapshots();
+    String banner = ok ? "All snapshot history erased." : "Erase completed with errors - see Serial log.";
+    return response->send(200, "text/html", renderShell(Tab::Storage, banner, renderStoragePanel()).c_str());
   });
 
   server.on("/security", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
