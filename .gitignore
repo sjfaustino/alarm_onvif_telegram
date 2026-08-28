@@ -1,10 +1,11 @@
 # Real credentials - see include/secrets.h.example for the template
 include/secrets.h
 
-# Regenerated before every ESP32-S3 build (scripts/generate_build_version.py)
-# - a placeholder copy is checked in so the #include always resolves even
-# without a build having run yet; ignored so a real build doesn't show up
-# as a source change in git status every time.
+# Created/rewritten fresh before every ESP32-S3 build
+# (scripts/generate_build_version.py, a pre: extra_script - runs before any
+# compilation, so this always exists by the time it's actually #included,
+# even on a first-ever build with no prior .pio/ cache) - ignored so a real
+# build doesn't show up as a source change in git status every time.
 include/generated_build_version.h
 
 .pio/

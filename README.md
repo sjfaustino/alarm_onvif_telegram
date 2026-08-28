@@ -36,13 +36,18 @@ Arduino-ESP32/IDF releases.
   every motion alert for that camera. Falls back to sending alerts normally if
   the board's clock hasn't synced yet, rather than risk misjudging the window
   against a near-epoch time.
-- Per-camera "no motion" watchdog (hours, 0 = off) alerts if a camera hasn't seen
-  *any* real motion in over that long - catches a dead PIR or a camera knocked to
-  face the wrong way, which otherwise looks identical to a quiet day. Re-arms
-  automatically once motion resumes, so it only fires once per stretch of silence.
-- Per-camera timelapse capture (minutes, 0 = off) stores a fresh snapshot on its
-  own interval regardless of motion - kept in whichever snapshot-history store is
-  active (see below), never sent to Telegram. Useful for confirming a camera's
+- Per-camera "no motion" watchdog (hours, 0 = off, max 168h/1 week) alerts if a
+  camera hasn't seen *any* real motion in over that long - catches a dead PIR or
+  a camera knocked to face the wrong way, which otherwise looks identical to a
+  quiet day. Re-arms automatically once motion resumes, so it only fires once
+  per stretch of silence. The dashboard warns if this is set shorter than the
+  camera's own quiet-hours window (above) - motion still resets this watchdog's
+  clock during quiet hours (only the Telegram *send* is suppressed), so a short
+  watchdog window would otherwise fire a false alert every quiet period.
+- Per-camera timelapse capture (minutes, 0 = off, max 1440min/24h) stores a
+  fresh snapshot on its own interval regardless of motion - kept in whichever
+  snapshot-history store is active (see below), never sent to Telegram. Useful
+  for confirming a camera's
   still alive between motion events, or building a day timelapse from the SD
   history.
 - TLS to Telegram is certificate-pinned (not `setInsecure()`).
@@ -130,6 +135,14 @@ Arduino-ESP32/IDF releases.
   Cameras page's 5-entry Preview strip - most useful with SD storage active
   (far more history than the PSRAM ring holds), showing up to 30 thumbnails per
   camera per page load.
+- The running build's exact version - "DDMMYYYY.HHMM", the real wall-clock time
+  it was built, computed fresh by `scripts/generate_build_version.py` on every
+  `pio run`/upload, not something anyone has to remember to bump by hand -
+  is shown alongside every "Camera Monitor" label: the dashboard title/
+  sidebar/login prompt, the Telegram heartbeat and boot-online messages, the
+  Firmware page (its own "Version" row, next to the existing build date/time),
+  and the config export header. Useful for confirming which exact build is
+  actually running, especially after an OTA update.
 - Firmware, Maintenance, and Storage live under a "System" submenu in the sidebar.
   Firmware updates over the dashboard: upload a `.bin` built with
   `pio run -e esp32s3` on the Firmware page instead of reflashing over USB. Uses
@@ -149,18 +162,30 @@ Arduino-ESP32/IDF releases.
   when you just want the board to restart without a firmware change.
 - Any number of Telegram users, each independently configured for which cameras
   they hear from (specific list or "all, including future ones"), whether they get
-  the heartbeat/boot messages, and two independent command permissions: `/on`,
-  `/off`, `/status` (toggle/view per-camera alerts) and `/snap` (fetch and send a
-  fresh photo on demand, even from a camera currently muted with `/off`) - a user
-  can have either, both, or neither, since pulling a live photo is a different
-  kind of trust than silencing alerts. Commands are matched by camera name or
+  the heartbeat/boot messages, and three independent command permissions:
+  `canCommand` (`/on`, `/off`, `/status` - toggle/view per-camera alerts),
+  `canSnap` (`/snap` - fetch and send a fresh photo on demand, even from a
+  camera currently muted with `/off`), and `canReset` (`/reset` - reboot the
+  board immediately) - a user can have any combination, since pulling a live
+  photo, silencing alerts, and rebooting the board are three different kinds
+  of trust. `canReset` is **not** granted to the auto-seeded Admin user by
+  default, even though `canCommand`/`canSnap` are - it has to be turned on
+  deliberately from the dashboard, since it's disruptive rather than just
+  informational/control. Each user's Chat ID must be unique too, not just
+  their display name - two users sharing one Chat ID would double-send every
+  alert to that physical account and make command-permission resolution
+  non-deterministic, so the dashboard rejects a save that would create one.
+  Commands are matched by camera name or
   prefix - or the literal word "all" in place of a name, which applies to every
   enabled camera at once (`/off all 30` mutes everything for 30 minutes; `/snap
   all` fetches a fresh photo from every camera in one go) - and reply to whoever
-  sent them. `/on`/`/off` accept an optional trailing timer - a number of minutes
-  (`/off D01 30`) or a 24h clock time (`/off D01 23:00`, tomorrow if that time has
-  already passed today) - after which the camera automatically reverts to the
-  opposite state; omitted entirely is permanent, as before. `/status` reports each
+  sent them. `/on`/`/off` accept an optional trailing timer - a number of minutes,
+  max 20160 (14 days - see `MAX_DURATION_MINUTES`'s own comment for why: past
+  that, the millis()-wraparound due-check this timer relies on stops being
+  reliable) (`/off D01 30`), or a 24h clock time (`/off D01 23:00`, tomorrow if
+  that time has already passed today) - after which the camera automatically
+  reverts to the opposite state; omitted entirely is permanent, as before.
+  `/status` reports each
   camera's ON/OFF state plus OFFLINE and any pending timer. `/health` reports
   board uptime, free heap (current and worst-case-ever), free PSRAM, NVS usage,
   WiFi signal strength, and SD storage status in one message - a quick "is
@@ -330,6 +355,12 @@ include/
                      # each panel's own rendering/form-handling
   secrets.h.example # template for secrets.h (copy, fill in, gitignored)
   telegram_ca.h      # Telegram's root CA for TLS pinning (committed, not secret)
+  build_version.h    # extern FIRMWARE_VERSION - its own translation unit (build_version.cpp)
+                      # specifically so the build-timestamp value that changes on every single
+                      # build doesn't force a full rebuild of everything that includes config.h
+  generated_build_version.h # created/rewritten fresh before every build (scripts/generate_build_version.py,
+                             # a pre: extra_script - runs before any compilation) - gitignored, not
+                             # tracked at all; nothing to keep in sync since a build always creates it first
   camera.h, telegram.h, onvif_soap.h
 src/
   main.cpp          # boot sequence, PSRAM check, WiFi/NTP, per-camera task spawn, heartbeat,
@@ -353,6 +384,7 @@ src/
   telegram.cpp       # photo/message send paths, multi-recipient fan-out, remote commands
                        # (including timed /on//off), scheduled-revert checking
   onvif_soap.cpp     # SOAP envelope building, WS-Security digest
+  build_version.cpp  # defines FIRMWARE_VERSION from generated_build_version.h - see build_version.h
 lib/                 # pure-logic modules with no hardware dependencies, split out of the
                       # files above specifically so they're unit-testable - see test/README.md
   xml_helpers/            # ONVIF response substring parsing + XML escaping
@@ -360,6 +392,7 @@ lib/                 # pure-logic modules with no hardware dependencies, split o
   telegram_user_serialize/ # TelegramUser <-> NVS blob (de)serialization, schema-versioned
   telegram_parse/         # Telegram JSON escaping, /on,/off,/snap camera-name matching, and
                            # /on,/off timer-token parsing (minutes or HH:MM)
+  telegram_multipart/     # multipart/form-data body construction for Telegram's sendPhoto
   backoff/                # the doubling-with-a-cap retry delay formula (shared by main.cpp,
                            # camera.cpp, and webserver.cpp's login rate-limiter)
   quiet_hours/              # recurring daily do-not-disturb window predicate (start/end minute
@@ -368,6 +401,13 @@ lib/                 # pure-logic modules with no hardware dependencies, split o
   snapshot_storage/         # SD directory-name collision avoidance + prune-decision logic for
                              # sd_store.cpp - the parts of SD support worth unit testing without
                              # real hardware
+  nvs_chunk/                # splits/reassembles a long NVS string value across several smaller
+                             # keys, byte-granular (not record-aware) - see camera_store.cpp's
+                             # comment for the field-truncation bug this exists to prevent
+  format_utils/             # formatUptime/formatElapsedSince, htmlEscape, urlEncode
+  camera_parse/             # ONVIF GetProfiles/NotificationMessage parsing - motion/tamper/
+                             # signal-loss classification
+  webserver_html/           # shared Edit/Delete row-actions HTML fragment
 test/                 # native unit tests for lib/* - `pio test -e native`, no hardware needed
 ```
 
@@ -387,10 +427,17 @@ alongside the firmware build.
 ## Notes on reliability
 
 - A camera's subscription retry backs off on consecutive failures - starting at
-  `RETRY_INTERVAL_MS` (`config.h`) and doubling up to a 5-minute cap
+  `RETRY_INTERVAL_MS` (`config.h`) and doubling up to a cap
   (`CameraState::retryDelayMs`, `camera.cpp`), resetting the moment a retry
   succeeds - so a camera that's down for a long time doesn't get hammered at a
-  steady cadence for the whole outage.
+  steady cadence for the whole outage. That cap is never a flat 5 minutes - it's
+  half this camera's own `offlineThresholdMs`, clamped to `[RETRY_INTERVAL_MS,
+  300000ms]` (`detectorSafeBackoffCapMs`, `lib/backoff`) - so with the default
+  5-minute offline threshold the real cap is 2.5 minutes. Deliberately not a
+  flat cap: a retry backoff that drifted slower than its own offline-alert
+  threshold once caused a real false OFFLINE alert in the field (a camera still
+  answering, just on a slower retry cadence than the alert threshold expected) -
+  see that function's own comment for the full story.
 - The Telegram heartbeat reports liveness but can't detect a fully frozen board on
   its own, since a hung `loop()` can't send anything - that's what the ESP32 task
   watchdog (`initWatchdog()` in `main.cpp`) covers: a 90s timeout on `loop()`

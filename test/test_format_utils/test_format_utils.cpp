@@ -32,6 +32,14 @@ void test_formatElapsedSince_over_a_minute_uses_formatUptime(void) {
   TEST_ASSERT_EQUAL_STRING("2h 0m ago", formatElapsedSince(eventMs, nowMs).c_str());
 }
 
+// The exact 60000ms threshold itself, not just comfortably below/above it
+// (the existing tests use 59000 and 2h) - a `<` -> `<=` mutation would
+// silently make a genuinely one-minute-old event still read "just now"
+// instead of "0h 1m ago", and neither of those other tests would catch it.
+void test_formatElapsedSince_exactly_one_minute_is_not_just_now(void) {
+  TEST_ASSERT_EQUAL_STRING("0h 1m ago", formatElapsedSince(100000UL, 100000UL + 60000UL).c_str());
+}
+
 // ---- htmlEscape ----
 
 void test_htmlEscape_escapes_amp_lt_gt_quot(void) {
@@ -91,6 +99,7 @@ int main(int argc, char** argv) {
   RUN_TEST(test_formatUptime_zero);
   RUN_TEST(test_formatElapsedSince_under_a_minute_is_just_now);
   RUN_TEST(test_formatElapsedSince_over_a_minute_uses_formatUptime);
+  RUN_TEST(test_formatElapsedSince_exactly_one_minute_is_not_just_now);
   RUN_TEST(test_htmlEscape_escapes_amp_lt_gt_quot);
   RUN_TEST(test_htmlEscape_escapes_single_quote);
   RUN_TEST(test_htmlEscape_leaves_plain_text_untouched);

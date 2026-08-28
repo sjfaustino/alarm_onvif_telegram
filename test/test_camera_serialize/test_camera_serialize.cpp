@@ -145,6 +145,22 @@ void test_v0_13_field_record_defaults_only_snapshotBurstCount(void) {
   TEST_ASSERT_EQUAL_UINT32(fresh.snapshotBurstCount, restored.snapshotBurstCount);
 }
 
+// The boundary test_v0_11/_13_field tests above skip: exactly 12 fields
+// (alertCooldownMs present, offlineThresholdMs/snapshotBurstCount not) - a
+// `>= 12` -> `> 12` mutation in deserializeCameraV0 would pass both of
+// those existing tests unchanged but silently lose a real 12-field legacy
+// record's alertCooldownMs.
+void test_v0_12_field_record_keeps_cooldown_defaults_the_rest(void) {
+  CameraConfig fresh;
+  String legacy = joinFields({"D08", "http://192.168.1.57/onvif/device_service", "1", "1", "0", "0",
+                               "", "", "user", "pass", "notes", "60000"});
+  CameraConfig restored = deserializeCamera(legacy, 0);
+
+  TEST_ASSERT_EQUAL_UINT32(60000, restored.alertCooldownMs);
+  TEST_ASSERT_EQUAL_UINT32(fresh.offlineThresholdMs, restored.offlineThresholdMs);
+  TEST_ASSERT_EQUAL_UINT32(fresh.snapshotBurstCount, restored.snapshotBurstCount);
+}
+
 // ---- Version 1 (superseded, but still readable - not the current version) ----
 
 // A record explicitly tagged version 1 keeps parsing under V1's own
@@ -165,6 +181,17 @@ void test_v1_exact_field_count_is_accepted(void) {
   CameraConfig restored = deserializeCamera(exact, 1);
   TEST_ASSERT_EQUAL_STRING("D05", restored.name.c_str());
   TEST_ASSERT_EQUAL_UINT32(2, restored.snapshotBurstCount);
+}
+
+// The wrong-count test above only ever tries BELOW the exact count (13) -
+// a `!= 14` -> `< 14` mutation would pass it unchanged but silently accept
+// and misparse a 15-field record (e.g. a corrupted or downgraded-from-a-
+// newer-format record) as if it were valid V1.
+void test_v1_field_count_above_exact_is_also_rejected(void) {
+  String tooMany = joinFields({"D05", "http://192.168.1.54/onvif/device_service", "1", "1", "0", "0",
+                                "", "", "user", "pass", "notes", "60000", "300000", "2", "extra"}); // 15 fields
+  CameraConfig restored = deserializeCamera(tooMany, 1);
+  TEST_ASSERT_EQUAL_STRING("", restored.name.c_str());
 }
 
 // ---- Version CAMERA_SCHEMA_VERSION (current, strict) ----
@@ -192,6 +219,17 @@ void test_v2_exact_field_count_is_accepted(void) {
   TEST_ASSERT_EQUAL_UINT32(360, restored.quietEndMinute);
   TEST_ASSERT_EQUAL_UINT32(24, restored.motionWatchdogHours);
   TEST_ASSERT_EQUAL_UINT32(15, restored.timelapseIntervalMin);
+}
+
+// Same "above the exact count, not just below" gap as V1's own test - a
+// `!= 19` -> `< 19` mutation would pass the wrong-count test above
+// unchanged (14 fields) but silently accept a 20-field record.
+void test_v2_field_count_above_exact_is_also_rejected(void) {
+  String tooMany = joinFields({"D07", "http://192.168.1.56/onvif/device_service", "1", "1", "0", "0",
+                                "", "", "user", "pass", "notes", "60000", "300000", "2",
+                                "1", "1320", "360", "24", "15", "extra"}); // 20 fields
+  CameraConfig restored = deserializeCamera(tooMany, CAMERA_SCHEMA_VERSION);
+  TEST_ASSERT_EQUAL_STRING("", restored.name.c_str());
 }
 
 // A version newer than this build knows about (firmware downgraded after
@@ -264,10 +302,13 @@ int main(int argc, char** argv) {
   RUN_TEST(test_empty_record_returns_empty_name);
   RUN_TEST(test_v0_11_field_record_gets_current_defaults);
   RUN_TEST(test_v0_13_field_record_defaults_only_snapshotBurstCount);
+  RUN_TEST(test_v0_12_field_record_keeps_cooldown_defaults_the_rest);
   RUN_TEST(test_v1_wrong_field_count_is_rejected_not_reinterpreted);
   RUN_TEST(test_v1_exact_field_count_is_accepted);
+  RUN_TEST(test_v1_field_count_above_exact_is_also_rejected);
   RUN_TEST(test_v2_wrong_field_count_is_rejected_not_reinterpreted);
   RUN_TEST(test_v2_exact_field_count_is_accepted);
+  RUN_TEST(test_v2_field_count_above_exact_is_also_rejected);
   RUN_TEST(test_unknown_future_version_falls_back_to_newest_known_layout);
   RUN_TEST(test_field_separator_character_in_input_is_stripped_not_corrupting);
   RUN_TEST(test_sortCamerasByName_orders_alphabetically);

@@ -69,6 +69,22 @@ void test_filesToPrune_reclaims_oldest_first_until_enough(void) {
   TEST_ASSERT_EQUAL_STRING("b.jpg", result[1].c_str());
 }
 
+// The existing "until enough" test above only ever lands PAST the target
+// (100, then 200 past a 150 target) - never exactly ON it. A `<` -> `<=`
+// mutation of the loop's `reclaimed < bytesNeeded` condition would pass
+// that test unchanged but over-prune here: two 75-byte files exactly hit
+// a 150-byte target after the second one, so a correct implementation
+// stops there (2 files) - a `<=` bug would keep going into a third file
+// it didn't need to delete.
+void test_filesToPrune_stops_exactly_at_target_not_one_file_past(void) {
+  std::vector<SnapshotFileInfo> files = {
+      makeFile("a.jpg", 75), makeFile("b.jpg", 75), makeFile("c.jpg", 75)};
+  auto result = filesToPrune(files, 150, 10);
+  TEST_ASSERT_EQUAL_INT(2, (int)result.size());
+  TEST_ASSERT_EQUAL_STRING("a.jpg", result[0].c_str());
+  TEST_ASSERT_EQUAL_STRING("b.jpg", result[1].c_str());
+}
+
 void test_filesToPrune_zero_bytes_needed_deletes_nothing(void) {
   std::vector<SnapshotFileInfo> files = {makeFile("a.jpg", 100)};
   auto result = filesToPrune(files, 0, 10);
@@ -108,6 +124,7 @@ int main(int argc, char** argv) {
   RUN_TEST(test_sanitizeCameraDirName_case_variants_produce_different_hash_digits);
   RUN_TEST(test_sanitizeCameraDirName_handles_empty_name_without_crashing);
   RUN_TEST(test_filesToPrune_reclaims_oldest_first_until_enough);
+  RUN_TEST(test_filesToPrune_stops_exactly_at_target_not_one_file_past);
   RUN_TEST(test_filesToPrune_zero_bytes_needed_deletes_nothing);
   RUN_TEST(test_filesToPrune_empty_file_list_returns_empty);
   RUN_TEST(test_filesToPrune_never_exceeds_maxFiles_even_if_not_enough_reclaimed);
