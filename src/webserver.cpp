@@ -3,6 +3,7 @@
 #include "webserver_cameras.h"
 #include "webserver_users.h"
 #include "webserver_firmware.h"
+#include "webserver_maintenance.h"
 #include "webserver_security.h"
 #include "webserver_activity.h"
 #include "event_log_store.h"
@@ -163,7 +164,7 @@ static RateLimitMiddleware g_rateLimitMiddleware;
 // firmware binary rather than served from a filesystem, on purpose.
 // ============================================================
 
-enum class Tab { None, Network, Cameras, Users, Activity, Firmware, Security };
+enum class Tab { None, Network, Cameras, Users, Activity, Firmware, Maintenance, Security };
 
 static String renderShell(Tab active, const String& banner, const String& contentHtml) {
   String html;
@@ -193,7 +194,19 @@ static String renderShell(Tab active, const String& banner, const String& conten
   html += ".banner{background:#fffae0;border:1px solid #e0d080;padding:8px 12px;margin-bottom:16px;}";
   html += ".banner-warn{background:#fde2e1;border:1px solid #e08080;padding:8px 12px;margin-bottom:16px;}";
   html += ".hint{color:#666;font-size:13px;}";
+  html += ".sidebar-parent{cursor:pointer;}";
+  html += ".sidebar-submenu a{padding-left:36px;font-size:13px;}";
   html += "</style></head><body>";
+
+  // System submenu (Firmware/Maintenance) starts expanded whenever either
+  // of its own pages is the active one, so navigating straight to
+  // /firmware or /maintenance (a bookmark, a link from elsewhere) doesn't
+  // land on a page whose own sidebar entry is hidden inside a collapsed
+  // menu. The onclick toggle below is a plain inline handler, not a
+  // separate <script> block - consistent with this project's "no client-
+  // side framework" stance elsewhere, just enough JS to open/close a menu
+  // on a full-page-reload site.
+  bool systemOpen = (active == Tab::Firmware || active == Tab::Maintenance);
 
   html += "<nav class=\"sidebar\"><div class=\"brand\">Camera Monitor</div>";
   html += "<a href=\"/network\" class=\"";
@@ -208,9 +221,18 @@ static String renderShell(Tab active, const String& banner, const String& conten
   html += "<a href=\"/activity\" class=\"";
   html += (active == Tab::Activity) ? "active" : "";
   html += "\">Activity</a>";
+  html += "<a href=\"#\" class=\"sidebar-parent\" onclick=\"var m=document.getElementById('system-submenu');"
+          "m.style.display=(m.style.display==='block')?'none':'block';return false;\">System</a>";
+  html += "<div id=\"system-submenu\" class=\"sidebar-submenu\" style=\"display:";
+  html += systemOpen ? "block" : "none";
+  html += ";\">";
   html += "<a href=\"/firmware\" class=\"";
   html += (active == Tab::Firmware) ? "active" : "";
   html += "\">Firmware</a>";
+  html += "<a href=\"/maintenance\" class=\"";
+  html += (active == Tab::Maintenance) ? "active" : "";
+  html += "\">Maintenance</a>";
+  html += "</div>";
   html += "<a href=\"/security\" class=\"";
   html += (active == Tab::Security) ? "active" : "";
   html += "\">Security</a>";
@@ -220,13 +242,23 @@ static String renderShell(Tab active, const String& banner, const String& conten
   DashboardAuth currentAuth = loadDashboardAuth();
   if (currentAuth.username.length() == 0 || currentAuth.password.length() == 0) {
     html += "<div class=\"banner-warn\">No dashboard password is set - anyone on your LAN can view "
-            "and change everything here, including WiFi/camera credentials and the Firmware page. "
-            "<a href=\"/security\">Set one now</a>.</div>";
+            "and change everything here, including WiFi/camera credentials, the Firmware page, and "
+            "the Maintenance page's reboot button. <a href=\"/security\">Set one now</a>.</div>";
   }
   if (banner.length() > 0) html += "<div class=\"banner\">" + banner + "</div>";
   html += contentHtml;
   html += "</main></body></html>";
   return html;
+}
+
+// esp_restart() inside the still-sending request handler would tear down
+// the connection before the client sees the response - reboot from a
+// short-lived task instead, after send() returns. Shared by the Firmware
+// page's OTA success path and the Maintenance page's manual reboot button
+// below - nothing about the delay-then-restart itself is OTA-specific.
+static void delayedRebootTask(void*) {
+  vTaskDelay(pdMS_TO_TICKS(1000));
+  ESP.restart();
 }
 
 // ============================================================
@@ -241,14 +273,6 @@ static String renderShell(Tab active, const String& banner, const String& conten
 
 static bool   g_otaError = false;
 static String g_otaErrorMsg;
-
-// esp_restart() inside the still-sending request handler would tear down
-// the connection before the client sees the response - reboot from a
-// short-lived task instead, after send() returns.
-static void otaRebootTask(void*) {
-  vTaskDelay(pdMS_TO_TICKS(1000));
-  ESP.restart();
-}
 
 void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraState>* liveStates) {
   g_liveCameras = liveCameras;
@@ -495,10 +519,25 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
         renderShell(Tab::Firmware, "Firmware accepted - rebooting now, this page will stop responding.",
                     "<p class=\"hint\">Reconnect in about 15 seconds.</p>")
             .c_str());
-    xTaskCreate(otaRebootTask, "otaReboot", 2048, nullptr, 1, nullptr);
+    xTaskCreate(delayedRebootTask, "otaReboot", 2048, nullptr, 1, nullptr);
     return result;
   });
   server.on("/firmware/update", HTTP_POST, otaHandler);
+
+  server.on("/maintenance", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
+    return response->send(200, "text/html", renderShell(Tab::Maintenance, "", renderMaintenancePanel()).c_str());
+  });
+
+  server.on("/maintenance/reboot", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) -> esp_err_t {
+    Serial.println("[Maintenance] Reboot requested via dashboard.");
+    esp_err_t result = response->send(
+        200, "text/html",
+        renderShell(Tab::Maintenance, "Rebooting now - reconnect in about 15-20 seconds.",
+                    renderMaintenancePanel())
+            .c_str());
+    xTaskCreate(delayedRebootTask, "maintReboot", 2048, nullptr, 1, nullptr);
+    return result;
+  });
 
   server.on("/security", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
     return response->send(200, "text/html", renderShell(Tab::Security, "", renderSecurityPanel()).c_str());

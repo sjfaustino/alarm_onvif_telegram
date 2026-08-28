@@ -328,7 +328,29 @@ static uint8_t* fetchOneSnapshot(const CameraConfig& cfg, CameraState& st, size_
 // copy: the buffer being pushed was already fetched for a real send
 // (motion/tamper alert or an on-demand /snap), so this just redirects
 // where it ends up instead of freeing it immediately afterward.
-static void pushSnapshotHistory(CameraState& st, uint8_t* jpg, size_t jpgLen) {
+//
+// Retaining every sent snapshot is a genuine steady-state PSRAM cost the
+// pre-history design never had (that buffer used to be freed right after
+// sending) - SNAPSHOT_HISTORY_SIZE entries per camera, times however many
+// cameras are configured, times whatever size their snapshots actually
+// are. Worst case (SNAPSHOT_MAX_BYTES_PSRAM-sized snapshots) is 10MB for
+// a *single* camera, already past most boards' total PSRAM - rather than
+// guess a "safe" history size for an unknown camera count/resolution,
+// this checks real free PSRAM before retaining. If keeping this snapshot
+// would leave less than one more max-size fetch's worth free, it's freed
+// immediately instead (same as the pre-history behavior) - history just
+// stops growing under pressure rather than risking a concurrent fetch on
+// another camera's task (or TLS, or anything else needing PSRAM) failing
+// because this one held onto memory it didn't need to.
+static void pushSnapshotHistory(const CameraConfig& cfg, CameraState& st, uint8_t* jpg, size_t jpgLen) {
+  size_t freePsram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+  if (freePsram < SNAPSHOT_MAX_BYTES_PSRAM + jpgLen) {
+    Serial.printf("[%s] Skipping snapshot history retention - PSRAM getting low (%u bytes free).\n",
+                  cfg.name.c_str(), (unsigned)freePsram);
+    free(jpg);
+    return;
+  }
+
   uint8_t* old = nullptr;
   {
     CameraStateLock lock(st);
@@ -402,7 +424,7 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st) {
         Serial.printf("[%s] Telegram send to chat %s failed.\n", cfg.name.c_str(), chatId.c_str());
       }
     }
-    pushSnapshotHistory(st, jpg, jpgLen); // takes ownership - do not free(jpg) here
+    pushSnapshotHistory(cfg, st, jpg, jpgLen); // takes ownership - do not free(jpg) here
   }
 }
 
@@ -454,7 +476,7 @@ void triggerTamperAlert(const CameraConfig& cfg, CameraState& st) {
         Serial.printf("[%s] Tamper alert photo send to chat %s failed.\n", cfg.name.c_str(), chatId.c_str());
       }
     }
-    pushSnapshotHistory(st, jpg, jpgLen); // takes ownership - do not free(jpg) here
+    pushSnapshotHistory(cfg, st, jpg, jpgLen); // takes ownership - do not free(jpg) here
   } else {
     // No snapshot URI yet, or the fetch itself failed - tamper is
     // important enough not to stay silent just because a photo isn't
@@ -589,7 +611,7 @@ static void sendOnDemandSnapshot(const CameraConfig& cfg, CameraState& st, const
   if (!sendTelegramPhotoWithRetry(jpg, jpgLen, caption, chatId)) {
     Serial.printf("[%s] On-demand snapshot send to chat %s failed.\n", cfg.name.c_str(), chatId.c_str());
   }
-  pushSnapshotHistory(st, jpg, jpgLen); // takes ownership - do not free(jpg) here
+  pushSnapshotHistory(cfg, st, jpg, jpgLen); // takes ownership - do not free(jpg) here
 }
 
 // Result of resolveAlertTimer below - shared by the single-camera and

@@ -132,7 +132,8 @@ static String describeResetReason() {
   switch (esp_reset_reason()) {
     case ESP_RST_POWERON:   return "power-on";
     case ESP_RST_EXT:       return "external reset pin";
-    case ESP_RST_SW:        return "software (ESP.restart() - /reset command or a firmware update)";
+    case ESP_RST_SW:        return "software (ESP.restart() - /reset command, a firmware update, or a "
+                                    "Maintenance page reboot)";
     case ESP_RST_PANIC:     return "PANIC (crash)";
     case ESP_RST_INT_WDT:   return "interrupt watchdog";
     case ESP_RST_TASK_WDT:  return "task watchdog (a task hung - see initWatchdog())";

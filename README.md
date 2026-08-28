@@ -53,13 +53,20 @@ Arduino-ESP32/IDF releases.
   happened after you save. The Cameras page also shows a small strip of the most
   recent snapshots per camera (up to 5, newest first - motion, tamper, or an
   on-demand `/snap`) - cached in PSRAM, not re-fetched from the camera just to
-  render the dashboard.
+  render the dashboard. Retaining that history is a real, ongoing PSRAM cost
+  that scales with camera count and snapshot size, unlike the pre-history
+  design (where a sent snapshot was freed immediately after upload) - rather
+  than guess a "safe" history size for an unknown number of cameras, it checks
+  actual free PSRAM before keeping each one and just stops retaining new
+  snapshots (falling back to the old free-immediately behavior) if that would
+  leave less than one more full-size fetch's worth free.
 - A small in-memory Activity log (Activity page) - the most recent ~40 events
   (motion alerts, offline/online transitions, on/off changes including timed
   ones, live config reloads, boot) with a relative timestamp, for a quick "what
   happened recently" view without a serial cable. Not persisted - resets on
   reboot, same as the rest of this board's runtime state.
-- Firmware updates over the dashboard: upload a `.bin` built with
+- Firmware and Maintenance live under a "System" submenu in the sidebar.
+  Firmware updates over the dashboard: upload a `.bin` built with
   `pio run -e esp32s3` on the Firmware page instead of reflashing over USB. Uses
   the board's dual OTA app partitions - a failed or aborted upload leaves the
   running firmware untouched, and the board only reboots into the new image
@@ -72,7 +79,9 @@ Arduino-ESP32/IDF releases.
   shouldn't roll back otherwise-good firmware). The Firmware page also shows
   NVS usage (% of entries used) - this project has silently hit NVS's practical
   size ceiling before (see `camera_store.cpp`'s history), so a visible warning
-  above 80% is meant to catch that before it happens again, not after.
+  above 80% is meant to catch that before it happens again, not after. The
+  Maintenance page has a manual reboot button (confirmation popup first) for
+  when you just want the board to restart without a firmware change.
 - Any number of Telegram users, each independently configured for which cameras
   they hear from (specific list or "all, including future ones"), whether they get
   the heartbeat/boot messages, and two independent command permissions: `/on`,
@@ -225,9 +234,11 @@ include/
   event_log_store.h  # thread-safe global wrapper around lib/event_log's ring buffer
   camera_tasks.h      # spawnCameraTask() - exposed from main.cpp so a dashboard edit can
                        # start a camera's task live, without a reboot
-  webserver.h       # sidebar dashboard - Network/Cameras/Users/Activity/Firmware/Security (PsychicHttp)
+  webserver.h       # sidebar dashboard - Network/Cameras/Users/Activity/System (Firmware,
+                     # Maintenance)/Security (PsychicHttp)
   webserver_network.h, webserver_cameras.h, webserver_users.h, webserver_activity.h,
-  webserver_firmware.h, webserver_security.h # each panel's own rendering/form-handling
+  webserver_firmware.h, webserver_maintenance.h, webserver_security.h # each panel's own
+                                                                        # rendering/form-handling
   secrets.h.example # template for secrets.h (copy, fill in, gitignored)
   telegram_ca.h      # Telegram's root CA for TLS pinning (committed, not secret)
   camera.h, telegram.h, onvif_soap.h
@@ -243,8 +254,8 @@ src/
   webserver.cpp      # routing table, dashboard shell, OTA upload state, login rate-limiting
                        # middleware - see webserver_*.cpp for panels
   webserver_network.cpp, webserver_cameras.cpp, webserver_users.cpp, webserver_activity.cpp,
-  webserver_firmware.cpp, webserver_security.cpp # each panel's rendering/form-handling, split out of
-                                                   # what used to be one 946-line webserver.cpp
+  webserver_firmware.cpp, webserver_maintenance.cpp, webserver_security.cpp # each panel's
+                            # rendering/form-handling, split out of what used to be one 946-line webserver.cpp
   telegram.cpp       # photo/message send paths, multi-recipient fan-out, remote commands
                        # (including timed /on//off), scheduled-revert checking
   onvif_soap.cpp     # SOAP envelope building, WS-Security digest
