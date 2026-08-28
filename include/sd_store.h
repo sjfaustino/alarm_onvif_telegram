@@ -102,7 +102,35 @@ struct SnapshotStorageCheckResult {
 // structure itself, only that this project's own files are each
 // individually readable - said plainly on the Storage page too, so this
 // isn't mistaken for a real chkdsk/fsck.
+//
+// Cost scales with total history stored, which is unbounded by design
+// (that's the whole point of SD over the fixed-size PSRAM ring) - not run
+// automatically at boot for that reason. See checkNewestSnapshots() below
+// for the bounded check initSdStorage() actually runs.
 SnapshotStorageCheckResult checkSnapshotStorage();
+
+// Result of checkNewestSnapshots() below.
+struct QuickSnapshotCheckResult {
+  bool ranAtAll = false;
+  bool ok = false;
+  size_t directoriesChecked = 0;
+  size_t unreadableFiles = 0;
+};
+
+// Lightweight sanity check run once at boot (initSdStorage(), right after
+// a successful mount) - for each existing camera directory under
+// /snapshots, opens and reads the size of only its NEWEST file, not the
+// whole history. Cost is bounded by camera count, not by how much
+// history is stored, unlike checkSnapshotStorage()'s full walk - safe to
+// run unconditionally at boot without needing to feed the task watchdog
+// the way that full walk or a large "/snap all" would. Targets the
+// failure mode a reboot interrupted mid-write (see waitForSdIdle, now
+// closing that gap going forward) would actually produce: the newest
+// file is the one most likely to have been affected. Doesn't need the
+// camera list at all - just walks whatever subdirectories already exist,
+// so it works even before g_cameras is loaded (this runs early in
+// main.cpp's setup(), ahead of that).
+QuickSnapshotCheckResult checkNewestSnapshots();
 
 // Blocks (up to a bounded timeout) until no SD operation is in flight,
 // then returns - call this immediately before any *deliberate* reboot

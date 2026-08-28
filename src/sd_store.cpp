@@ -73,6 +73,11 @@ void initSdStorage() {
   g_sdAvailable = true;
   Serial.printf("[sd_store] SD card mounted: %.1fMB used / %.1fMB total.\n",
                 (double)SD.usedBytes() / (1024.0 * 1024.0), (double)SD.totalBytes() / (1024.0 * 1024.0));
+
+  // Bounded (one file per existing camera directory), unlike the full
+  // on-demand check - see checkNewestSnapshots' own comment for why this
+  // one is safe to run unconditionally here.
+  checkNewestSnapshots();
 }
 
 bool sdActive() {
@@ -336,6 +341,52 @@ SnapshotStorageCheckResult checkSnapshotStorage() {
   Serial.printf("[sd_store] Storage check: %u director(ies), %u file(s), %u unreadable.\n",
                 (unsigned)result.directoriesChecked, (unsigned)result.filesChecked,
                 (unsigned)result.unreadableFiles);
+  return result;
+}
+
+QuickSnapshotCheckResult checkNewestSnapshots() {
+  QuickSnapshotCheckResult result;
+  if (!sdActive()) return result;
+  result.ranAtAll = true;
+  result.ok = true;
+
+  xSemaphoreTake(g_sdMutex, portMAX_DELAY);
+  File root = SD.open(SNAPSHOTS_ROOT);
+  if (root && root.isDirectory()) {
+    File camDir = root.openNextFile();
+    while (camDir) {
+      if (camDir.isDirectory()) {
+        result.directoriesChecked++;
+        String camDirPath = String(SNAPSHOTS_ROOT) + "/" + String(camDir.name());
+        camDir.close();
+
+        std::vector<SnapshotFileInfo> files = listDirFiles(camDirPath);
+        if (!files.empty()) {
+          std::sort(files.begin(), files.end(), [](const SnapshotFileInfo& a, const SnapshotFileInfo& b) {
+            return a.name > b.name; // newest first - only files[0] is actually checked
+          });
+          String newestPath = camDirPath + "/" + files[0].name;
+          File f = SD.open(newestPath, FILE_READ);
+          if (!f || f.size() == 0) {
+            result.unreadableFiles++;
+            result.ok = false;
+            Serial.printf("[sd_store] Boot check: newest file in %s is unreadable or empty (%s).\n",
+                          camDirPath.c_str(), newestPath.c_str());
+          }
+          if (f) f.close();
+        }
+      } else {
+        camDir.close();
+      }
+      camDir = root.openNextFile();
+    }
+    root.close();
+  }
+  xSemaphoreGive(g_sdMutex);
+
+  Serial.printf("[sd_store] Boot check: newest snapshot in each of %u director(ies) - %s.\n",
+                (unsigned)result.directoriesChecked,
+                result.ok ? "all readable" : "problem(s) found, see above");
   return result;
 }
 

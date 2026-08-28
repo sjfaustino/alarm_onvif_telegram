@@ -69,6 +69,16 @@ Arduino-ESP32/IDF releases.
   still readable - not a full filesystem check, this project's SD support has
   no fsck/chkdsk equivalent) and an "erase all snapshot history" action
   (deletes only what this project itself wrote, not a low-level card format).
+  A lighter version of that same readability check - only each camera's
+  *newest* file, not the whole history - runs automatically once at boot,
+  right after mounting: bounded cost regardless of how much history is
+  stored (unlike the full on-demand check, which isn't run automatically for
+  exactly that reason), and it targets the specific failure mode a reboot
+  interrupted mid-write would actually produce. A deliberate reboot
+  (`/reset`, the Maintenance page, or a firmware update) now also waits for
+  any in-flight SD write to finish first - `ESP.restart()` doesn't wait for
+  other tasks on its own, and FAT isn't a journaling filesystem, so cutting
+  a write off mid-flight can leave more than just that one file.
   Retaining every sent snapshot at all (in either store) is a real, ongoing
   memory/storage cost that scales with camera count and snapshot size, unlike
   the very first version of this feature (where a sent snapshot was freed
