@@ -91,19 +91,20 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
 
   String html = "<h1>Cameras</h1>";
   html += "<table><tr><th>Name</th><th>Device Service URL</th><th>Enabled</th>"
-          "<th>Live Status</th><th>Last Alert</th><th>Notes</th><th></th></tr>";
+          "<th>Live Status</th><th>Last Alert</th><th>Preview</th><th>Notes</th><th></th></tr>";
   for (auto& c : cams) {
     int idx = findLiveCameraIndex(liveCameras, c.name);
     String liveStatus;
     String lastAlertStr = "never";
+    String previewCell = "<span class=\"hint\">(none yet)</span>";
     if (idx >= 0 && liveStates && idx < (int)liveStates->size()) {
       // Read under lock - these fields are written by the camera's own
       // task, this render runs on PsychicHttp's task. See
       // CameraState::stateMutex.
       CameraState& st = (*liveStates)[idx];
-      bool subscribed, offline, alertsEnabled, hasAlerted;
+      bool subscribed, offline, alertsEnabled, hasAlerted, hasSnapshot;
       uint32_t lastAlert;
-      unsigned long revertDueMs;
+      unsigned long revertDueMs, snapshotMs;
       bool revertToOn;
       {
         CameraStateLock lock(st);
@@ -114,6 +115,8 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
         lastAlert = st.lastAlert;
         revertDueMs = st.scheduledRevertDueMs;
         revertToOn = st.scheduledRevertToOn;
+        hasSnapshot = st.lastSnapshotLen > 0;
+        snapshotMs = st.lastSnapshotMs;
       }
       liveStatus = subscribed ? "subscribed" : "not subscribed";
       if (offline) liveStatus += " - OFFLINE";
@@ -126,6 +129,15 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
                       formatUptime(revertDueMs - millis());
       }
       if (hasAlerted) lastAlertStr = formatElapsedSince(lastAlert, millis());
+      if (hasSnapshot) {
+        // snapshotMs as a cache-busting query param, not read server-side -
+        // its only job is making the URL a different resource once a new
+        // snapshot is captured, so the browser doesn't keep showing a
+        // stale cached image across page loads.
+        String url = "/cameras/snapshot?name=" + urlEncode(c.name) + "&t=" + String(snapshotMs);
+        previewCell = "<a href=\"" + url + "\" target=\"_blank\">"
+                      "<img src=\"" + url + "\" style=\"max-width:100px;max-height:70px;\" alt=\"preview\"></a>";
+      }
     } else if (!c.enabled) {
       liveStatus = "disabled";
     } else {
@@ -141,7 +153,7 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
 
     html += "<tr><td>" + htmlEscape(c.name) + "</td><td>" + htmlEscape(c.deviceServiceUrl) +
             "</td><td>" + (c.enabled ? "yes" : "no") + "</td><td>" + liveStatus + "</td><td>" +
-            lastAlertStr + "</td><td>" +
+            lastAlertStr + "</td><td>" + previewCell + "</td><td>" +
             notesCell + "</td><td>";
     html += renderEditDeleteActions("/cameras/edit?name=", "/delete", c.name) + "</td></tr>";
   }

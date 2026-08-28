@@ -46,14 +46,29 @@ struct CameraEventClassification {
 };
 CameraEventClassification classifyCameraEvent(const String& xml);
 
+// Whether topicKeyword's own NotificationMessage block (via
+// extractEventStateValue's per-block scoping - NOT ev.anyTrue, which is a
+// body-wide flag a same-batch, unrelated topic can set even while this
+// one's own state is actually false) reported State/IsMotion="true". The
+// building block motionEventFired below, and camera.cpp's tamper/signal-
+// loss firing checks, are built from.
+bool topicReportedTrue(const String& xml, const String& topicKeyword);
+
 // Whether a motion-relevant topic (MotionAlarm or CellMotionDetector) that
 // classifyCameraEvent found present in this batch *itself* reported
-// State/IsMotion="true", via extractEventStateValue's per-NotificationMessage
-// scoping - NOT ev.anyTrue, which is a body-wide flag that a same-batch,
-// unrelated topic (SignalLoss, TamperDetector) can set to true while the
-// motion topic's own state is actually false (e.g. "motion just ended").
-// Checking ev.anyTrue alone - what camera.cpp's parseEvents used to do -
-// fires a motion alert off an unrelated topic's true value, with the log
-// line for the motion topic itself confusingly showing "State = false"
-// right before it.
+// State/IsMotion="true" - NOT ev.anyTrue, which is a body-wide flag that a
+// same-batch, unrelated topic (SignalLoss, TamperDetector) can set to true
+// while the motion topic's own state is actually false (e.g. "motion just
+// ended"). Checking ev.anyTrue alone - what camera.cpp's parseEvents used
+// to do - fires a motion alert off an unrelated topic's true value, with
+// the log line for the motion topic itself confusingly showing "State =
+// false" right before it.
 bool motionEventFired(const String& xml, const CameraEventClassification& ev);
+
+// Best-effort extraction of the first <tt:Topic>...</tt:Topic> element's
+// content in a PullMessages response - "" if none is found. For logging an
+// event this project doesn't otherwise recognize (camera.cpp's parseEvents
+// unrecognized-topic fallback) - not used for any classification decision,
+// just to tell a human what topic string a camera actually sent so support
+// for it can be added deliberately, rather than the event just vanishing.
+String firstTopic(const String& xml);

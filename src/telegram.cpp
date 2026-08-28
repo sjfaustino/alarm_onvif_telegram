@@ -5,6 +5,7 @@
 #include "telegram_multipart.h"
 #include "format_utils.h"
 #include "event_log_store.h"
+#include <esp_task_wdt.h>
 #include <ArduinoJson.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
@@ -320,6 +321,25 @@ static uint8_t* fetchOneSnapshot(const CameraConfig& cfg, CameraState& st, size_
   return jpg;
 }
 
+// Takes ownership of jpg (caller must not free() it after this call) -
+// replaces st's cached last-snapshot buffer (for the dashboard's
+// /cameras/snapshot thumbnail - see CameraState::lastSnapshotJpg's own
+// comment), freeing whichever one was cached before. No extra copy: the
+// buffer being adopted was already fetched for a real send (motion/tamper
+// alert or an on-demand /snap), so this just redirects where it ends up
+// instead of freeing it immediately afterward.
+static void adoptLastSnapshot(CameraState& st, uint8_t* jpg, size_t jpgLen) {
+  uint8_t* old = nullptr;
+  {
+    CameraStateLock lock(st);
+    old = st.lastSnapshotJpg;
+    st.lastSnapshotJpg = jpg;
+    st.lastSnapshotLen = jpgLen;
+    st.lastSnapshotMs = millis();
+  }
+  free(old);
+}
+
 void triggerMotionAlert(const CameraConfig& cfg, CameraState& st) {
   // alertsEnabled is written by loop()'s task (pollTelegramCommands'
   // /on//off), this function runs on the camera's own task - cross-task
@@ -379,8 +399,74 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st) {
         Serial.printf("[%s] Telegram send to chat %s failed.\n", cfg.name.c_str(), chatId.c_str());
       }
     }
-    free(jpg);
+    adoptLastSnapshot(st, jpg, jpgLen); // takes ownership - do not free(jpg) here
   }
+}
+
+// Gathers this camera's subscribed recipients and, if there are any and
+// the cooldown has cleared, spends it (lastAlert/hasAlerted) and returns
+// them - shared by triggerTamperAlert/triggerSignalLossAlert below.
+// Returns empty (and spends nothing) if muted, still cooling down, or
+// nobody's subscribed - same "don't burn the cooldown on nothing" rule
+// triggerMotionAlert documents, though that function doesn't use this
+// helper itself: it has one more gate (snapshotUri must be resolved)
+// before the cooldown should be spent, which tamper/signal-loss alerts
+// don't share (tamper degrades to text-only, signal-loss is always
+// text-only), so unifying all three into one helper would mean forcing
+// motion's extra gate onto events that don't need it, or forcing this
+// simpler version's ordering onto motion and losing its "no snapshot URI
+// yet" pre-cooldown check.
+static std::vector<String> beginCameraAlert(const CameraConfig& cfg, CameraState& st, uint32_t nowMs) {
+  bool alertsEnabled;
+  { CameraStateLock lock(st); alertsEnabled = st.alertsEnabled; }
+  if (!alertsEnabled) return {};
+
+  if (st.hasAlerted && nowMs - st.lastAlert < cfg.alertCooldownMs) return {};
+
+  std::vector<String> recipients;
+  for (auto& u : loadTelegramUsers()) {
+    if (telegramUserWantsCamera(u, cfg.name)) recipients.push_back(u.chatId);
+  }
+  if (recipients.empty()) return {};
+
+  { CameraStateLock lock(st); st.lastAlert = nowMs; st.hasAlerted = true; }
+  return recipients;
+}
+
+void triggerTamperAlert(const CameraConfig& cfg, CameraState& st) {
+  std::vector<String> recipients = beginCameraAlert(cfg, st, millis());
+  if (recipients.empty()) return;
+
+  logEvent(cfg.name + ": TAMPER detected");
+  String caption = "\xE2\x9A\xA0\xEF\xB8\x8F " + cfg.name + " - TAMPER DETECTED - " + nowTimestampString();
+
+  bool hasSnapshotUri;
+  { CameraStateLock lock(st); hasSnapshotUri = st.snapshotUri.length() > 0; }
+  size_t jpgLen = 0;
+  uint8_t* jpg = hasSnapshotUri ? fetchOneSnapshot(cfg, st, jpgLen) : nullptr;
+
+  if (jpg) {
+    for (auto& chatId : recipients) {
+      if (!sendTelegramPhotoWithRetry(jpg, jpgLen, caption, chatId)) {
+        Serial.printf("[%s] Tamper alert photo send to chat %s failed.\n", cfg.name.c_str(), chatId.c_str());
+      }
+    }
+    adoptLastSnapshot(st, jpg, jpgLen); // takes ownership - do not free(jpg) here
+  } else {
+    // No snapshot URI yet, or the fetch itself failed - tamper is
+    // important enough not to stay silent just because a photo isn't
+    // available right now.
+    for (auto& chatId : recipients) sendTelegramMessageTo(chatId, caption);
+  }
+}
+
+void triggerSignalLossAlert(const CameraConfig& cfg, CameraState& st) {
+  std::vector<String> recipients = beginCameraAlert(cfg, st, millis());
+  if (recipients.empty()) return;
+
+  logEvent(cfg.name + ": video SIGNAL LOSS");
+  String msg = "\xE2\x9A\xA0\xEF\xB8\x8F " + cfg.name + " - VIDEO SIGNAL LOSS - " + nowTimestampString();
+  for (auto& chatId : recipients) sendTelegramMessageTo(chatId, msg);
 }
 
 void checkCameraOnlineStatus(const CameraConfig& cfg, CameraState& st) {
@@ -500,7 +586,98 @@ static void sendOnDemandSnapshot(const CameraConfig& cfg, CameraState& st, const
   if (!sendTelegramPhotoWithRetry(jpg, jpgLen, caption, chatId)) {
     Serial.printf("[%s] On-demand snapshot send to chat %s failed.\n", cfg.name.c_str(), chatId.c_str());
   }
-  free(jpg);
+  adoptLastSnapshot(st, jpg, jpgLen); // takes ownership - do not free(jpg) here
+}
+
+// Result of resolveAlertTimer below - shared by the single-camera and
+// all-cameras /on//off paths in handleTelegramCommand/handleAllCamerasCommand
+// so the duration-parsing logic (and its error handling) can't drift
+// between the two copies the way independently-duplicated parsing already
+// caused a real bug once in this project (the /reset reboot loop).
+struct AlertTimer {
+  bool ok = true;               // false only if durationText was non-empty and unparseable
+  bool hasTimer = false;        // true if durationText was non-empty and DID parse
+  unsigned long revertDueMs = 0; // valid only if hasTimer
+  String suffix;                 // " (auto ON in 1h30m)" etc, "" if !hasTimer - appended to the reply
+  String errorMsg;               // set only if !ok - what to reply with
+};
+
+// durationText is parsed.durationText ("" means no timer, permanent
+// on/off - the original behavior). Resolving "HH:MM" needs the actual
+// current local time, which parseDurationToken (telegram_parse.h)
+// deliberately doesn't read for itself - see its own comment.
+static AlertTimer resolveAlertTimer(const String& durationText, bool turnOn) {
+  AlertTimer result;
+  if (durationText.length() == 0) return result;
+
+  time_t now; time(&now);
+  struct tm nowLocal; localtime_r(&now, &nowLocal);
+  ParsedDuration dur = parseDurationToken(durationText, nowLocal);
+  if (!dur.ok) {
+    result.ok = false;
+    result.errorMsg = "Couldn't understand duration \"" + durationText +
+                       "\" - use a number of minutes (e.g. \"30\") or a 24h clock time (e.g. \"23:00\").";
+    return result;
+  }
+  result.hasTimer = true;
+  result.revertDueMs = millis() + dur.secondsFromNow * 1000UL;
+  result.suffix = " (auto " + String(turnOn ? "OFF" : "ON") + " in " + formatUptime(dur.secondsFromNow * 1000UL) + ")";
+  return result;
+}
+
+// Applies /on all, /off all [duration], or /snap all to every currently-
+// enabled camera - see pollTelegramCommands' (telegram.h) comment on the
+// "all" keyword for the (extremely narrow) trade-off it makes against a
+// real camera named starting with "all". Caller (handleTelegramCommand)
+// has already matched parsed.cameraName == "all" case-insensitively
+// before reaching here.
+static void handleAllCamerasCommand(const TelegramUser& sender, const ParsedTelegramCommand& parsed,
+                                     const CameraConfig cameras[], CameraState states[], size_t numCameras) {
+  std::vector<size_t> targets;
+  for (size_t i = 0; i < numCameras; i++) {
+    if (cameras[i].enabled) targets.push_back(i);
+  }
+  if (targets.empty()) {
+    sendTelegramMessageTo(sender.chatId, "No enabled cameras to apply this to.");
+    return;
+  }
+
+  if (parsed.command == TelegramCommand::Snap) {
+    Serial.printf("[Telegram] On-demand snapshot of all %u camera(s) requested by user \"%s\".\n",
+                  (unsigned)targets.size(), sender.name.c_str());
+    for (size_t i : targets) {
+      sendOnDemandSnapshot(cameras[i], states[i], sender.chatId);
+      // A fetch+send per camera, synchronously, all within this one
+      // loop() tick - main.cpp's loop() only resets the task watchdog at
+      // its own top, so enough slow/unresponsive cameras in one "/snap
+      // all" could otherwise add up toward WATCHDOG_TIMEOUT_MS (90s) and
+      // panic-reboot the board over a Telegram command. Same reasoning,
+      // same fix, as camera_store.cpp's restoreMissingCamerasFromSeed().
+      esp_task_wdt_reset();
+    }
+    return;
+  }
+
+  bool turnOn = (parsed.command == TelegramCommand::On);
+  AlertTimer timer = resolveAlertTimer(parsed.durationText, turnOn);
+  if (!timer.ok) {
+    Serial.printf("[Telegram] /%s all from user \"%s\" has an unparseable duration \"%s\".\n",
+                  turnOn ? "on" : "off", sender.name.c_str(), parsed.durationText.c_str());
+    sendTelegramMessageTo(sender.chatId, timer.errorMsg);
+    return;
+  }
+
+  for (size_t i : targets) {
+    { CameraStateLock lock(states[i]); states[i].alertsEnabled = turnOn;
+      states[i].scheduledRevertDueMs = timer.hasTimer ? timer.revertDueMs : 0;
+      states[i].scheduledRevertToOn = !turnOn; }
+    saveAlertEnabledPref(i, turnOn);
+  }
+  Serial.printf("[Telegram] Alerts turned %s for all %u camera(s) via Telegram by user \"%s\"%s.\n",
+                turnOn ? "ON" : "OFF", (unsigned)targets.size(), sender.name.c_str(), timer.hasTimer ? " (timed)" : "");
+  logEvent("All cameras alerts: " + String(turnOn ? "ON" : "OFF") + " via " + sender.name + timer.suffix);
+  sendTelegramMessageTo(sender.chatId, "All " + String(targets.size()) + " camera(s) alerts: " +
+                                        (turnOn ? "ON" : "OFF") + timer.suffix);
 }
 
 // lastUpdateId is this poll's running highest update_id, already advanced
@@ -605,6 +782,17 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
       return;
   }
 
+  // "all" (case-insensitive) is a special target meaning every enabled
+  // camera at once, matched here rather than by matchCamerasByPrefix below
+  // - see pollTelegramCommands' (telegram.h) comment on the trade-off that
+  // makes for a real camera named starting with "all".
+  String cameraNameLower = parsed.cameraName;
+  cameraNameLower.toLowerCase();
+  if (cameraNameLower == "all") {
+    handleAllCamerasCommand(sender, parsed, cameras, states, numCameras);
+    return;
+  }
+
   // Matched by prefix ("D01" matches "D01-FDir") - ambiguous matches get
   // nothing applied and a reply listing what matched, rather than guessing.
   std::vector<size_t> matches = matchCamerasByPrefix(cameras, numCameras, parsed.cameraName);
@@ -640,28 +828,15 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
 
   // parsed.durationText is "" for a plain /on or /off (permanent, the
   // original behavior) - only non-empty when a timer token followed the
-  // camera name (see parseTelegramCommand's comment). Parsed here, not in
-  // telegram_parse.h, since resolving "HH:MM" needs the actual current
-  // local time, which that otherwise time-independent parser deliberately
-  // doesn't read for itself.
-  unsigned long revertDueMs = 0;
-  bool hasTimer = false;
-  String timerSuffix; // " (auto ON in 1h30m)" etc. - appended to the reply below
-  if (parsed.durationText.length() > 0) {
-    time_t now; time(&now);
-    struct tm nowLocal; localtime_r(&now, &nowLocal);
-    ParsedDuration dur = parseDurationToken(parsed.durationText, nowLocal);
-    if (!dur.ok) {
-      Serial.printf("[Telegram] /%s target \"%s\" from user \"%s\" has an unparseable duration \"%s\".\n",
-                    verb.c_str(), cameras[i].name.c_str(), sender.name.c_str(), parsed.durationText.c_str());
-      sendTelegramMessageTo(sender.chatId, "Couldn't understand duration \"" + parsed.durationText +
-                             "\" - use a number of minutes (e.g. \"30\") or a 24h clock time (e.g. \"23:00\").");
-      return;
-    }
-    hasTimer = true;
-    revertDueMs = millis() + dur.secondsFromNow * 1000UL;
-    timerSuffix = " (auto " + String(turnOn ? "OFF" : "ON") + " in " +
-                  formatUptime(dur.secondsFromNow * 1000UL) + ")";
+  // camera name (see parseTelegramCommand's comment). See resolveAlertTimer's
+  // own comment for why the actual parsing lives there, shared with the
+  // "/on all"/"/off all" path (handleAllCamerasCommand) above.
+  AlertTimer timer = resolveAlertTimer(parsed.durationText, turnOn);
+  if (!timer.ok) {
+    Serial.printf("[Telegram] /%s target \"%s\" from user \"%s\" has an unparseable duration \"%s\".\n",
+                  verb.c_str(), cameras[i].name.c_str(), sender.name.c_str(), parsed.durationText.c_str());
+    sendTelegramMessageTo(sender.chatId, timer.errorMsg);
+    return;
   }
 
   {
@@ -670,15 +845,15 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
     // A plain (no-timer) /on or /off cancels whatever timer was pending
     // before - issuing a new command always replaces the old schedule,
     // never stacks with it.
-    states[i].scheduledRevertDueMs = hasTimer ? revertDueMs : 0;
+    states[i].scheduledRevertDueMs = timer.hasTimer ? timer.revertDueMs : 0;
     states[i].scheduledRevertToOn = !turnOn;
   }
   saveAlertEnabledPref(i, turnOn);
   Serial.printf("[%s] Alerts turned %s via Telegram by user \"%s\"%s.\n", cameras[i].name.c_str(),
-                turnOn ? "ON" : "OFF", sender.name.c_str(), hasTimer ? " (timed)" : "");
-  logEvent(String(cameras[i].name) + " alerts: " + (turnOn ? "ON" : "OFF") + " via " + sender.name + timerSuffix);
+                turnOn ? "ON" : "OFF", sender.name.c_str(), timer.hasTimer ? " (timed)" : "");
+  logEvent(String(cameras[i].name) + " alerts: " + (turnOn ? "ON" : "OFF") + " via " + sender.name + timer.suffix);
   sendTelegramMessageTo(sender.chatId,
-                         String(cameras[i].name) + " alerts: " + (turnOn ? "ON" : "OFF") + timerSuffix);
+                         String(cameras[i].name) + " alerts: " + (turnOn ? "ON" : "OFF") + timer.suffix);
 }
 
 // Called once per loop() tick (main.cpp). Cheap: just a millis() comparison

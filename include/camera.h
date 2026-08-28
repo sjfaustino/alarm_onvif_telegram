@@ -61,14 +61,28 @@ struct CameraState {
   // CameraConfig fields, never the task that stages a reload.
   CameraConfig* pendingConfig = nullptr;
 
+  // The most recently sent snapshot's raw JPEG bytes, kept around so the
+  // dashboard can show a thumbnail (webserver.cpp's /cameras/snapshot
+  // route) without triggering a fresh fetch. Owned by this struct -
+  // adoptLastSnapshot (telegram.cpp) takes ownership of an
+  // already-fetched buffer (no extra copy) and frees whatever was here
+  // before. nullptr/0 until the first snapshot is ever sent for this
+  // camera. Heap-allocated (PSRAM via heap_caps_malloc, same as every
+  // other snapshot buffer in this project - see telegram.cpp's
+  // allocateSnapshotBuffer).
+  uint8_t* lastSnapshotJpg = nullptr;
+  size_t   lastSnapshotLen = 0;
+  unsigned long lastSnapshotMs = 0; // millis() when it was captured
+
   // Guards subscriptionActive, isOffline, alertsEnabled, hasAlerted,
   // lastAlert, snapshotUri, user, pass, scheduledRevertDueMs,
-  // scheduledRevertToOn, and pendingConfig - the only fields both written
-  // by this camera's own task (camera.cpp) and read from another task
-  // (webserver.cpp's dashboard render, main.cpp's heartbeat, telegram.cpp's
-  // /on /off /snap command handling and checkScheduledAlertReverts, all on
-  // loop()'s task). Every other field is touched only from the owning
-  // camera task, so it needs no lock.
+  // scheduledRevertToOn, pendingConfig, lastSnapshotJpg, lastSnapshotLen,
+  // and lastSnapshotMs - the only fields both written by this camera's
+  // own task (camera.cpp) and read from another task (webserver.cpp's
+  // dashboard render and /cameras/snapshot route, main.cpp's heartbeat,
+  // telegram.cpp's /on /off /snap command handling and
+  // checkScheduledAlertReverts, all on loop()'s task). Every other field
+  // is touched only from the owning camera task, so it needs no lock.
   // Created once by cameraStateInit() before any task can see this camera -
   // see main.cpp's startMonitoring().
   SemaphoreHandle_t stateMutex = nullptr;

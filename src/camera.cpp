@@ -278,21 +278,42 @@ static void printEventState(const CameraConfig& cfg, const String& xml, const St
 static void parseEvents(const CameraConfig& cfg, CameraState& st, const String& xml) {
   CameraEventClassification ev = classifyCameraEvent(xml);
   if (!ev.anyTrue && !VERBOSE_SOAP_LOG) return;
-  if (!ev.motionAlarm && !ev.cellMotion && !ev.signalLoss && !ev.tamper) return;
+  if (!ev.motionAlarm && !ev.cellMotion && !ev.signalLoss && !ev.tamper) {
+    // A real notification arrived (not just an empty/heartbeat-ish
+    // PullMessagesResponse - see the anyTrue/VERBOSE_SOAP_LOG guard above)
+    // but none of the topics this project knows about were in it - e.g. a
+    // person/vehicle-detection topic, which has no single standardized
+    // name across vendors (see firstTopic's comment). Logged instead of
+    // silently dropped, so it's possible to discover what a given camera
+    // actually sends and add support for it deliberately.
+    if (xml.indexOf("NotificationMessage") >= 0) {
+      String topic = firstTopic(xml);
+      Serial.printf("[%s] UNRECOGNIZED EVENT - topic: %s (enable VERBOSE_SOAP_LOG to see the full response)\n",
+                    cfg.name.c_str(), topic.length() > 0 ? topic.c_str() : "(no Topic element found)");
+      logEvent(cfg.name + ": unrecognized ONVIF event" + (topic.length() > 0 ? " (" + topic + ")" : ""));
+    }
+    return;
+  }
 
   if (ev.motionAlarm) { Serial.printf("[%s] MOTION ALARM EVENT\n", cfg.name.c_str()); printEventState(cfg, xml, "MotionAlarm"); }
   if (ev.cellMotion)  { Serial.printf("[%s] CELL MOTION EVENT\n", cfg.name.c_str());  printEventState(cfg, xml, "CellMotionDetector"); }
   if (ev.signalLoss)  { Serial.printf("[%s] SIGNAL LOSS EVENT\n", cfg.name.c_str());  printEventState(cfg, xml, "SignalLoss"); }
   if (ev.tamper)      { Serial.printf("[%s] TAMPER EVENT\n", cfg.name.c_str());       printEventState(cfg, xml, "TamperDetector"); }
 
-  // motionEventFired checks MotionAlarm/CellMotionDetector's own scoped
-  // State/IsMotion value, not ev.anyTrue (a body-wide flag a same-batch,
-  // unrelated topic - e.g. SignalLoss/TamperDetector - can set on its own,
-  // even while the motion topic's own state is actually false). See
-  // motionEventFired's comment in camera_parse.h for why that distinction
-  // matters here.
+  // Each check below uses topicReportedTrue's per-NotificationMessage
+  // scoping, not ev.anyTrue/ev.signalLoss/ev.tamper alone - a body-wide
+  // flag or "this topic string is present somewhere" doesn't mean *this*
+  // topic's own state is true (see motionEventFired's comment in
+  // camera_parse.h for the full reasoning and the field-hit bug this
+  // pattern already fixed once for motion).
   if (motionEventFired(xml, ev)) {
     triggerMotionAlert(cfg, st);
+  }
+  if (ev.tamper && topicReportedTrue(xml, "TamperDetector")) {
+    triggerTamperAlert(cfg, st);
+  }
+  if (ev.signalLoss && topicReportedTrue(xml, "SignalLoss")) {
+    triggerSignalLossAlert(cfg, st);
   }
 }
 

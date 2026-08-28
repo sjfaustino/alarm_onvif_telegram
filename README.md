@@ -13,11 +13,18 @@ Arduino-ESP32/IDF releases.
 
 - Polls each enabled camera's ONVIF PullPoint subscription on its own FreeRTOS task
   (parallel, not round-robin) and auto-resubscribes/retries on failure.
-- Sends a Telegram photo alert on motion/tamper events, per-camera cooldown to avoid
-  spam, JPEG buffered once in PSRAM and resent to every Telegram user subscribed to
-  that camera. Per-camera snapshot burst count (default 1, up to 10) sends that many
-  consecutive fresh-fetched photos instead of just one, for when a single frame isn't
-  enough to tell why an alert fired.
+- Sends a Telegram alert on motion, tamper, and video signal-loss events, per-camera
+  cooldown (one shared budget across all three) to avoid spam. Motion alerts include
+  a photo, JPEG buffered once in PSRAM and resent to every Telegram user subscribed
+  to that camera, with a per-camera snapshot burst count (default 1, up to 10) that
+  sends that many consecutive fresh-fetched photos instead of just one, for when a
+  single frame isn't enough to tell why an alert fired. Tamper alerts try for a
+  single photo too (falling back to text-only if one isn't available); signal-loss
+  is always text-only, since by definition there's no usable video feed at that
+  moment. Any ONVIF event topic this project doesn't otherwise recognize (there's no
+  single standardized topic name for person/vehicle detection across vendors) is
+  logged - to Serial and the Activity page - instead of silently dropped, so support
+  for it can be added deliberately once you know what your camera actually sends.
 - TLS to Telegram is certificate-pinned (not `setInsecure()`).
 - Per-camera quirks handled via config flags: WS-Security vs. HTTP Basic Auth,
   optional `InitialTerminationTime`/`ReplyTo` (needed by some Xiongmai-derived
@@ -43,7 +50,9 @@ Arduino-ESP32/IDF releases.
   within about a tick of saving) or when the edit enables a previously-disabled
   camera (its task starts live); a brand new camera, or disabling one that's
   currently running, still needs a reboot - the dashboard tells you which
-  happened after you save.
+  happened after you save. The Cameras page also shows a thumbnail of the most
+  recently sent snapshot per camera (motion, tamper, or an on-demand `/snap`) -
+  cached in PSRAM, not re-fetched from the camera just to render the dashboard.
 - A small in-memory Activity log (Activity page) - the most recent ~40 events
   (motion alerts, offline/online transitions, on/off changes including timed
   ones, live config reloads, boot) with a relative timestamp, for a quick "what
@@ -67,11 +76,14 @@ Arduino-ESP32/IDF releases.
   fresh photo on demand, even from a camera currently muted with `/off`) - a user
   can have either, both, or neither, since pulling a live photo is a different
   kind of trust than silencing alerts. Commands are matched by camera name or
-  prefix and reply to whoever sent them. `/on`/`/off` accept an optional trailing
-  timer - a number of minutes (`/off D01 30`) or a 24h clock time (`/off D01
-  23:00`, tomorrow if that time has already passed today) - after which the
-  camera automatically reverts to the opposite state; omitted entirely is
-  permanent, as before.
+  prefix - or the literal word "all" in place of a name, which applies to every
+  enabled camera at once (`/off all 30` mutes everything for 30 minutes; `/snap
+  all` fetches a fresh photo from every camera in one go) - and reply to whoever
+  sent them. `/on`/`/off` accept an optional trailing timer - a number of minutes
+  (`/off D01 30`) or a 24h clock time (`/off D01 23:00`, tomorrow if that time has
+  already passed today) - after which the camera automatically reverts to the
+  opposite state; omitted entirely is permanent, as before. `/status` reports each
+  camera's ON/OFF state plus OFFLINE and any pending timer.
 - Dashboard login is opt-in but boots disabled: the board comes up with no password
   and a standing banner nagging you to set one, on every page, until you do. Once
   set (Security page), HTTP Basic Auth is required on every dashboard route,

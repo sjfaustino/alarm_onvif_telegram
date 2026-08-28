@@ -12,6 +12,8 @@
 #include "format_utils.h"
 #include <PsychicHttp.h>
 #include <Update.h>
+#include <esp_heap_caps.h>
+#include <cstring>
 
 // Routing table, the dashboard shell (sidebar + banner), and OTA
 // upload-in-progress state - the parts that are either genuinely about
@@ -353,6 +355,49 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
         200, "text/html",
         renderShell(Tab::Cameras, banner, renderCamerasPanel(&submitted, isEdit, g_liveCameras, g_liveStates))
             .c_str());
+  });
+
+  // Serves the cached last-sent snapshot (CameraState::lastSnapshotJpg -
+  // see its own comment) for the Cameras panel's preview thumbnail. Goes
+  // through the same global middleware chain as every other route
+  // (rate-limit, then auth) - deliberately not exempted, since it's
+  // exposing camera footage.
+  server.on("/cameras/snapshot", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) -> esp_err_t {
+    String name = request->getParam("name", "");
+    int idx = -1;
+    if (g_liveCameras) {
+      for (size_t i = 0; i < g_liveCameras->size(); i++) {
+        if ((*g_liveCameras)[i].name.equalsIgnoreCase(name)) { idx = (int)i; break; }
+      }
+    }
+    if (idx < 0 || !g_liveStates || idx >= (int)g_liveStates->size()) {
+      return response->send(404, "text/plain", "No such camera.");
+    }
+
+    // Copied out under a short lock rather than sent directly from
+    // st.lastSnapshotJpg - response->send() below does a blocking network
+    // write, and holding stateMutex for that long would stall the owning
+    // camera task (or any other reader) for however long this client
+    // takes to receive the image. See recentEvents() (event_log_store.cpp)
+    // for the same reasoning applied to the Activity log.
+    uint8_t* copy = nullptr;
+    size_t len = 0;
+    {
+      CameraStateLock lock((*g_liveStates)[idx]);
+      len = (*g_liveStates)[idx].lastSnapshotLen;
+      if (len > 0) {
+        copy = (uint8_t*)heap_caps_malloc(len, MALLOC_CAP_SPIRAM);
+        if (!copy) copy = (uint8_t*)malloc(len);
+        if (copy) memcpy(copy, (*g_liveStates)[idx].lastSnapshotJpg, len);
+        else len = 0;
+      }
+    }
+    if (!copy || len == 0) {
+      return response->send(404, "text/plain", "No snapshot captured yet for this camera.");
+    }
+    esp_err_t result = response->send(200, "image/jpeg", copy, len);
+    free(copy);
+    return result;
   });
 
   server.on("/delete", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {

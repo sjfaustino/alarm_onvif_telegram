@@ -171,6 +171,54 @@ void test_motionEventFired_false_when_no_motion_topic_present(void) {
   TEST_ASSERT_FALSE(motionEventFired(xml, ev));
 }
 
+// ---- topicReportedTrue ----
+
+void test_topicReportedTrue_true_when_state_is_true(void) {
+  String xml = "<wsnt:NotificationMessage><tt:Topic>TamperDetector</tt:Topic>"
+               "<tt:SimpleItem Name=\"State\" Value=\"true\"/></wsnt:NotificationMessage>";
+  TEST_ASSERT_TRUE(topicReportedTrue(xml, "TamperDetector"));
+}
+
+void test_topicReportedTrue_false_when_state_is_false(void) {
+  String xml = "<wsnt:NotificationMessage><tt:Topic>SignalLoss</tt:Topic>"
+               "<tt:SimpleItem Name=\"State\" Value=\"false\"/></wsnt:NotificationMessage>";
+  TEST_ASSERT_FALSE(topicReportedTrue(xml, "SignalLoss"));
+}
+
+// The same cross-topic scenario motionEventFired guards against, but for
+// the general-purpose primitive it (and camera.cpp's tamper/signal-loss
+// checks) is built from.
+void test_topicReportedTrue_ignores_unrelated_topics_true_value(void) {
+  String xml = "<wsnt:NotificationMessage><tt:Topic>TamperDetector</tt:Topic>"
+               "<tt:SimpleItem Name=\"State\" Value=\"false\"/></wsnt:NotificationMessage>"
+               "<wsnt:NotificationMessage><tt:Topic>SignalLoss</tt:Topic>"
+               "<tt:SimpleItem Name=\"State\" Value=\"true\"/></wsnt:NotificationMessage>";
+  TEST_ASSERT_FALSE(topicReportedTrue(xml, "TamperDetector"));
+  TEST_ASSERT_TRUE(topicReportedTrue(xml, "SignalLoss"));
+}
+
+// ---- firstTopic ----
+
+// Real ONVIF Topic elements almost always carry a Dialect attribute - the
+// case findElementByLocalName (xml_helpers.h) isn't built for, and the
+// reason firstTopic has its own bespoke parsing instead of reusing it.
+void test_firstTopic_extracts_content_with_dialect_attribute(void) {
+  String xml = "<wsnt:NotificationMessage><wsnt:Topic Dialect=\"http://www.onvif.org/ver10/tev/"
+               "topicExpression/ConcreteSet\">tns1:RuleEngine/MyRuleDetector/PeopleDetect"
+               "</wsnt:Topic></wsnt:NotificationMessage>";
+  TEST_ASSERT_EQUAL_STRING("tns1:RuleEngine/MyRuleDetector/PeopleDetect", firstTopic(xml).c_str());
+}
+
+void test_firstTopic_extracts_content_without_attributes(void) {
+  String xml = "<wsnt:NotificationMessage><tt:Topic>tns1:VideoSource/MotionAlarm</tt:Topic>"
+               "</wsnt:NotificationMessage>";
+  TEST_ASSERT_EQUAL_STRING("tns1:VideoSource/MotionAlarm", firstTopic(xml).c_str());
+}
+
+void test_firstTopic_returns_empty_when_no_topic_element(void) {
+  TEST_ASSERT_EQUAL_STRING("", firstTopic("<wsnt:NotificationMessage></wsnt:NotificationMessage>").c_str());
+}
+
 int main(int argc, char** argv) {
   UNITY_BEGIN();
   RUN_TEST(test_parseProfiles_finds_token_and_name);
@@ -191,5 +239,11 @@ int main(int argc, char** argv) {
   RUN_TEST(test_motionEventFired_false_when_only_an_unrelated_topic_is_true);
   RUN_TEST(test_motionEventFired_true_when_motion_topic_itself_is_true_alongside_another);
   RUN_TEST(test_motionEventFired_false_when_no_motion_topic_present);
+  RUN_TEST(test_topicReportedTrue_true_when_state_is_true);
+  RUN_TEST(test_topicReportedTrue_false_when_state_is_false);
+  RUN_TEST(test_topicReportedTrue_ignores_unrelated_topics_true_value);
+  RUN_TEST(test_firstTopic_extracts_content_with_dialect_attribute);
+  RUN_TEST(test_firstTopic_extracts_content_without_attributes);
+  RUN_TEST(test_firstTopic_returns_empty_when_no_topic_element);
   return UNITY_END();
 }

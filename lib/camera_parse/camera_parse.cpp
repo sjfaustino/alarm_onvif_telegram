@@ -66,8 +66,36 @@ CameraEventClassification classifyCameraEvent(const String& xml) {
   return ev;
 }
 
+bool topicReportedTrue(const String& xml, const String& topicKeyword) {
+  return extractEventStateValue(xml, topicKeyword) == "true";
+}
+
 bool motionEventFired(const String& xml, const CameraEventClassification& ev) {
-  if (ev.motionAlarm && extractEventStateValue(xml, "MotionAlarm") == "true") return true;
-  if (ev.cellMotion && extractEventStateValue(xml, "CellMotionDetector") == "true") return true;
+  if (ev.motionAlarm && topicReportedTrue(xml, "MotionAlarm")) return true;
+  if (ev.cellMotion && topicReportedTrue(xml, "CellMotionDetector")) return true;
   return false;
+}
+
+String firstTopic(const String& xml) {
+  // Deliberately NOT findElementByLocalName (xml_helpers.h): that
+  // function's exact/suffix matching is built for attribute-free elements
+  // (Uri, Address, XAddr) - a real <wsnt:Topic Dialect="...">...</wsnt:Topic>
+  // almost always carries a Dialect attribute per the ONVIF WS-Topics
+  // spec, which breaks both of findElementByLocalName's search strategies
+  // (neither "<Topic>" nor the ":Topic>" suffix appears in an opening tag
+  // that has attributes before its '>'). Anchored the same two ways
+  // (":Topic" or "<Topic") to require an actual tag name, not incidental
+  // text elsewhere.
+  int p = xml.indexOf(":Topic");
+  if (p < 0) p = xml.indexOf("<Topic");
+  if (p < 0) return "";
+
+  int tagEnd = xml.indexOf('>', p);
+  if (tagEnd < 0) return "";
+  int contentEnd = xml.indexOf("</", tagEnd);
+  if (contentEnd < 0 || contentEnd <= tagEnd + 1) return "";
+
+  String result = xml.substring(tagEnd + 1, contentEnd);
+  result.trim();
+  return result;
 }
