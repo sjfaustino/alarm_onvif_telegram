@@ -423,6 +423,29 @@ void test_parseDurationToken_rejects_zero_minutes(void) {
   TEST_ASSERT_FALSE(parseDurationToken("0", now).ok);
 }
 
+// The real bug this cap exists to prevent: telegram.cpp's
+// checkScheduledAlertReverts decides due-ness via the standard millis()-
+// wraparound-safe idiom `(long)(millis() - dueMs) < 0`, correct only for
+// a scheduled delay under 2^31ms (~35791 minutes) - a duration accepted
+// past that point would make the due-check read as "already due" the
+// instant it's scheduled, silently reverting a camera to the opposite of
+// what was requested within one loop() tick. MAX_DURATION_MINUTES (14
+// days) sits comfortably under that hard limit.
+void test_parseDurationToken_accepts_at_max_duration(void) {
+  struct tm now = makeLocalTime(2026, 1, 1, 10, 0, 0);
+  ParsedDuration d = parseDurationToken(String(MAX_DURATION_MINUTES), now);
+  TEST_ASSERT_TRUE(d.ok);
+  TEST_ASSERT_EQUAL_UINT32((uint32_t)MAX_DURATION_MINUTES * 60UL, d.secondsFromNow);
+}
+
+void test_parseDurationToken_rejects_beyond_max_duration(void) {
+  struct tm now = makeLocalTime(2026, 1, 1, 10, 0, 0);
+  TEST_ASSERT_FALSE(parseDurationToken(String(MAX_DURATION_MINUTES + 1), now).ok);
+  // The exact real-world trigger from the bug report: a duration comfortably
+  // past the 2^31ms wraparound boundary (~35791 minutes).
+  TEST_ASSERT_FALSE(parseDurationToken("40000", now).ok);
+}
+
 void test_parseDurationToken_rejects_non_numeric_minutes(void) {
   struct tm now = makeLocalTime(2026, 1, 1, 10, 0, 0);
   TEST_ASSERT_FALSE(parseDurationToken("30m", now).ok);
@@ -547,6 +570,8 @@ int main(int argc, char** argv) {
   RUN_TEST(test_parseTelegramCommand_snap_does_not_split_a_duration);
   RUN_TEST(test_parseDurationToken_plain_minutes);
   RUN_TEST(test_parseDurationToken_plain_minutes_works_without_synced_clock);
+  RUN_TEST(test_parseDurationToken_accepts_at_max_duration);
+  RUN_TEST(test_parseDurationToken_rejects_beyond_max_duration);
   RUN_TEST(test_parseDurationToken_rejects_zero_minutes);
   RUN_TEST(test_parseDurationToken_rejects_non_numeric_minutes);
   RUN_TEST(test_parseDurationToken_rejects_empty_token);

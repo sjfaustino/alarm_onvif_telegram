@@ -288,17 +288,22 @@ static bool sendTelegramMessageTo(const String& chatId, const String& text) {
 // receives a tapped button's callback_data back on the next poll. Skips
 // (and logs) any button whose callback_data would exceed Telegram's
 // 64-byte limit rather than sending a broken button - not expected to
-// trigger with this project's camera names.
+// trigger with this project's camera names, but if `outSkipped` is
+// non-null it's set to how many were dropped, so the caller can still
+// tell the user instead of the gap being silent past the Serial log.
 static bool sendTelegramKeyboardTo(const String& chatId, const String& text,
-                                    const std::vector<std::pair<String, String>>& buttons) {
+                                    const std::vector<std::pair<String, String>>& buttons,
+                                    size_t* outSkipped = nullptr) {
   JsonDocument doc;
   doc["chat_id"] = chatId;
   doc["text"] = text;
   JsonArray rows = doc["reply_markup"]["inline_keyboard"].to<JsonArray>();
+  size_t skipped = 0;
   for (auto& b : buttons) {
     if (b.second.length() > 64) {
       Serial.printf("[Telegram] Skipping button \"%s\" - callback_data too long (%u bytes).\n",
                     b.first.c_str(), (unsigned)b.second.length());
+      skipped++;
       continue;
     }
     JsonArray row = rows.add<JsonArray>();
@@ -306,6 +311,7 @@ static bool sendTelegramKeyboardTo(const String& chatId, const String& text,
     btn["text"] = b.first;
     btn["callback_data"] = b.second;
   }
+  if (outSkipped) *outSkipped = skipped;
   return sendTelegramApiCall("sendMessage", doc);
 }
 
@@ -577,7 +583,19 @@ void checkCameraOnlineStatus(const CameraConfig& cfg, CameraState& st) {
 void checkMotionWatchdog(const CameraConfig& cfg, CameraState& st) {
   if (cfg.motionWatchdogHours == 0) return; // disabled
 
-  unsigned long thresholdMs = (unsigned long)cfg.motionWatchdogHours * 3600000UL;
+  // Clamped here, at the point of use, not just at the dashboard form
+  // (webserver_cameras.cpp clamps to [0,168], but cfg.motionWatchdogHours
+  // is a uint16_t that could in principle hold up to 65535 via a hand-
+  // edited/imported NVS blob that bypasses the form entirely). Real bound,
+  // not a sanity nicety: unsigned long is 32-bit on this platform, and
+  // hours * 3600000UL overflows/wraps above ~1193 hours - an
+  // absurdly-large configured value would silently wrap into a SMALL
+  // threshold instead of a large one, tripping the watchdog almost
+  // immediately instead of almost never, the opposite of what such a
+  // value would be trying to express.
+  uint32_t safeHours = cfg.motionWatchdogHours;
+  if (safeHours > 1000) safeHours = 1000;
+  unsigned long thresholdMs = (unsigned long)safeHours * 3600000UL;
   if (millis() - st.lastMotionMs < thresholdMs) {
     st.motionWatchdogTripped = false; // motion resumed since the last trip - re-arm
     return;
@@ -719,7 +737,8 @@ static AlertTimer resolveAlertTimer(const String& durationText, bool turnOn) {
   if (!dur.ok) {
     result.ok = false;
     result.errorMsg = "Couldn't understand duration \"" + durationText +
-                       "\" - use a number of minutes (e.g. \"30\") or a 24h clock time (e.g. \"23:00\").";
+                       "\" - use a number of minutes (e.g. \"30\", max " + String(MAX_DURATION_MINUTES) +
+                       ") or a 24h clock time (e.g. \"23:00\").";
     return result;
   }
   result.hasTimer = true;
@@ -833,7 +852,18 @@ static void sendCameraPickerKeyboard(const TelegramUser& sender, TelegramCommand
   }
   buttons.push_back({"All", verb + "|all"});
 
-  sendTelegramKeyboardTo(sender.chatId, "Choose a camera for " + commandDisplayName(command) + ":", buttons);
+  size_t skipped = 0;
+  sendTelegramKeyboardTo(sender.chatId, "Choose a camera for " + commandDisplayName(command) + ":", buttons,
+                          &skipped);
+  if (skipped > 0) {
+    // Not expected to trigger with this project's camera names (see
+    // sendTelegramKeyboardTo's own comment) - but if it ever does, the
+    // camera(s) missing from the keyboard above shouldn't be a silent gap
+    // only visible in the Serial log.
+    sendTelegramMessageTo(sender.chatId, String(skipped) + " camera name(s) were too long to show as a "
+                           "button and were left off the list above - use the text command instead (e.g. "
+                           "\"" + commandDisplayName(command) + " <name>\").");
+  }
 }
 
 // lastUpdateId is this poll's running highest update_id, already advanced
@@ -956,9 +986,9 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
           "/reset - reboot the board immediately\n"
           "/help - this message\n\n"
           "<camera> matches by name or prefix; \"all\" applies to every enabled camera.\n"
-          "[duration] is optional: a number of minutes, or a 24h clock time like "
-          "\"23:00\" (next occurrence - tomorrow if that time already passed today). "
-          "Omitted means permanent.\n\n"
+          "[duration] is optional: a number of minutes (max " + String(MAX_DURATION_MINUTES) +
+          "), or a 24h clock time like \"23:00\" (next occurrence - tomorrow if that time already "
+          "passed today). Omitted means permanent.\n\n"
           "Your permissions: canCommand=" + String(sender.canCommand ? "yes" : "no") +
           ", canSnap=" + String(sender.canSnap ? "yes" : "no") +
           ", canReset=" + String(sender.canReset ? "yes" : "no");
@@ -1149,20 +1179,24 @@ static void handleTelegramCallbackQuery(const TelegramUser& sender, const Telegr
   // Exact match, not matchCamerasByPrefix - the button's label was this
   // camera's real name, generated by sendCameraPickerKeyboard itself, not
   // typed by hand, so there's no prefix-ambiguity case to handle here.
+  // Still requires cameras[i].enabled, same as matchCamerasByPrefix does
+  // for the text-command path - the camera list can change between the
+  // picker being sent and a button being tapped, and a stale button for a
+  // camera that's since been disabled must not silently still apply.
   int idx = -1;
   for (size_t i = 0; i < numCameras; i++) {
-    if (cameras[i].name.equalsIgnoreCase(target)) { idx = (int)i; break; }
+    if (cameras[i].enabled && cameras[i].name.equalsIgnoreCase(target)) { idx = (int)i; break; }
   }
   if (idx < 0) {
     // The camera list can change between the picker being sent and a
-    // button being tapped (renamed/deleted, reboot required to apply -
-    // see webserver_cameras.cpp) - handled as a clean "no longer exists"
-    // reply, not a crash.
-    Serial.printf("[Telegram] Callback target camera \"%s\" no longer exists (user \"%s\").\n",
+    // button being tapped (renamed/deleted/disabled, reboot required to
+    // apply - see webserver_cameras.cpp) - handled as a clean "no longer
+    // available" reply, not a crash.
+    Serial.printf("[Telegram] Callback target camera \"%s\" no longer available (user \"%s\").\n",
                   target.c_str(), sender.name.c_str());
-    answerTelegramCallback(upd.callbackQueryId, "That camera no longer exists.");
-    sendTelegramMessageTo(sender.chatId, "\"" + target + "\" no longer exists - it may have been renamed "
-                                          "or deleted since this button was sent.");
+    answerTelegramCallback(upd.callbackQueryId, "That camera is no longer available.");
+    sendTelegramMessageTo(sender.chatId, "\"" + target + "\" is no longer available - it may have been "
+                                          "renamed, deleted, or disabled since this button was sent.");
     return;
   }
 

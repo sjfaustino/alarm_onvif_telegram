@@ -434,6 +434,14 @@ void cameraTaskFn(void* pvParameters) {
   // trips (see CameraState::lastMotionMs's own comment).
   st.lastMotionMs = millis();
 
+  // Same reasoning, same fix, for the timelapse interval check below - a
+  // 0 baseline would make millis()-0 already exceed a short configured
+  // interval for any task whose subscription took longer than that
+  // interval to come up (retries, discovery, or a camera enabled live via
+  // the dashboard hours after boot), firing an unwanted capture the
+  // instant it subscribes instead of waiting a full interval first.
+  st.lastTimelapseMs = millis();
+
   for (;;) {
     // Live-reload from a dashboard edit (webserver_cameras.cpp's save
     // handler, via requestLiveConfigReload) - checked first, every pass,

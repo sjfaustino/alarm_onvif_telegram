@@ -147,9 +147,10 @@ ParsedTelegramCommand parseTelegramCommand(const String& text);
 // (telegram.cpp passes real localtime_r() output - kept as an explicit
 // parameter, not read internally, so this stays deterministic to test).
 // Two accepted forms:
-//  - A plain non-negative integer: minutes from now (e.g. "30" -> 1800s).
-//    Doesn't touch nowLocal at all, so this form works even before NTP
-//    has ever synced.
+//  - A plain non-negative integer: minutes from now (e.g. "30" -> 1800s),
+//    capped at MAX_DURATION_MINUTES (see its own comment for why). Doesn't
+//    touch nowLocal at all, so this form works even before NTP has ever
+//    synced.
 //  - "HH:MM" (24h, always 2+2 digits, e.g. "23:00" or "07:05"): seconds
 //    until the next local wall-clock occurrence of that time - today if
 //    it's still later than nowLocal, tomorrow if that time has already
@@ -167,6 +168,19 @@ struct ParsedDuration {
   bool ok = false;
   unsigned long secondsFromNow = 0; // valid only if ok
 };
+
+// Upper bound for the plain-minutes form of a duration token - 14 days,
+// comfortably generous for an on/off mute timer. Real bound, not just a
+// sanity number: telegram.cpp's checkScheduledAlertReverts decides "is
+// this timer due yet" via `(long)(millis() - dueMs) < 0`, the standard
+// millis()-wraparound-safe idiom - which is only correct for a scheduled
+// delay under 2^31ms (~24.86 days). A duration parsed past that point
+// would make the due-check read as "already due" the moment it's
+// scheduled, silently reverting the camera to the OPPOSITE of what was
+// requested within one loop() tick instead of after the requested delay -
+// a real bug this cap exists to make unreachable, not a defensive
+// nicety.
+static const long MAX_DURATION_MINUTES = 20160; // 14 days
 ParsedDuration parseDurationToken(const String& token, const struct tm& nowLocal);
 
 // The canonical "/word" text for a recognized command, e.g. for

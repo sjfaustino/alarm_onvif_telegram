@@ -7,6 +7,7 @@
 #include <SD.h>
 #include <SPI.h>
 #include <esp_heap_caps.h>
+#include <esp_task_wdt.h> // checkSnapshotStorage() - see its own comment
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 #include <algorithm>
@@ -361,6 +362,19 @@ SnapshotStorageCheckResult checkSnapshotStorage() {
             result.totalBytes += f.size();
           }
           if (f) f.close();
+          // History is unbounded by design (that's the whole point of SD
+          // over the fixed-size PSRAM ring) - this walk can run long
+          // enough on a large card to trip loop()'s 90s task watchdog
+          // (main.cpp's initWatchdog()) when called from there (the
+          // automatic periodic check, sdCheckIntervalHours). A watchdog
+          // panic reboots immediately, without waitForSdIdle()'s
+          // in-flight-operation wait - exactly the "reboot cuts off a FAT
+          // operation mid-write" corruption risk that function exists to
+          // prevent. No-op (harmless) when called from the Storage page's
+          // "check storage" button instead, which runs on PsychicHttp's
+          // own task - never subscribed to this watchdog in the first
+          // place.
+          esp_task_wdt_reset();
         }
       } else {
         camDir.close();
@@ -462,7 +476,20 @@ void appendActivityLogLine(const String& line) {
     f.println(line);
     size_t sz = f.size();
     f.close();
-    if (sz > ACTIVITY_LOG_MAX_BYTES) SD.remove(ACTIVITY_LOG_PATH); // bounded - next append starts fresh
+    if (sz > ACTIVITY_LOG_MAX_BYTES) {
+      // Bounded - wipe and start fresh rather than grow forever. The line
+      // that just crossed the cap gets re-written into the fresh file
+      // (not just discarded with everything before it) - the event it
+      // records already happened, so it belongs at the start of the new
+      // file, not lost entirely just because it was also the one that
+      // tipped the old file over the limit.
+      SD.remove(ACTIVITY_LOG_PATH);
+      File fresh = SD.open(ACTIVITY_LOG_PATH, FILE_APPEND);
+      if (fresh) {
+        fresh.println(line);
+        fresh.close();
+      }
+    }
   }
   xSemaphoreGive(g_sdMutex);
 

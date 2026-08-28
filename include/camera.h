@@ -71,7 +71,10 @@ struct CameraState {
 
   // Same-task-only (see above) - last scheduled timelapse capture
   // (triggerTimelapseCapture, telegram.cpp), independent of the alert
-  // cooldown.
+  // cooldown. Baselined to task-start time in cameraTaskFn (camera.cpp),
+  // same reasoning as lastMotionMs above - a 0 default would make the
+  // first timelapse fire immediately once subscribed, for any task whose
+  // subscription took longer than the configured interval to come up.
   unsigned long lastTimelapseMs = 0;
 
   // Copied once from cfg.user/cfg.pass by resolveCameraCredentials() at

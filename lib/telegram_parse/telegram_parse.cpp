@@ -191,6 +191,12 @@ ParsedDuration parseDurationToken(const String& token, const struct tm& nowLocal
     }
     long minutes = token.toInt();
     if (minutes <= 0) return result; // "0" isn't a valid timer
+    // See MAX_DURATION_MINUTES' own comment - this isn't a sanity clamp,
+    // it's what keeps checkScheduledAlertReverts' millis()-wraparound due-
+    // check correct. Rejected outright (not silently clamped down) so an
+    // absurd request doesn't silently schedule something the sender never
+    // asked for.
+    if (minutes > MAX_DURATION_MINUTES) return result;
     result.ok = true;
     result.secondsFromNow = (unsigned long)minutes * 60UL;
     return result;
