@@ -102,10 +102,12 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
       // task, this render runs on PsychicHttp's task. See
       // CameraState::stateMutex.
       CameraState& st = (*liveStates)[idx];
-      bool subscribed, offline, alertsEnabled, hasAlerted, hasSnapshot;
+      bool subscribed, offline, alertsEnabled, hasAlerted;
       uint32_t lastAlert;
-      unsigned long revertDueMs, snapshotMs;
+      unsigned long revertDueMs;
       bool revertToOn;
+      size_t historyCount;
+      unsigned long historyMs[SNAPSHOT_HISTORY_SIZE];
       {
         CameraStateLock lock(st);
         subscribed = st.subscriptionActive;
@@ -115,8 +117,11 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
         lastAlert = st.lastAlert;
         revertDueMs = st.scheduledRevertDueMs;
         revertToOn = st.scheduledRevertToOn;
-        hasSnapshot = st.lastSnapshotLen > 0;
-        snapshotMs = st.lastSnapshotMs;
+        historyCount = st.snapshotHistoryCount;
+        for (size_t age = 0; age < historyCount; age++) {
+          size_t ringIdx = (st.snapshotHistoryNext + SNAPSHOT_HISTORY_SIZE - 1 - age) % SNAPSHOT_HISTORY_SIZE;
+          historyMs[age] = st.snapshotHistory[ringIdx].ms;
+        }
       }
       liveStatus = subscribed ? "subscribed" : "not subscribed";
       if (offline) liveStatus += " - OFFLINE";
@@ -129,14 +134,20 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
                       formatUptime(revertDueMs - millis());
       }
       if (hasAlerted) lastAlertStr = formatElapsedSince(lastAlert, millis());
-      if (hasSnapshot) {
-        // snapshotMs as a cache-busting query param, not read server-side -
-        // its only job is making the URL a different resource once a new
-        // snapshot is captured, so the browser doesn't keep showing a
-        // stale cached image across page loads.
-        String url = "/cameras/snapshot?name=" + urlEncode(c.name) + "&t=" + String(snapshotMs);
-        previewCell = "<a href=\"" + url + "\" target=\"_blank\">"
-                      "<img src=\"" + url + "\" style=\"max-width:100px;max-height:70px;\" alt=\"preview\"></a>";
+      if (historyCount > 0) {
+        // Newest first (age 0). historyMs[age] as a cache-busting query
+        // param, not read server-side - its only job is making each
+        // thumbnail's URL a different resource once a new snapshot is
+        // captured, so the browser doesn't keep showing a stale cached
+        // image across page loads.
+        previewCell = "";
+        for (size_t age = 0; age < historyCount; age++) {
+          String url = "/cameras/snapshot?name=" + urlEncode(c.name) + "&age=" + String((unsigned)age) +
+                        "&t=" + String(historyMs[age]);
+          previewCell += "<a href=\"" + url + "\" target=\"_blank\">"
+                         "<img src=\"" + url + "\" style=\"max-width:48px;max-height:36px;margin:1px;\" "
+                         "alt=\"preview\"></a>";
+        }
       }
     } else if (!c.enabled) {
       liveStatus = "disabled";

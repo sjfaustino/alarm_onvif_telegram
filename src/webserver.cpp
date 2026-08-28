@@ -357,13 +357,16 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
             .c_str());
   });
 
-  // Serves the cached last-sent snapshot (CameraState::lastSnapshotJpg -
-  // see its own comment) for the Cameras panel's preview thumbnail. Goes
+  // Serves one entry from the cached snapshot history
+  // (CameraState::snapshotHistory - see its own comment) for the Cameras
+  // panel's preview thumbnails. age=0 (default) is the most recent;
+  // higher ages go further back, up to SNAPSHOT_HISTORY_SIZE-1. Goes
   // through the same global middleware chain as every other route
   // (rate-limit, then auth) - deliberately not exempted, since it's
   // exposing camera footage.
   server.on("/cameras/snapshot", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) -> esp_err_t {
     String name = request->getParam("name", "");
+    long age = request->getParam("age", "0").toInt();
     int idx = -1;
     if (g_liveCameras) {
       for (size_t i = 0; i < g_liveCameras->size(); i++) {
@@ -374,22 +377,27 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
       return response->send(404, "text/plain", "No such camera.");
     }
 
-    // Copied out under a short lock rather than sent directly from
-    // st.lastSnapshotJpg - response->send() below does a blocking network
-    // write, and holding stateMutex for that long would stall the owning
-    // camera task (or any other reader) for however long this client
-    // takes to receive the image. See recentEvents() (event_log_store.cpp)
-    // for the same reasoning applied to the Activity log.
+    // Copied out under a short lock rather than sent directly from the
+    // history entry's buffer - response->send() below does a blocking
+    // network write, and holding stateMutex for that long would stall the
+    // owning camera task (or any other reader) for however long this
+    // client takes to receive the image. See recentEvents()
+    // (event_log_store.cpp) for the same reasoning applied to the
+    // Activity log.
     uint8_t* copy = nullptr;
     size_t len = 0;
     {
       CameraStateLock lock((*g_liveStates)[idx]);
-      len = (*g_liveStates)[idx].lastSnapshotLen;
-      if (len > 0) {
-        copy = (uint8_t*)heap_caps_malloc(len, MALLOC_CAP_SPIRAM);
-        if (!copy) copy = (uint8_t*)malloc(len);
-        if (copy) memcpy(copy, (*g_liveStates)[idx].lastSnapshotJpg, len);
-        else len = 0;
+      CameraState& st = (*g_liveStates)[idx];
+      if (age >= 0 && (size_t)age < st.snapshotHistoryCount) {
+        size_t ringIdx = (st.snapshotHistoryNext + SNAPSHOT_HISTORY_SIZE - 1 - (size_t)age) % SNAPSHOT_HISTORY_SIZE;
+        len = st.snapshotHistory[ringIdx].len;
+        if (len > 0) {
+          copy = (uint8_t*)heap_caps_malloc(len, MALLOC_CAP_SPIRAM);
+          if (!copy) copy = (uint8_t*)malloc(len);
+          if (copy) memcpy(copy, st.snapshotHistory[ringIdx].jpg, len);
+          else len = 0;
+        }
       }
     }
     if (!copy || len == 0) {
@@ -494,6 +502,15 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
 
   server.on("/security", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
     return response->send(200, "text/html", renderShell(Tab::Security, "", renderSecurityPanel()).c_str());
+  });
+
+  // Content-Disposition: attachment makes the browser download this as a
+  // file instead of displaying it inline - buildConfigExport() (see its
+  // own comment) never includes a password, so there's nothing here more
+  // sensitive than what the Cameras/Users pages already show.
+  server.on("/export", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) -> esp_err_t {
+    response->addHeader("Content-Disposition", "attachment; filename=\"camera-monitor-config.txt\"");
+    return response->send(200, "text/plain", buildConfigExport().c_str());
   });
 
   server.on("/security/save", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {

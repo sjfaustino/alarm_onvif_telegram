@@ -61,9 +61,10 @@ bool loadAlertEnabledPref(size_t index);
 //   /status                  - list every enabled camera's on/off state
 //   /uptime                  - board uptime
 //   /reset                   - reboot the board immediately
+//   /help                    - this command list, plus the sender's own permissions
 // /on, /off, /status, /uptime require canCommand; /snap requires canSnap;
 // /reset requires canReset (off by default, even for the seeded Admin user
-// - see TelegramUser::canReset).
+// - see TelegramUser::canReset); /help requires none of the above.
 void pollTelegramCommands(const CameraConfig cameras[], CameraState states[], size_t numCameras);
 
 // Flips alertsEnabled back for any camera whose timed /on or /off (see

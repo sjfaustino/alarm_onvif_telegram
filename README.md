@@ -50,9 +50,10 @@ Arduino-ESP32/IDF releases.
   within about a tick of saving) or when the edit enables a previously-disabled
   camera (its task starts live); a brand new camera, or disabling one that's
   currently running, still needs a reboot - the dashboard tells you which
-  happened after you save. The Cameras page also shows a thumbnail of the most
-  recently sent snapshot per camera (motion, tamper, or an on-demand `/snap`) -
-  cached in PSRAM, not re-fetched from the camera just to render the dashboard.
+  happened after you save. The Cameras page also shows a small strip of the most
+  recent snapshots per camera (up to 5, newest first - motion, tamper, or an
+  on-demand `/snap`) - cached in PSRAM, not re-fetched from the camera just to
+  render the dashboard.
 - A small in-memory Activity log (Activity page) - the most recent ~40 events
   (motion alerts, offline/online transitions, on/off changes including timed
   ones, live config reloads, boot) with a relative timestamp, for a quick "what
@@ -68,7 +69,10 @@ Arduino-ESP32/IDF releases.
   automatically reverts to the previous working partition on the next reset;
   `main.cpp`'s `setup()` confirms the new image healthy near the end of its
   own run, not gated on WiFi connecting (a network outage during an update
-  shouldn't roll back otherwise-good firmware).
+  shouldn't roll back otherwise-good firmware). The Firmware page also shows
+  NVS usage (% of entries used) - this project has silently hit NVS's practical
+  size ceiling before (see `camera_store.cpp`'s history), so a visible warning
+  above 80% is meant to catch that before it happens again, not after.
 - Any number of Telegram users, each independently configured for which cameras
   they hear from (specific list or "all, including future ones"), whether they get
   the heartbeat/boot messages, and two independent command permissions: `/on`,
@@ -83,7 +87,9 @@ Arduino-ESP32/IDF releases.
   (`/off D01 30`) or a 24h clock time (`/off D01 23:00`, tomorrow if that time has
   already passed today) - after which the camera automatically reverts to the
   opposite state; omitted entirely is permanent, as before. `/status` reports each
-  camera's ON/OFF state plus OFFLINE and any pending timer.
+  camera's ON/OFF state plus OFFLINE and any pending timer. `/help` replies with
+  the full command list plus the sender's own `canCommand`/`canSnap`/`canReset`
+  permissions, so the syntax doesn't have to be looked up here every time.
 - Dashboard login is opt-in but boots disabled: the board comes up with no password
   and a standing banner nagging you to set one, on every page, until you do. Once
   set (Security page), HTTP Basic Auth is required on every dashboard route,
@@ -91,7 +97,11 @@ Arduino-ESP32/IDF releases.
   reboot needed. Login attempts are rate-limited per source IP (5 consecutive
   failures locks that IP out, starting at 30s and doubling on repeat offenses up
   to 30 minutes) - HTTP Basic Auth has no throttling of its own, so without this
-  a wrong-password guess would otherwise cost an attacker nothing.
+  a wrong-password guess would otherwise cost an attacker nothing. The Security
+  page also has a config export/backup - a plain-text download of every camera,
+  Telegram user, and network setting (no passwords - those still have to be
+  re-entered by hand), for reconstructing the tedious parts of the configuration
+  if NVS is ever erased or a board gets replaced.
 
 ## Hardware
 

@@ -322,20 +322,23 @@ static uint8_t* fetchOneSnapshot(const CameraConfig& cfg, CameraState& st, size_
 }
 
 // Takes ownership of jpg (caller must not free() it after this call) -
-// replaces st's cached last-snapshot buffer (for the dashboard's
-// /cameras/snapshot thumbnail - see CameraState::lastSnapshotJpg's own
-// comment), freeing whichever one was cached before. No extra copy: the
-// buffer being adopted was already fetched for a real send (motion/tamper
-// alert or an on-demand /snap), so this just redirects where it ends up
-// instead of freeing it immediately afterward.
-static void adoptLastSnapshot(CameraState& st, uint8_t* jpg, size_t jpgLen) {
+// pushes it into st's snapshot history ring (for the dashboard's
+// /cameras/snapshot thumbnails - see CameraState::snapshotHistory's own
+// comment), evicting and freeing whichever entry it overwrites. No extra
+// copy: the buffer being pushed was already fetched for a real send
+// (motion/tamper alert or an on-demand /snap), so this just redirects
+// where it ends up instead of freeing it immediately afterward.
+static void pushSnapshotHistory(CameraState& st, uint8_t* jpg, size_t jpgLen) {
   uint8_t* old = nullptr;
   {
     CameraStateLock lock(st);
-    old = st.lastSnapshotJpg;
-    st.lastSnapshotJpg = jpg;
-    st.lastSnapshotLen = jpgLen;
-    st.lastSnapshotMs = millis();
+    size_t idx = st.snapshotHistoryNext;
+    old = st.snapshotHistory[idx].jpg;
+    st.snapshotHistory[idx].jpg = jpg;
+    st.snapshotHistory[idx].len = jpgLen;
+    st.snapshotHistory[idx].ms = millis();
+    st.snapshotHistoryNext = (idx + 1) % SNAPSHOT_HISTORY_SIZE;
+    if (st.snapshotHistoryCount < SNAPSHOT_HISTORY_SIZE) st.snapshotHistoryCount++;
   }
   free(old);
 }
@@ -399,7 +402,7 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st) {
         Serial.printf("[%s] Telegram send to chat %s failed.\n", cfg.name.c_str(), chatId.c_str());
       }
     }
-    adoptLastSnapshot(st, jpg, jpgLen); // takes ownership - do not free(jpg) here
+    pushSnapshotHistory(st, jpg, jpgLen); // takes ownership - do not free(jpg) here
   }
 }
 
@@ -451,7 +454,7 @@ void triggerTamperAlert(const CameraConfig& cfg, CameraState& st) {
         Serial.printf("[%s] Tamper alert photo send to chat %s failed.\n", cfg.name.c_str(), chatId.c_str());
       }
     }
-    adoptLastSnapshot(st, jpg, jpgLen); // takes ownership - do not free(jpg) here
+    pushSnapshotHistory(st, jpg, jpgLen); // takes ownership - do not free(jpg) here
   } else {
     // No snapshot URI yet, or the fetch itself failed - tamper is
     // important enough not to stay silent just because a photo isn't
@@ -586,7 +589,7 @@ static void sendOnDemandSnapshot(const CameraConfig& cfg, CameraState& st, const
   if (!sendTelegramPhotoWithRetry(jpg, jpgLen, caption, chatId)) {
     Serial.printf("[%s] On-demand snapshot send to chat %s failed.\n", cfg.name.c_str(), chatId.c_str());
   }
-  adoptLastSnapshot(st, jpg, jpgLen); // takes ownership - do not free(jpg) here
+  pushSnapshotHistory(st, jpg, jpgLen); // takes ownership - do not free(jpg) here
 }
 
 // Result of resolveAlertTimer below - shared by the single-camera and
@@ -776,6 +779,27 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
     case TelegramCommand::Off:
     case TelegramCommand::Snap:
       break; // handled below - shares the camera-name-matching logic
+
+    case TelegramCommand::Help: {
+      Serial.printf("[Telegram] Replying to user \"%s\" with /help.\n", sender.name.c_str());
+      String msg =
+          "/status - list every camera's alert status\n"
+          "/uptime - board uptime\n"
+          "/on <camera|all> [duration] - resume alerts\n"
+          "/off <camera|all> [duration] - mute alerts\n"
+          "/snap <camera|all> - fresh photo now, ignoring mute/cooldown\n"
+          "/reset - reboot the board immediately\n"
+          "/help - this message\n\n"
+          "<camera> matches by name or prefix; \"all\" applies to every enabled camera.\n"
+          "[duration] is optional: a number of minutes, or a 24h clock time like "
+          "\"23:00\" (next occurrence - tomorrow if that time already passed today). "
+          "Omitted means permanent.\n\n"
+          "Your permissions: canCommand=" + String(sender.canCommand ? "yes" : "no") +
+          ", canSnap=" + String(sender.canSnap ? "yes" : "no") +
+          ", canReset=" + String(sender.canReset ? "yes" : "no");
+      sendTelegramMessageTo(sender.chatId, msg);
+      return;
+    }
 
     case TelegramCommand::Unknown:
       Serial.println("[Telegram] Unrecognized command - ignored.");

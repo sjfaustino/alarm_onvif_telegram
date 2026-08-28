@@ -4,6 +4,21 @@
 #include "config.h"
 #include "camera_store.h" // CameraConfig
 
+// How many recent snapshots (webserver.cpp's /cameras/snapshot route,
+// webserver_cameras.cpp's Preview column) each camera keeps in memory -
+// see CameraState::snapshotHistory's own comment. A handful is enough for
+// a quick "what led up to this" glance without meaningfully denting PSRAM
+// (real snapshots are typically well under 200KB each, per
+// SNAPSHOT_MAX_BYTES_PSRAM's comment in config.h).
+static const size_t SNAPSHOT_HISTORY_SIZE = 5;
+
+// One cached snapshot - see CameraState::snapshotHistory.
+struct SnapshotHistoryEntry {
+  uint8_t* jpg = nullptr;
+  size_t len = 0;
+  unsigned long ms = 0; // millis() when it was captured
+};
+
 struct CameraState {
   String   eventServiceUrl;
   String   mediaServiceUrl;
@@ -61,25 +76,31 @@ struct CameraState {
   // CameraConfig fields, never the task that stages a reload.
   CameraConfig* pendingConfig = nullptr;
 
-  // The most recently sent snapshot's raw JPEG bytes, kept around so the
-  // dashboard can show a thumbnail (webserver.cpp's /cameras/snapshot
-  // route) without triggering a fresh fetch. Owned by this struct -
-  // adoptLastSnapshot (telegram.cpp) takes ownership of an
-  // already-fetched buffer (no extra copy) and frees whatever was here
-  // before. nullptr/0 until the first snapshot is ever sent for this
-  // camera. Heap-allocated (PSRAM via heap_caps_malloc, same as every
-  // other snapshot buffer in this project - see telegram.cpp's
-  // allocateSnapshotBuffer).
-  uint8_t* lastSnapshotJpg = nullptr;
-  size_t   lastSnapshotLen = 0;
-  unsigned long lastSnapshotMs = 0; // millis() when it was captured
+  // A ring of the most recently sent snapshots' raw JPEG bytes (motion,
+  // tamper, or on-demand /snap), so the dashboard can show a small
+  // timeline (webserver.cpp's /cameras/snapshot route, webserver_cameras
+  // .cpp's Preview column) without triggering a fresh fetch. Owned by
+  // this struct - pushSnapshotHistory (telegram.cpp) takes ownership of
+  // an already-fetched buffer (no extra copy), evicting and freeing
+  // whichever entry it overwrites. snapshotHistoryNext is the index the
+  // *next* push writes to (so age-0/newest is always at
+  // (snapshotHistoryNext - 1 + SNAPSHOT_HISTORY_SIZE) %
+  // SNAPSHOT_HISTORY_SIZE); snapshotHistoryCount is how many of the N
+  // slots actually hold a real snapshot yet (< SNAPSHOT_HISTORY_SIZE
+  // until this camera has sent that many). All zero/nullptr until the
+  // first snapshot is ever sent for this camera. Heap-allocated (PSRAM
+  // via heap_caps_malloc, same as every other snapshot buffer in this
+  // project - see telegram.cpp's allocateSnapshotBuffer).
+  SnapshotHistoryEntry snapshotHistory[SNAPSHOT_HISTORY_SIZE];
+  size_t snapshotHistoryNext = 0;
+  size_t snapshotHistoryCount = 0;
 
   // Guards subscriptionActive, isOffline, alertsEnabled, hasAlerted,
   // lastAlert, snapshotUri, user, pass, scheduledRevertDueMs,
-  // scheduledRevertToOn, pendingConfig, lastSnapshotJpg, lastSnapshotLen,
-  // and lastSnapshotMs - the only fields both written by this camera's
-  // own task (camera.cpp) and read from another task (webserver.cpp's
-  // dashboard render and /cameras/snapshot route, main.cpp's heartbeat,
+  // scheduledRevertToOn, pendingConfig, and snapshotHistory (plus its
+  // Next/Count) - the only fields both written by this camera's own task
+  // (camera.cpp) and read from another task (webserver.cpp's dashboard
+  // render and /cameras/snapshot route, main.cpp's heartbeat,
   // telegram.cpp's /on /off /snap command handling and
   // checkScheduledAlertReverts, all on loop()'s task). Every other field
   // is touched only from the owning camera task, so it needs no lock.

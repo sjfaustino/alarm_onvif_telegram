@@ -256,6 +256,12 @@ void test_parseTelegramCommand_snap(void) {
   TEST_ASSERT_EQUAL_STRING("D03", p.cameraName.c_str());
 }
 
+void test_parseTelegramCommand_help(void) {
+  ParsedTelegramCommand p = parseTelegramCommand("/help");
+  TEST_ASSERT_TRUE(TelegramCommand::Help == p.command);
+  TEST_ASSERT_TRUE(TelegramCommandPermission::Unknown == p.requiredPermission);
+}
+
 void test_parseTelegramCommand_is_case_insensitive(void) {
   TEST_ASSERT_TRUE(TelegramCommand::Reset == parseTelegramCommand("/RESET").command);
   TEST_ASSERT_TRUE(TelegramCommand::Snap == parseTelegramCommand("/SNAP D01").command);
@@ -414,6 +420,7 @@ void test_commandDisplayName_every_command(void) {
   TEST_ASSERT_EQUAL_STRING("/on", commandDisplayName(TelegramCommand::On).c_str());
   TEST_ASSERT_EQUAL_STRING("/off", commandDisplayName(TelegramCommand::Off).c_str());
   TEST_ASSERT_EQUAL_STRING("/snap", commandDisplayName(TelegramCommand::Snap).c_str());
+  TEST_ASSERT_EQUAL_STRING("/help", commandDisplayName(TelegramCommand::Help).c_str());
   TEST_ASSERT_EQUAL_STRING("", commandDisplayName(TelegramCommand::Unknown).c_str());
 }
 
@@ -448,6 +455,7 @@ int main(int argc, char** argv) {
   RUN_TEST(test_parseTelegramCommand_on_extracts_and_trims_camera_name);
   RUN_TEST(test_parseTelegramCommand_off);
   RUN_TEST(test_parseTelegramCommand_snap);
+  RUN_TEST(test_parseTelegramCommand_help);
   RUN_TEST(test_parseTelegramCommand_is_case_insensitive);
   RUN_TEST(test_parseTelegramCommand_on_without_target_is_unknown);
   RUN_TEST(test_parseTelegramCommand_unrecognized_text_is_unknown);
