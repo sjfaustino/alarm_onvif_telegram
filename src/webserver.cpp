@@ -473,6 +473,16 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
     return response->send(200, "text/html", renderShell(Tab::Activity, "", renderActivityPanel()).c_str());
   });
 
+  // Same Content-Disposition download pattern as /export below.
+  server.on("/activity/download", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) -> esp_err_t {
+    String content;
+    if (!readActivityLogFile(&content)) {
+      return response->send(200, "text/plain", "SD storage isn't active - nothing persisted to download.");
+    }
+    response->addHeader("Content-Disposition", "attachment; filename=\"activity-log.txt\"");
+    return response->send(200, "text/plain", content.c_str());
+  });
+
   server.on("/firmware", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
     return response->send(200, "text/html", renderShell(Tab::Firmware, "", renderFirmwarePanel()).c_str());
   });

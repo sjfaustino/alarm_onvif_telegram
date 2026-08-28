@@ -97,3 +97,13 @@ static const unsigned long SD_IDLE_WAIT_TIMEOUT_MS = 10000UL;
 // the number field, same idea as CameraConfig's snapshotBurstCount clamp.
 // 720h = 30 days.
 static const uint32_t SD_CHECK_INTERVAL_MAX_HOURS = 720;
+
+// Cap on /activity.log (sd_store.cpp's appendActivityLogLine) - the SD-
+// persisted mirror of the in-memory Activity log (event_log_store.h).
+// Once a line's append would push the file past this, it's deleted and
+// the next append starts fresh - bounded, lossy-by-design, same pragmatic
+// "just wipe and restart" precedent eraseAllSnapshots() already set. Kept
+// small enough that reading the whole file back in one shot (the
+// dashboard's download route) stays a simple one-off String, no
+// streaming needed.
+static const size_t ACTIVITY_LOG_MAX_BYTES = 65536; // 64KB

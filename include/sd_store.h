@@ -189,3 +189,19 @@ QuickSnapshotCheckResult lastBootCheckResult();
 // caller asked for one, and a wedged SD operation is itself a reason to
 // reboot, not a reason to refuse to.
 void waitForSdIdle();
+
+// Appends one line (a timestamp + event text, caller-formatted) to
+// /activity.log on SD - the persisted mirror of the in-memory Activity
+// log (event_log_store.h/logEvent), so the "what happened" history
+// survives a reboot instead of resetting every time. No-op if !sdActive().
+// Bounded by ACTIVITY_LOG_MAX_BYTES (config.h) - see that constant's own
+// comment for the "wipe and restart" behavior once exceeded. Best-effort:
+// a failure just logs to Serial and marks SD unavailable for the session
+// (markSdFailed, same as every other SD I/O failure in this module) -
+// never throws or blocks the caller beyond the write itself.
+void appendActivityLogLine(const String& line);
+
+// Reads the whole (size-capped) /activity.log back into one String, for
+// the dashboard's download route. Returns false (outContent untouched) if
+// !sdActive() or the file doesn't exist/can't be opened.
+bool readActivityLogFile(String* outContent);

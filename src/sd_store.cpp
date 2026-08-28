@@ -447,3 +447,52 @@ void waitForSdIdle() {
                     "proceeding with the reboot anyway.");
   }
 }
+
+static const char* ACTIVITY_LOG_PATH = "/activity.log"; // SD root, sibling to /snapshots - not per-camera
+
+void appendActivityLogLine(const String& line) {
+  if (!sdActive()) return;
+
+  bool failed = false;
+  xSemaphoreTake(g_sdMutex, portMAX_DELAY);
+  File f = SD.open(ACTIVITY_LOG_PATH, FILE_APPEND);
+  if (!f) {
+    failed = true;
+  } else {
+    f.println(line);
+    size_t sz = f.size();
+    f.close();
+    if (sz > ACTIVITY_LOG_MAX_BYTES) SD.remove(ACTIVITY_LOG_PATH); // bounded - next append starts fresh
+  }
+  xSemaphoreGive(g_sdMutex);
+
+  // Released g_sdMutex above BEFORE calling markSdFailed, exactly like
+  // writeSdSnapshot/readSdSnapshot/checkSnapshotStorage - it calls
+  // logEvent+sendTelegramMessage, a blocking network call that must never
+  // happen while holding this mutex, or every other camera's SD write
+  // stalls behind it. Recursion-safe too: markSdFailed sets
+  // g_sdAvailable=false before calling logEvent, so the nested
+  // logEvent -> appendActivityLogLine call immediately no-ops via
+  // sdActive() above - one harmless extra log line, not a loop.
+  if (failed) markSdFailed("activity log append");
+}
+
+bool readActivityLogFile(String* outContent) {
+  if (!sdActive()) return false;
+
+  bool ok = false;
+  xSemaphoreTake(g_sdMutex, portMAX_DELAY);
+  File f = SD.open(ACTIVITY_LOG_PATH, FILE_READ);
+  if (f) {
+    // Bounded by ACTIVITY_LOG_MAX_BYTES (appendActivityLogLine never lets
+    // the file grow past it) - safe as a single in-memory String.
+    String content;
+    content.reserve(f.size());
+    while (f.available()) content += (char)f.read();
+    f.close();
+    *outContent = content;
+    ok = true;
+  }
+  xSemaphoreGive(g_sdMutex);
+  return ok;
+}
