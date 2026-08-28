@@ -107,3 +107,9 @@ static const uint32_t SD_CHECK_INTERVAL_MAX_HOURS = 720;
 // dashboard's download route) stays a simple one-off String, no
 // streaming needed.
 static const size_t ACTIVITY_LOG_MAX_BYTES = 65536; // 64KB
+
+// Caps how many thumbnails the Gallery page (webserver_gallery.cpp) shows
+// per camera in one page load - each one independently re-triggers a full
+// SD directory listing (see that file's own comment on the accepted
+// cost), so this also bounds how many times that happens per load.
+static const size_t GALLERY_PAGE_SIZE = 30;

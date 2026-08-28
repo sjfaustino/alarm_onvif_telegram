@@ -7,6 +7,7 @@
 #include "webserver_maintenance.h"
 #include "webserver_security.h"
 #include "webserver_activity.h"
+#include "webserver_gallery.h"
 #include "webserver_storage.h"
 #include "event_log_store.h"
 #include "snapshot_history.h"
@@ -166,7 +167,7 @@ static RateLimitMiddleware g_rateLimitMiddleware;
 // firmware binary rather than served from a filesystem, on purpose.
 // ============================================================
 
-enum class Tab { None, Network, Cameras, Users, Activity, Firmware, Maintenance, Storage, Security };
+enum class Tab { None, Network, Cameras, Users, Activity, Gallery, Firmware, Maintenance, Storage, Security };
 
 static String renderShell(Tab active, const String& banner, const String& contentHtml) {
   String html;
@@ -223,6 +224,9 @@ static String renderShell(Tab active, const String& banner, const String& conten
   html += "<a href=\"/activity\" class=\"";
   html += (active == Tab::Activity) ? "active" : "";
   html += "\">Activity</a>";
+  html += "<a href=\"/gallery\" class=\"";
+  html += (active == Tab::Gallery) ? "active" : "";
+  html += "\">Gallery</a>";
   html += "<a href=\"#\" class=\"sidebar-parent\" onclick=\"var m=document.getElementById('system-submenu');"
           "m.style.display=(m.style.display==='block')?'none':'block';return false;\">System</a>";
   html += "<div id=\"system-submenu\" class=\"sidebar-submenu\" style=\"display:";
@@ -481,6 +485,13 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
     }
     response->addHeader("Content-Disposition", "attachment; filename=\"activity-log.txt\"");
     return response->send(200, "text/plain", content.c_str());
+  });
+
+  server.on("/gallery", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
+    String camera = request->getParam("camera", "");
+    return response->send(
+        200, "text/html",
+        renderShell(Tab::Gallery, "", renderGalleryPanel(camera, g_liveCameras, g_liveStates)).c_str());
   });
 
   server.on("/firmware", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
