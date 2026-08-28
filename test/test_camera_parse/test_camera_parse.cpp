@@ -90,6 +90,30 @@ void test_extractEventStateValue_scoped_to_correct_notification_block(void) {
   TEST_ASSERT_EQUAL_STRING("true", extractEventStateValue(xml, "MotionAlarm").c_str());
 }
 
+// The bug this exists to catch: PullMessages can return several
+// NotificationMessage blocks for the SAME topic in one batch (MessageLimit
+// is 20 - camera.cpp) - a stale/trailing "false" followed later in the
+// same batch by a genuine new "true". The old implementation only ever
+// looked at the FIRST block mentioning the topic and stopped, so this real
+// motion event would have been silently invisible.
+void test_extractEventStateValue_finds_true_in_a_later_block_for_same_topic(void) {
+  String xml = "<wsnt:NotificationMessage><tt:Topic>MotionAlarm</tt:Topic>"
+               "<tt:SimpleItem Name=\"State\" Value=\"false\"/></wsnt:NotificationMessage>"
+               "<wsnt:NotificationMessage><tt:Topic>MotionAlarm</tt:Topic>"
+               "<tt:SimpleItem Name=\"State\" Value=\"true\"/></wsnt:NotificationMessage>";
+  TEST_ASSERT_EQUAL_STRING("true", extractEventStateValue(xml, "MotionAlarm").c_str());
+}
+
+// Same shape, but every block for the topic agrees "false" - must not
+// spuriously report true just because more than one block was scanned.
+void test_extractEventStateValue_all_blocks_false_stays_false(void) {
+  String xml = "<wsnt:NotificationMessage><tt:Topic>MotionAlarm</tt:Topic>"
+               "<tt:SimpleItem Name=\"State\" Value=\"false\"/></wsnt:NotificationMessage>"
+               "<wsnt:NotificationMessage><tt:Topic>MotionAlarm</tt:Topic>"
+               "<tt:SimpleItem Name=\"State\" Value=\"false\"/></wsnt:NotificationMessage>";
+  TEST_ASSERT_EQUAL_STRING("false", extractEventStateValue(xml, "MotionAlarm").c_str());
+}
+
 void test_extractEventStateValue_missing_topic_returns_empty(void) {
   String xml = "<wsnt:NotificationMessage><tt:Topic>SignalLoss</tt:Topic>"
                "<tt:SimpleItem Name=\"State\" Value=\"true\"/></wsnt:NotificationMessage>";
@@ -231,6 +255,8 @@ int main(int argc, char** argv) {
   RUN_TEST(test_extractEventStateValue_finds_State_value);
   RUN_TEST(test_extractEventStateValue_recognizes_IsMotion_name);
   RUN_TEST(test_extractEventStateValue_scoped_to_correct_notification_block);
+  RUN_TEST(test_extractEventStateValue_finds_true_in_a_later_block_for_same_topic);
+  RUN_TEST(test_extractEventStateValue_all_blocks_false_stays_false);
   RUN_TEST(test_extractEventStateValue_missing_topic_returns_empty);
   RUN_TEST(test_classifyCameraEvent_detects_motion_alarm);
   RUN_TEST(test_classifyCameraEvent_value_false_is_not_anyTrue);

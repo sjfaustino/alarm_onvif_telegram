@@ -40,12 +40,22 @@ bool telegramCAConfigured() {
 // allocateSnapshotBuffer's fallback cap if a PSRAM allocation itself fails.
 // ============================================================
 
-// Allocates `cap` bytes for a snapshot buffer, preferring PSRAM and
-// falling back to internal RAM only if that allocation itself fails.
-static uint8_t* allocateSnapshotBuffer(size_t cap) {
+// Allocates up to `cap` bytes for a snapshot buffer, preferring PSRAM.
+// If that allocation itself fails, falls back to internal RAM - but only
+// up to SNAPSHOT_MAX_BYTES, not the original (possibly much larger,
+// PSRAM-sized) `cap`: internal RAM is scarce on this board (typically a
+// few hundred KB free at best once WiFi/TLS have their own allocations),
+// so retrying the exact size that just failed on PSRAM would almost
+// certainly just fail again immediately, silently defeating this
+// fallback's whole purpose. `cap` is updated in place to whatever was
+// actually allocated, so every caller reads/writes at most that many
+// bytes into the buffer, never the original (now too-large) request.
+static uint8_t* allocateSnapshotBuffer(size_t& cap) {
   uint8_t* buf = (uint8_t*)heap_caps_malloc(cap, MALLOC_CAP_SPIRAM);
-  if (!buf) buf = (uint8_t*)malloc(cap);
-  return buf;
+  if (buf) return buf;
+
+  if (cap > SNAPSHOT_MAX_BYTES) cap = SNAPSHOT_MAX_BYTES;
+  return (uint8_t*)malloc(cap);
 }
 
 // WiFiClientSecure::write() can do a partial write under TLS, especially on
@@ -99,9 +109,21 @@ static size_t readSomeBytes(HTTPClient& http, NetworkClient* stream, uint8_t* bu
 // see allocateSnapshotBuffer above) up to `cap` bytes. Used both as the
 // primary path on PSRAM boards and as the no-Content-Length fallback on
 // non-PSRAM boards. Caller must free() the returned buffer.
+//
+// Reads via http.getStreamPtr() - the RAW underlying socket, bypassing
+// HTTPClient's own response-body decoding entirely (that only happens
+// inside writeToStream()/getString(), verified against this project's
+// vendored HTTPClient.cpp). That's fine for the ordinary case (a
+// Content-Length-known body, or a no-Content-Length body simply delimited
+// by the connection closing), which is why this stays the fast, cap-
+// bounded default path - but it must never be used for a
+// Transfer-Encoding: chunked response, where the "bytes" read this way
+// would actually be raw chunk-size/CRLF framing interleaved with the real
+// data, corrupting the JPEG. See fetchSnapshotBufferedChunked below for
+// that case - fetchOneSnapshot is responsible for picking the right one.
 static uint8_t* fetchSnapshotBuffered(HTTPClient& http, size_t& outLen, size_t cap) {
   outLen = 0;
-  uint8_t* buf = allocateSnapshotBuffer(cap);
+  uint8_t* buf = allocateSnapshotBuffer(cap); // cap may shrink here (internal-RAM fallback) - read that back below
   if (!buf) {
     Serial.println("Snapshot buffer allocation failed.");
     return nullptr;
@@ -112,6 +134,35 @@ static uint8_t* fetchSnapshotBuffered(HTTPClient& http, size_t& outLen, size_t c
     return nullptr;
   }
   outLen = total;
+  return buf;
+}
+
+// Buffers a chunked-transfer-encoded snapshot via HTTPClient::getString(),
+// which - unlike fetchSnapshotBuffered's raw stream reads above - does
+// correctly decode chunk framing internally. Only used when the response
+// actually IS chunked (fetchOneSnapshot checks the real header, not just
+// an absent Content-Length, which could just as easily mean "connection-
+// close-delimited" instead). getString() reads the whole body into one
+// String regardless of size, so it's capped here (not truly streamed/
+// bounded during the read itself) - acceptable for a snapshot from a
+// camera this project's user configured and trusts, not arbitrary/
+// adversarial input. Caller must free() the returned buffer.
+static uint8_t* fetchSnapshotBufferedChunked(HTTPClient& http, size_t& outLen) {
+  outLen = 0;
+  String body = http.getString();
+  size_t len = body.length();
+  if (len == 0) return nullptr;
+  if (len > SNAPSHOT_MAX_BYTES_PSRAM) {
+    Serial.printf("Chunked snapshot body too large (%u bytes) - discarding.\n", (unsigned)len);
+    return nullptr;
+  }
+  uint8_t* buf = allocateSnapshotBuffer(len);
+  if (!buf) {
+    Serial.println("Snapshot buffer allocation failed (chunked path).");
+    return nullptr;
+  }
+  memcpy(buf, body.c_str(), len); // length-bounded, not strlen-based - safe for binary content
+  outLen = len;
   return buf;
 }
 
@@ -368,6 +419,12 @@ static uint8_t* fetchOneSnapshot(const CameraConfig& cfg, CameraState& st, size_
   http.begin(snapshotUri);
   http.setAuthorization(user, pass);
   http.setTimeout(HTTP_TIMEOUT_MS);
+  // Registered so http.header() can actually see it after GET() - without
+  // collectHeaders(), HTTPClient parses Transfer-Encoding internally for
+  // its own use but doesn't expose it through header() at all. See
+  // fetchSnapshotBuffered's own comment for why detecting this matters.
+  static const char* kCollectedHeaders[] = {"Transfer-Encoding"};
+  http.collectHeaders(kCollectedHeaders, 1);
 
   int code = http.GET();
   if (code != 200) {
@@ -385,8 +442,12 @@ static uint8_t* fetchOneSnapshot(const CameraConfig& cfg, CameraState& st, size_
   // followed fail outright).
   size_t cap = (len > 0) ? (size_t)len : SNAPSHOT_MAX_BYTES_PSRAM;
 
+  String transferEncoding = http.header("Transfer-Encoding");
+  transferEncoding.toLowerCase();
+
   size_t jpgLen = 0;
-  uint8_t* jpg = fetchSnapshotBuffered(http, jpgLen, cap);
+  uint8_t* jpg = (transferEncoding.indexOf("chunked") >= 0) ? fetchSnapshotBufferedChunked(http, jpgLen)
+                                                              : fetchSnapshotBuffered(http, jpgLen, cap);
   http.end();
   if (!jpg) {
     Serial.printf("[%s] Snapshot fetch failed.\n", cfg.name.c_str());

@@ -17,6 +17,11 @@ static const unsigned long PULL_INTERVAL_MS         = 2000UL;        // per-came
 static const unsigned long SUBSCRIPTION_LIFETIME_MS = 4UL * 60UL * 1000UL;
 static const unsigned long RENEW_MARGIN_MS          = 60UL * 1000UL;
 static const unsigned long RETRY_INTERVAL_MS        = 10000UL;
+// See CameraState::pullAmbiguousStreak's own comment - how many
+// consecutive genuinely-unrecognized PullMessages responses in a row
+// force a resubscribe. At PULL_INTERVAL_MS's 2s cadence, 5 is ~10s of
+// tolerance for a transient hiccup before treating the pullpoint as dead.
+static const uint8_t        PULL_MESSAGES_AMBIGUOUS_LIMIT = 5;
 static const uint16_t      HTTP_TIMEOUT_MS          = 10000;
 static const unsigned long HEARTBEAT_INTERVAL_MS    = 6UL * 60UL * 60UL * 1000UL; // liveness ping cadence
 static const unsigned long TELEGRAM_COMMAND_POLL_MS = 5000UL;        // /on, /off, /status polling cadence

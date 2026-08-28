@@ -118,14 +118,16 @@ bool saveUserSubmission(const TelegramUser& user, const String& originalName, St
 
   if (originalName.length() == 0) {
     if (!addTelegramUser(user)) {
-      banner = "A Telegram user named \"" + htmlEscape(user.name) + "\" already exists - user not added.";
+      banner = "Could not add \"" + htmlEscape(user.name) + "\" - a different user already uses that name "
+               "or that Chat ID.";
       return false;
     }
     return true;
   }
 
   if (!updateTelegramUser(originalName, user)) {
-    banner = "Could not save \"" + htmlEscape(user.name) + "\" - a different user already uses that name.";
+    banner = "Could not save \"" + htmlEscape(user.name) + "\" - a different user already uses that name "
+             "or that Chat ID.";
     return false;
   }
   return true;

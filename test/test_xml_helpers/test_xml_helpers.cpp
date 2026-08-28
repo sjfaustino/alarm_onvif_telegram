@@ -136,6 +136,23 @@ void test_responseHasFault_false_on_normal_response(void) {
   TEST_ASSERT_FALSE(responseHasFault("<s:Envelope><s:Body><tds:GetCapabilitiesResponse/></s:Body></s:Envelope>"));
 }
 
+// A SOAP server declaring the envelope as the default (unprefixed)
+// namespace emits a bare <Fault>, not "<s:Fault"/":Fault" - the bug this
+// exists to catch: cameraPullMessages (camera.cpp) never resets
+// subscriptionActive on a response that's neither PullMessagesResponse
+// nor a detected fault, so an undetected bare Fault for an expired
+// subscription would wedge that camera's polling loop forever.
+void test_responseHasFault_detects_unprefixed_default_namespace_fault(void) {
+  TEST_ASSERT_TRUE(responseHasFault("<Envelope><Body><Fault><faultcode>x</faultcode></Fault></Body></Envelope>"));
+  TEST_ASSERT_TRUE(responseHasFault("<Envelope><Body><Fault/></Body></Envelope>"));
+}
+
+// Must not false-positive on an unrelated element that merely starts with
+// "Fault" - only an actual "Fault" tag (boundary right after it) counts.
+void test_responseHasFault_no_false_positive_on_similarly_named_element(void) {
+  TEST_ASSERT_FALSE(responseHasFault("<Envelope><Body><FaultInfo>not a fault</FaultInfo></Body></Envelope>"));
+}
+
 int main(int argc, char** argv) {
   UNITY_BEGIN();
   RUN_TEST(test_xmlEscape_escapes_all_five_entities);
@@ -158,5 +175,7 @@ int main(int argc, char** argv) {
   RUN_TEST(test_findAttributeInTag_missing_attribute_returns_empty);
   RUN_TEST(test_responseHasFault_detects_soap_fault);
   RUN_TEST(test_responseHasFault_false_on_normal_response);
+  RUN_TEST(test_responseHasFault_detects_unprefixed_default_namespace_fault);
+  RUN_TEST(test_responseHasFault_no_false_positive_on_similarly_named_element);
   return UNITY_END();
 }

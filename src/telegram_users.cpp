@@ -1,8 +1,10 @@
 #include "telegram_users.h"
 #include "telegram_user_serialize.h"
+#include "telegram_parse.h" // chatIdMatches - see addTelegramUser/updateTelegramUser's own comment
 #include "nvs_chunk.h"
 #include "secrets.h"
 #include <Preferences.h>
+#include <cstdlib> // strtoll
 
 static const char* NVS_NAMESPACE  = "tgusers";
 // Legacy single-key format - see camera_store.cpp's identical
@@ -149,8 +151,17 @@ bool saveTelegramUsers(const std::vector<TelegramUser>& users) {
 
 bool addTelegramUser(const TelegramUser& user) {
   std::vector<TelegramUser> users = loadTelegramUsers();
+  int64_t newChatId = strtoll(user.chatId.c_str(), nullptr, 10);
   for (auto& u : users) {
     if (u.name.equalsIgnoreCase(user.name)) return false;
+    // Two different-named entries sharing one chat ID would double-send
+    // every alert to that physical Telegram account (triggerMotionAlert's
+    // recipient fan-out doesn't de-dup by chat ID) and make command
+    // permission resolution non-deterministic (pollTelegramCommands'
+    // sender lookup is first-match-wins, so whichever record loads first
+    // silently decides that account's canCommand/canSnap/canReset) -
+    // reject the add outright instead of silently allowing either.
+    if (chatIdMatches(u.chatId, newChatId)) return false;
   }
   users.push_back(user);
   return saveTelegramUsers(users);
@@ -175,8 +186,12 @@ bool updateTelegramUser(const String& originalName, const TelegramUser& user) {
   }
   if (idx < 0) return false;
 
+  int64_t newChatId = strtoll(user.chatId.c_str(), nullptr, 10);
   for (size_t i = 0; i < users.size(); i++) {
-    if ((int)i != idx && users[i].name.equalsIgnoreCase(user.name)) return false;
+    if ((int)i == idx) continue;
+    if (users[i].name.equalsIgnoreCase(user.name)) return false;
+    // Same reasoning as addTelegramUser's own comment.
+    if (chatIdMatches(users[i].chatId, newChatId)) return false;
   }
 
   users[idx] = user;

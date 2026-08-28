@@ -30,30 +30,64 @@ std::vector<ProfileInfo> parseProfiles(const String& xml) {
   return profiles;
 }
 
+// PullMessages is called with MessageLimit=20 (camera.cpp), so a single
+// response routinely batches several <wsnt:NotificationMessage> blocks -
+// including, on some cameras, more than one for the SAME topic in one
+// batch (e.g. a stale/trailing "false" from before this poll followed by
+// a genuine new "true", or plain debounce flicker). The original version
+// of this function only ever inspected the FIRST block mentioning
+// topicKeyword and stopped there - a real motion event reported in a
+// later block was silently invisible whenever an earlier block in the
+// same batch happened to mention the same topic as false. Now scans every
+// block that mentions the topic and returns "true" as soon as any of them
+// report it - a topic firing true anywhere in the batch counts as fired,
+// full stop, regardless of what an earlier or later block in the same
+// batch said. Falls back to the last non-empty value found if none was
+// "true" (preserves the original single-block behavior/return value when
+// there's genuinely only one relevant block, or every block agrees).
 String extractEventStateValue(const String& xml, const String& topicKeyword) {
-  int topicPos = xml.indexOf(topicKeyword);
-  if (topicPos < 0) return "";
-  int blockEnd = xml.indexOf("</wsnt:NotificationMessage>", topicPos);
-  if (blockEnd < 0) blockEnd = xml.length();
+  String lastValue;
+  int searchFrom = 0;
+  while (true) {
+    int topicPos = xml.indexOf(topicKeyword, searchFrom);
+    if (topicPos < 0) break;
 
-  int p = xml.indexOf("Name=\"State\"", topicPos);
-  if (p < 0 || p >= blockEnd) p = xml.indexOf("Name=\"state\"", topicPos);
-  if (p < 0 || p >= blockEnd) p = xml.indexOf("Name=\"IsMotion\"", topicPos);
-  if (p < 0 || p >= blockEnd) return "";
+    int blockEnd = xml.indexOf("</wsnt:NotificationMessage>", topicPos);
+    if (blockEnd < 0) blockEnd = xml.length();
 
-  int valuePos = xml.indexOf("Value=", p);
-  if (valuePos < 0 || valuePos >= blockEnd) return "";
-  int start = valuePos + strlen("Value=");
-  if (start >= (int)xml.length()) return "";
-  char quote = xml[start];
-  if (quote != '"' && quote != '\'') return "";
-  start++;
-  int end = xml.indexOf(quote, start);
-  if (end < 0) return "";
+    int p = xml.indexOf("Name=\"State\"", topicPos);
+    if (p < 0 || p >= blockEnd) p = xml.indexOf("Name=\"state\"", topicPos);
+    if (p < 0 || p >= blockEnd) p = xml.indexOf("Name=\"IsMotion\"", topicPos);
 
-  String state = xml.substring(start, end);
-  state.trim();
-  return state;
+    if (p >= 0 && p < blockEnd) {
+      int valuePos = xml.indexOf("Value=", p);
+      if (valuePos >= 0 && valuePos < blockEnd) {
+        int start = valuePos + strlen("Value=");
+        if (start < (int)xml.length()) {
+          char quote = xml[start];
+          if (quote == '"' || quote == '\'') {
+            start++;
+            int end = xml.indexOf(quote, start);
+            if (end >= 0) {
+              String state = xml.substring(start, end);
+              state.trim();
+              if (state == "true") return "true"; // any block reporting true wins outright
+              lastValue = state;
+            }
+          }
+        }
+      }
+    }
+
+    // Advance to (at least) this block's end so the next iteration looks
+    // at a later block, not the same occurrence again - blockEnd rather
+    // than topicPos+1 skips the whole block in one step when it's found;
+    // falls back to a plain +1 only if this block's closing tag was never
+    // found at all (already exhausted the document via blockEnd==length()
+    // in that case, so the next indexOf simply returns -1 and the loop ends).
+    searchFrom = (blockEnd > topicPos) ? blockEnd : topicPos + 1;
+  }
+  return lastValue;
 }
 
 CameraEventClassification classifyCameraEvent(const String& xml) {

@@ -331,6 +331,7 @@ bool cameraPullMessages(const CameraConfig& cfg, CameraState& st) {
   if (response.length() == 0) return false;
 
   if (response.indexOf("PullMessagesResponse") >= 0) {
+    st.pullAmbiguousStreak = 0;
     parseEvents(cfg, st, response);
     return true;
   }
@@ -339,6 +340,24 @@ bool cameraPullMessages(const CameraConfig& cfg, CameraState& st) {
     Serial.printf("[%s] PullPoint gone, will resubscribe.\n", cfg.name.c_str());
     { CameraStateLock lock(st); st.subscriptionActive = false; }
     st.pullPointUrl = "";
+    st.pullAmbiguousStreak = 0;
+    return false;
+  }
+
+  // Neither a recognized success nor a recognized fault - a genuinely
+  // malformed/unexpected response body (response.length()==0, the
+  // transient network-issue case, is already handled above and never
+  // reaches here). See pullAmbiguousStreak's own comment (camera.h):
+  // without this counter, this camera's task would just keep retrying
+  // the same possibly-dead pullPointUrl every PULL_INTERVAL_MS forever,
+  // with no path back to a working subscription.
+  if (++st.pullAmbiguousStreak >= PULL_MESSAGES_AMBIGUOUS_LIMIT) {
+    Serial.printf("[%s] PullMessages returned an unrecognized response %u time(s) in a row - "
+                  "treating the subscription as dead, will resubscribe.\n",
+                  cfg.name.c_str(), (unsigned)st.pullAmbiguousStreak);
+    { CameraStateLock lock(st); st.subscriptionActive = false; }
+    st.pullPointUrl = "";
+    st.pullAmbiguousStreak = 0;
   }
   return false;
 }

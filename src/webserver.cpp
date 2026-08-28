@@ -505,6 +505,20 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
       g_otaError = false;
       g_otaErrorMsg = "";
       Serial.printf("[Firmware] Upload started: %s\n", filename.c_str());
+      // A dropped/failed connection mid-upload never delivers last=true
+      // to this callback (the multipart parser never sees a final chunk),
+      // so neither Update.end() nor Update.abort() below would ever run
+      // for that attempt - Update.begin() then refuses every subsequent
+      // attempt (it's still "running" from the abandoned one) with a
+      // generic error, permanently blocking firmware updates until a
+      // physical reboot. index==0 only ever fires once per upload, so
+      // isRunning()==true here can only mean state left over from an
+      // earlier, incomplete attempt - clean it up before starting fresh.
+      if (Update.isRunning()) {
+        Serial.println("[Firmware] A previous upload never finished (dropped connection?) - "
+                        "aborting it before starting this one.");
+        Update.abort();
+      }
       if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
         g_otaError = true;
         g_otaErrorMsg = Update.errorString();

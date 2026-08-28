@@ -34,6 +34,15 @@ struct CameraState {
   // (doubles per failure, capped; reset to 0 on success) - see cameraTaskFn.
   uint8_t retryStreak     = 0;
   unsigned long retryDelayMs = 0;
+
+  // Consecutive PullMessages responses that were neither a recognized
+  // success nor a recognized SOAP fault (genuinely malformed/unexpected
+  // body - see cameraPullMessages, camera.cpp). Reset to 0 on any
+  // recognized outcome, success or fault. PULL_MESSAGES_AMBIGUOUS_LIMIT
+  // consecutive occurrences forces a resubscribe rather than retrying the
+  // same possibly-dead pullPointUrl forever with no path back to a
+  // working subscription - one occurrence alone is tolerated as noise.
+  uint8_t pullAmbiguousStreak = 0;
   uint32_t lastAlert      = 0;
   bool     hasAlerted     = false; // disambiguates lastAlert==0 from "alerted at boot" (see triggerMotionAlert)
 

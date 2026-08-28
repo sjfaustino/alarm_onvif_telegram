@@ -103,5 +103,21 @@ String findAttributeValue(const String& xml, const String& elementName, const St
 }
 
 bool responseHasFault(const String& response) {
-  return response.indexOf("<s:Fault") >= 0 || response.indexOf(":Fault") >= 0;
+  if (response.indexOf("<s:Fault") >= 0 || response.indexOf(":Fault") >= 0) return true;
+
+  // Both checks above require a colon immediately before "Fault" (a
+  // namespace-prefixed element - "s:Fault", "soap:Fault", "env:Fault", ...).
+  // A SOAP server declaring the envelope as the DEFAULT (unprefixed)
+  // namespace would instead emit a bare <Fault>, which neither check
+  // matches - this loop catches that case too. Requires a tag-boundary
+  // character right after "Fault" (>, whitespace, or /) so a hypothetical
+  // unrelated element merely starting with "Fault" (e.g. "FaultInfo")
+  // doesn't produce a false positive.
+  int p = response.indexOf("<Fault");
+  while (p >= 0) {
+    char next = (p + 6 < (int)response.length()) ? response[p + 6] : '\0';
+    if (next == '>' || next == ' ' || next == '\t' || next == '\n' || next == '\r' || next == '/') return true;
+    p = response.indexOf("<Fault", p + 1);
+  }
+  return false;
 }
