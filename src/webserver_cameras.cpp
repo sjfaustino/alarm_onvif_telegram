@@ -96,10 +96,10 @@ static String renderCameraForm(const CameraConfig& v, bool isEdit) {
   html += "<label>Preferred profile keyword (optional, e.g. \"sub\")"
           "<input type=\"text\" name=\"preferredProfileKeyword\" value=\"" +
           htmlEscape(v.preferredProfileKeyword) + "\"></label>";
-  html += "<label>Alert cooldown, seconds (minimum time between Telegram alerts for this camera)"
+  html += "<label>Alert cooldown, seconds, max 86400 (minimum time between Telegram alerts for this camera)"
           "<input type=\"text\" name=\"alertCooldownSec\" value=\"" + String(v.alertCooldownMs / 1000) +
           "\"></label>";
-  html += "<label>Offline threshold, minutes (no response for this long -> OFFLINE alert)"
+  html += "<label>Offline threshold, minutes, max 10080 (no response for this long -> OFFLINE alert)"
           "<input type=\"text\" name=\"offlineThresholdMin\" value=\"" + String(v.offlineThresholdMs / 60000UL) +
           "\"></label>";
   html += "<label>Snapshots per alert (1-10) - how many consecutive photos to send when motion "
@@ -242,9 +242,19 @@ CameraConfig parseCameraForm(PsychicRequest* request) {
   long cooldownSec = request->getParam("alertCooldownSec", "30").toInt();
   // A blank/zero/negative field shouldn't produce a 0ms cooldown (alerts on
   // every single poll) - fall back to CameraConfig's own default instead.
+  // Upper-capped at 24h (86400s): unsigned long is 32-bit on this platform,
+  // and *1000UL overflows/wraps above ~4,294,967s - a fat-fingered huge
+  // cooldown would otherwise silently wrap into a tiny one (alert spam
+  // instead of the throttling actually requested), same overflow class
+  // motionWatchdogHours/timelapseIntervalMin below are already clamped
+  // against.
+  if (cooldownSec > 86400) cooldownSec = 86400;
   c.alertCooldownMs = cooldownSec > 0 ? (unsigned long)cooldownSec * 1000UL : CameraConfig().alertCooldownMs;
 
   long offlineMin = request->getParam("offlineThresholdMin", "5").toInt();
+  // Upper-capped at 7 days (10080min), same overflow reasoning as above -
+  // *60000UL wraps above ~71583 minutes.
+  if (offlineMin > 10080) offlineMin = 10080;
   c.offlineThresholdMs = offlineMin > 0 ? (unsigned long)offlineMin * 60000UL : CameraConfig().offlineThresholdMs;
 
   long burstCount = request->getParam("snapshotBurstCount", "1").toInt();

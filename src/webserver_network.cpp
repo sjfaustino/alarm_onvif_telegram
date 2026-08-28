@@ -75,7 +75,7 @@ String renderNetworkPanel() {
   html += "<label style=\"margin-top:20px;\">NTP server (always uses UDP port 123 - not configurable "
           "on this platform)<input type=\"text\" name=\"ntpServer\" value=\"" +
           htmlEscape(creds.ntpServer) + "\" required></label>";
-  html += "<label>Resync interval, minutes<input type=\"text\" name=\"ntpSyncMinutes\" value=\"" +
+  html += "<label>Resync interval, minutes, max 43200<input type=\"text\" name=\"ntpSyncMinutes\" value=\"" +
           String(creds.ntpSyncIntervalMs / 60000UL) + "\"></label>";
 
   html += "<label style=\"margin-top:20px;\">POSIX TZ string for local time in Telegram alert photo "
@@ -167,6 +167,11 @@ void handleSaveNetwork(PsychicRequest* request, String& banner) {
   if (ntpServer.length() > 0) creds.ntpServer = ntpServer;
 
   long ntpMinutes = request->getParam("ntpSyncMinutes", "60").toInt();
+  // Upper-capped at 30 days (43200min): unsigned long is 32-bit on this
+  // platform, and *60000UL wraps above ~71583 minutes - a fat-fingered
+  // huge resync interval would otherwise silently wrap into a tiny one,
+  // turning "resync rarely" into a resync storm against the NTP server.
+  if (ntpMinutes > 43200) ntpMinutes = 43200;
   if (ntpMinutes > 0) creds.ntpSyncIntervalMs = (unsigned long)ntpMinutes * 60000UL;
   // else keep whatever was already stored - a blank/zero/negative field
   // shouldn't produce a 0ms (hammer-the-server) resync interval.

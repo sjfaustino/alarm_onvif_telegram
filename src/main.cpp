@@ -510,8 +510,17 @@ void loop() {
   // (see its own comment), so a large history can briefly delay a camera's
   // own SD write while this runs - the tradeoff of running it unattended at
   // all, same one the manual "check storage" button always had.
-  if (WiFi.status() == WL_CONNECTED && sdActive() && sdCheckIntervalHours() > 0 &&
-      millis() - lastSdCheckMs >= sdCheckIntervalHours() * 3600000UL) {
+  // Clamped here, at the point of use, not just at the dashboard save
+  // (webserver.cpp clamps to SD_CHECK_INTERVAL_MAX_HOURS=720) - the
+  // NVS-load path (loadSdSettings) applies no clamp of its own, so a
+  // hand-edited/imported blob could still hold a value large enough to
+  // overflow the *3600000UL multiply (32-bit unsigned long wraps above
+  // ~1193 hours), same overflow class already fixed for
+  // motionWatchdogHours (telegram.cpp's checkMotionWatchdog).
+  uint32_t safeSdCheckHours = sdCheckIntervalHours();
+  if (safeSdCheckHours > SD_CHECK_INTERVAL_MAX_HOURS) safeSdCheckHours = SD_CHECK_INTERVAL_MAX_HOURS;
+  if (WiFi.status() == WL_CONNECTED && sdActive() && safeSdCheckHours > 0 &&
+      millis() - lastSdCheckMs >= safeSdCheckHours * 3600000UL) {
     lastSdCheckMs = millis();
     checkSnapshotStorage();
   }

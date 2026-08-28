@@ -237,6 +237,16 @@ bool writeSdSnapshot(const CameraConfig& cfg, uint8_t* jpg, size_t jpgLen) {
       size_t written = f.write(jpg, jpgLen);
       f.close();
       ok = (written == jpgLen);
+      // A short write (card nearly full, power dip, bus glitch) leaves a
+      // truncated file that would otherwise sit in this camera's
+      // directory indistinguishable from a real snapshot - listDirFiles/
+      // sdSnapshotCount count it, and it's a nonzero size so neither
+      // checkSnapshotStorage nor checkNewestSnapshots' readability check
+      // (which only catches f.size()==0) would ever flag it. It would go
+      // on to get served as a corrupted JPEG to a /snap or Gallery
+      // request the next time SD is active. Remove it rather than leave
+      // it for a future boot to discover.
+      if (!ok) SD.remove(filePath);
     } else {
       ok = false;
     }
@@ -488,6 +498,12 @@ void appendActivityLogLine(const String& line) {
       if (fresh) {
         fresh.println(line);
         fresh.close();
+      } else {
+        // Reopen failed right after a successful remove - the log file is
+        // now simply gone, and without this, `failed` would stay false
+        // (only the FIRST open above sets it), so markSdFailed below would
+        // never fire and this loss would have no trace anywhere.
+        failed = true;
       }
     }
   }

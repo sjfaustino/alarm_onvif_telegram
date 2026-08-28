@@ -6,6 +6,26 @@
 #include "network_store.h"
 #include "sd_store.h"
 
+// snapshotUriOverride (buildConfigExport, below) is free text, not
+// necessarily using the intended {USER}/{PASS} placeholder pattern - a
+// user could instead type literal embedded URL credentials
+// ("http://admin:realpass@host/snap.jpg"). This function's own stated
+// guarantee ("Password: (not exported...)") only actually holds if that
+// case is caught too, not just the placeholder path - strips any
+// "user[:pass]@" authority-section credentials before export. A bare '@'
+// that's actually part of the URL's path (not the authority section, i.e.
+// appears after the first '/' following the scheme) is left untouched.
+static String redactUrlCredentials(const String& url) {
+  int schemeEnd = url.indexOf("://");
+  if (schemeEnd < 0) return url;
+  int authorityStart = schemeEnd + 3;
+  int at = url.indexOf('@', authorityStart);
+  if (at < 0) return url;
+  int nextSlash = url.indexOf('/', authorityStart);
+  if (nextSlash >= 0 && at > nextSlash) return url; // '@' is in the path, not credentials
+  return url.substring(0, authorityStart) + "(redacted)@" + url.substring(at + 1);
+}
+
 String renderSecurityPanel() {
   DashboardAuth auth = loadDashboardAuth();
   bool configured = auth.username.length() > 0 && auth.password.length() > 0;
@@ -68,7 +88,8 @@ String buildConfigExport() {
     out += "    Include InitialTerminationTime: " + String(c.includeInitialTerminationTime ? "yes" : "no") + "\n";
     out += "    Include ReplyTo anonymous: " + String(c.includeReplyToAnonymous ? "yes" : "no") + "\n";
     out += "    Snapshot URI override: " +
-           (c.snapshotUriOverride.length() > 0 ? c.snapshotUriOverride : String("(none)")) + "\n";
+           (c.snapshotUriOverride.length() > 0 ? redactUrlCredentials(c.snapshotUriOverride)
+                                                : String("(none)")) + "\n";
     out += "    Preferred profile keyword: " +
            (c.preferredProfileKeyword.length() > 0 ? c.preferredProfileKeyword : String("(none)")) + "\n";
     out += "    Alert cooldown: " + String(c.alertCooldownMs / 1000UL) + "s\n";
