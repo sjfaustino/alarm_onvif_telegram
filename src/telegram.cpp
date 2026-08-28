@@ -611,11 +611,71 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
   }
 
   bool turnOn = (parsed.command == TelegramCommand::On);
-  { CameraStateLock lock(states[i]); states[i].alertsEnabled = turnOn; } // read cross-task by camera.cpp/webserver.cpp
+
+  // parsed.durationText is "" for a plain /on or /off (permanent, the
+  // original behavior) - only non-empty when a timer token followed the
+  // camera name (see parseTelegramCommand's comment). Parsed here, not in
+  // telegram_parse.h, since resolving "HH:MM" needs the actual current
+  // local time, which that otherwise time-independent parser deliberately
+  // doesn't read for itself.
+  unsigned long revertDueMs = 0;
+  bool hasTimer = false;
+  String timerSuffix; // " (auto ON in 1h30m)" etc. - appended to the reply below
+  if (parsed.durationText.length() > 0) {
+    time_t now; time(&now);
+    struct tm nowLocal; localtime_r(&now, &nowLocal);
+    ParsedDuration dur = parseDurationToken(parsed.durationText, nowLocal);
+    if (!dur.ok) {
+      Serial.printf("[Telegram] /%s target \"%s\" from user \"%s\" has an unparseable duration \"%s\".\n",
+                    verb.c_str(), cameras[i].name.c_str(), sender.name.c_str(), parsed.durationText.c_str());
+      sendTelegramMessageTo(sender.chatId, "Couldn't understand duration \"" + parsed.durationText +
+                             "\" - use a number of minutes (e.g. \"30\") or a 24h clock time (e.g. \"23:00\").");
+      return;
+    }
+    hasTimer = true;
+    revertDueMs = millis() + dur.secondsFromNow * 1000UL;
+    timerSuffix = " (auto " + String(turnOn ? "OFF" : "ON") + " in " +
+                  formatUptime(dur.secondsFromNow * 1000UL) + ")";
+  }
+
+  {
+    CameraStateLock lock(states[i]); // read cross-task by camera.cpp/webserver.cpp
+    states[i].alertsEnabled = turnOn;
+    // A plain (no-timer) /on or /off cancels whatever timer was pending
+    // before - issuing a new command always replaces the old schedule,
+    // never stacks with it.
+    states[i].scheduledRevertDueMs = hasTimer ? revertDueMs : 0;
+    states[i].scheduledRevertToOn = !turnOn;
+  }
   saveAlertEnabledPref(i, turnOn);
-  Serial.printf("[%s] Alerts turned %s via Telegram by user \"%s\".\n", cameras[i].name.c_str(),
-                turnOn ? "ON" : "OFF", sender.name.c_str());
-  sendTelegramMessageTo(sender.chatId, String(cameras[i].name) + " alerts: " + (turnOn ? "ON" : "OFF"));
+  Serial.printf("[%s] Alerts turned %s via Telegram by user \"%s\"%s.\n", cameras[i].name.c_str(),
+                turnOn ? "ON" : "OFF", sender.name.c_str(), hasTimer ? " (timed)" : "");
+  sendTelegramMessageTo(sender.chatId,
+                         String(cameras[i].name) + " alerts: " + (turnOn ? "ON" : "OFF") + timerSuffix);
+}
+
+// Called once per loop() tick (main.cpp). Cheap: just a millis() comparison
+// per camera when nothing's due. Overflow-safe comparison (see
+// CameraState::scheduledRevertDueMs's comment) matches main.cpp's own
+// g_wifiRetryDueMs pattern.
+void checkScheduledAlertReverts(const CameraConfig cameras[], CameraState states[], size_t numCameras) {
+  for (size_t i = 0; i < numCameras; i++) {
+    unsigned long dueMs;
+    bool revertToOn;
+    {
+      CameraStateLock lock(states[i]);
+      dueMs = states[i].scheduledRevertDueMs;
+      revertToOn = states[i].scheduledRevertToOn;
+    }
+    if (dueMs == 0) continue; // no timer pending for this camera
+    if ((long)(millis() - dueMs) < 0) continue; // not due yet
+
+    { CameraStateLock lock(states[i]); states[i].alertsEnabled = revertToOn; states[i].scheduledRevertDueMs = 0; }
+    saveAlertEnabledPref(i, revertToOn);
+    Serial.printf("[%s] Timed alert window expired - alerts turned %s automatically.\n",
+                  cameras[i].name.c_str(), revertToOn ? "ON" : "OFF");
+    sendTelegramMessage(String(cameras[i].name) + " alerts: " + (revertToOn ? "ON" : "OFF") + " (timer expired)");
+  }
 }
 
 void pollTelegramCommands(const CameraConfig cameras[], CameraState states[], size_t numCameras) {

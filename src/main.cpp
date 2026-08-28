@@ -4,6 +4,8 @@
 #include <esp_heap_caps.h>
 #include <esp_sntp.h>
 #include <esp_task_wdt.h>
+#include <esp_system.h>   // esp_reset_reason()
+#include <esp_ota_ops.h>  // esp_ota_mark_app_valid_cancel_rollback()
 #include <cstdlib>
 #include "config.h"
 #include "camera.h"
@@ -111,6 +113,33 @@ static void initWatchdog() {
   esp_task_wdt_add(nullptr); // nullptr = subscribe the calling task (loopTask, since setup() runs on it too)
   Serial.printf("Task watchdog armed on loop(): %lus timeout, reboots the board if it hangs.\n",
                 (unsigned long)(WATCHDOG_TIMEOUT_MS / 1000UL));
+}
+
+// Human text for esp_reset_reason() - folded into the boot Telegram message
+// and an early Serial line, so "why did it reboot" doesn't require having
+// been watching Serial at the exact moment it happened. Not extracted to a
+// lib/ pure function like the rest of this project's testable logic:
+// esp_reset_reason_t is an ESP-IDF type unavailable under the native/
+// ArduinoFake test environment, and this is a straight enum->string table
+// with nothing to get subtly wrong. Deliberately a `default:` case (unlike
+// this project's own TelegramCommand/TelegramCommandPermission switches,
+// see telegram_parse.h) - esp_reset_reason_t belongs to the framework, not
+// this project, so a future IDF version adding a new enumerator should
+// fall through to "unknown", not force a rebuild-breaking change here.
+static String describeResetReason() {
+  switch (esp_reset_reason()) {
+    case ESP_RST_POWERON:   return "power-on";
+    case ESP_RST_EXT:       return "external reset pin";
+    case ESP_RST_SW:        return "software (ESP.restart() - /reset command or a firmware update)";
+    case ESP_RST_PANIC:     return "PANIC (crash)";
+    case ESP_RST_INT_WDT:   return "interrupt watchdog";
+    case ESP_RST_TASK_WDT:  return "task watchdog (a task hung - see initWatchdog())";
+    case ESP_RST_WDT:       return "other watchdog";
+    case ESP_RST_DEEPSLEEP: return "deep sleep wake (unexpected - this project never sleeps)";
+    case ESP_RST_BROWNOUT:  return "brownout (power dip/insufficient supply)";
+    case ESP_RST_SDIO:      return "SDIO";
+    default:                return "unknown";
+  }
 }
 
 // Applies the stored static IP config, if enabled - must run after
@@ -287,6 +316,7 @@ static void startMonitoring() {
   for (size_t i = 0; i < g_cameras.size(); i++) if (g_cameras[i].enabled) enabledCount++;
 
   String bootMsg = "\xF0\x9F\x93\xB7 Camera monitor online\n";
+  bootMsg += "Reboot reason: " + describeResetReason() + "\n";
   bootMsg += String(enabledCount) + "/" + String((int)g_cameras.size()) + " cameras enabled\n";
   bootMsg += buildCameraListMessage();
   if (!sendTelegramMessage(bootMsg)) {
@@ -303,6 +333,7 @@ void setup() {
   Serial.println("\n========================================");
   Serial.println("MULTI-CAMERA ONVIF MOTION MONITOR");
   Serial.println("========================================");
+  Serial.printf("Reboot reason: %s\n", describeResetReason().c_str());
 
   Serial.printf("PSRAM: %u bytes%s\n", (unsigned)ESP.getPsramSize(),
                 ESP.getPsramSize() == 0 ? " (none detected)" : "");
@@ -364,6 +395,31 @@ void setup() {
     Serial.println("WARNING: WiFi not connected at boot - cameras and the web UI will start "
                     "automatically once loop() reconnects; no reboot needed once the network is back.");
   }
+
+  // Confirms this firmware image is healthy, canceling ESP-IDF's OTA
+  // rollback safety net for it (this build's sdkconfig does have
+  // CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE set - verified against the
+  // actual shipped framework package, not assumed). Without this call, a
+  // firmware flashed via the dashboard's /firmware/update that boot-loops
+  // (crashes or hangs past the watchdog timeout before ever reaching this
+  // line) gets automatically reverted to the previous working partition by
+  // the bootloader on the *next* reset - otherwise a bad OTA upload would
+  // permanently strand the board until someone gets a USB cable to it.
+  //
+  // Placed at the very end of setup(), not gated on WiFi actually
+  // connecting above - a real network outage during a firmware update
+  // shouldn't roll back otherwise-good firmware, and simply reaching this
+  // line already means every deliberate halt point (the PSRAM gate) and
+  // every crash-prone init step (camera task creation, web server start)
+  // survived without a panic or watchdog reset.
+  esp_err_t rollbackErr = esp_ota_mark_app_valid_cancel_rollback();
+  if (rollbackErr == ESP_OK) {
+    Serial.println("OTA rollback: this firmware confirmed healthy - won't auto-revert on the next reboot.");
+  }
+  // Any other result (e.g. no rollback was pending - the normal case on
+  // every boot except the one right after a firmware update) is expected
+  // and not logged as an error; see esp_ota_mark_app_valid_cancel_rollback's
+  // own documentation for what else it can return.
 }
 
 void loop() {
@@ -401,6 +457,14 @@ void loop() {
     lastCommandPollMs = millis();
     pollTelegramCommands(g_cameras.data(), g_cameraStates.data(), g_cameras.size());
   }
+
+  // Every tick, not gated behind its own interval like the poll above -
+  // see checkScheduledAlertReverts' own comment for why that's cheap.
+  // Runs regardless of WiFi status too: a timer set before an outage
+  // should still revert on schedule even if Telegram can't be reached
+  // right at that instant (sendTelegramMessage inside it just fails/logs,
+  // same as any other broadcast during an outage).
+  checkScheduledAlertReverts(g_cameras.data(), g_cameraStates.data(), g_cameras.size());
 
   delay(1000);
 }

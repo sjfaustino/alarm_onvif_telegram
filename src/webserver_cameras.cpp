@@ -85,6 +85,8 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
       CameraState& st = (*liveStates)[idx];
       bool subscribed, offline, alertsEnabled, hasAlerted;
       uint32_t lastAlert;
+      unsigned long revertDueMs;
+      bool revertToOn;
       {
         CameraStateLock lock(st);
         subscribed = st.subscriptionActive;
@@ -92,10 +94,19 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
         alertsEnabled = st.alertsEnabled;
         hasAlerted = st.hasAlerted;
         lastAlert = st.lastAlert;
+        revertDueMs = st.scheduledRevertDueMs;
+        revertToOn = st.scheduledRevertToOn;
       }
       liveStatus = subscribed ? "subscribed" : "not subscribed";
       if (offline) liveStatus += " - OFFLINE";
       if (!alertsEnabled) liveStatus += " (alerts OFF)";
+      // (long) cast for the same overflow-safe "is this due yet" check
+      // used everywhere else a millis() due-timestamp is compared - see
+      // CameraState::scheduledRevertDueMs's comment.
+      if (revertDueMs != 0 && (long)(millis() - revertDueMs) < 0) {
+        liveStatus += " - auto " + String(revertToOn ? "ON" : "OFF") + " in " +
+                      formatUptime(revertDueMs - millis());
+      }
       if (hasAlerted) lastAlertStr = formatElapsedSince(lastAlert, millis());
     } else if (!c.enabled) {
       liveStatus = "disabled";

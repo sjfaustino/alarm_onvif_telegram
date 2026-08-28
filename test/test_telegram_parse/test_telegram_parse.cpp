@@ -277,6 +277,134 @@ void test_parseTelegramCommand_unrecognized_text_is_unknown(void) {
   TEST_ASSERT_EQUAL_STRING("", p.cameraName.c_str());
 }
 
+// ---- parseTelegramCommand: /on and /off timer syntax ----
+
+void test_parseTelegramCommand_off_with_minutes_duration(void) {
+  ParsedTelegramCommand p = parseTelegramCommand("/off D01 30");
+  TEST_ASSERT_TRUE(TelegramCommand::Off == p.command);
+  TEST_ASSERT_EQUAL_STRING("D01", p.cameraName.c_str());
+  TEST_ASSERT_EQUAL_STRING("30", p.durationText.c_str());
+}
+
+void test_parseTelegramCommand_on_with_clock_time_duration(void) {
+  ParsedTelegramCommand p = parseTelegramCommand("/on D01 23:00");
+  TEST_ASSERT_TRUE(TelegramCommand::On == p.command);
+  TEST_ASSERT_EQUAL_STRING("D01", p.cameraName.c_str());
+  TEST_ASSERT_EQUAL_STRING("23:00", p.durationText.c_str());
+}
+
+void test_parseTelegramCommand_off_without_duration_leaves_it_empty(void) {
+  ParsedTelegramCommand p = parseTelegramCommand("/off D01");
+  TEST_ASSERT_EQUAL_STRING("D01", p.cameraName.c_str());
+  TEST_ASSERT_EQUAL_STRING("", p.durationText.c_str());
+}
+
+void test_parseTelegramCommand_off_tolerates_extra_whitespace_around_duration(void) {
+  ParsedTelegramCommand p = parseTelegramCommand("/off   D01   30  ");
+  TEST_ASSERT_EQUAL_STRING("D01", p.cameraName.c_str());
+  TEST_ASSERT_EQUAL_STRING("30", p.durationText.c_str());
+}
+
+// /snap never accepts a duration - a second token is just part of
+// cameraName there (unchanged, pre-existing behavior).
+void test_parseTelegramCommand_snap_does_not_split_a_duration(void) {
+  ParsedTelegramCommand p = parseTelegramCommand("/snap D03");
+  TEST_ASSERT_EQUAL_STRING("", p.durationText.c_str());
+}
+
+// ---- parseDurationToken ----
+
+static struct tm makeLocalTime(int year, int mon, int day, int hour, int min, int sec) {
+  struct tm t = {};
+  t.tm_year = year - 1900;
+  t.tm_mon = mon - 1;
+  t.tm_mday = day;
+  t.tm_hour = hour;
+  t.tm_min = min;
+  t.tm_sec = sec;
+  return t;
+}
+
+void test_parseDurationToken_plain_minutes(void) {
+  struct tm now = makeLocalTime(2026, 1, 1, 10, 0, 0);
+  ParsedDuration d = parseDurationToken("30", now);
+  TEST_ASSERT_TRUE(d.ok);
+  TEST_ASSERT_EQUAL_UINT32(1800UL, d.secondsFromNow);
+}
+
+// Minutes form doesn't need a synced clock at all - it never looks at
+// nowLocal - so an all-zero/unsynced struct tm must not reject it.
+void test_parseDurationToken_plain_minutes_works_without_synced_clock(void) {
+  struct tm now = {}; // tm_year 0 -> year 1900, well before the sync threshold
+  ParsedDuration d = parseDurationToken("5", now);
+  TEST_ASSERT_TRUE(d.ok);
+  TEST_ASSERT_EQUAL_UINT32(300UL, d.secondsFromNow);
+}
+
+void test_parseDurationToken_rejects_zero_minutes(void) {
+  struct tm now = makeLocalTime(2026, 1, 1, 10, 0, 0);
+  TEST_ASSERT_FALSE(parseDurationToken("0", now).ok);
+}
+
+void test_parseDurationToken_rejects_non_numeric_minutes(void) {
+  struct tm now = makeLocalTime(2026, 1, 1, 10, 0, 0);
+  TEST_ASSERT_FALSE(parseDurationToken("30m", now).ok);
+  TEST_ASSERT_FALSE(parseDurationToken("abc", now).ok);
+  TEST_ASSERT_FALSE(parseDurationToken("-5", now).ok);
+}
+
+void test_parseDurationToken_rejects_empty_token(void) {
+  struct tm now = makeLocalTime(2026, 1, 1, 10, 0, 0);
+  TEST_ASSERT_FALSE(parseDurationToken("", now).ok);
+}
+
+// HH:MM later today - straightforward same-day delta.
+void test_parseDurationToken_clock_time_later_today(void) {
+  struct tm now = makeLocalTime(2026, 1, 1, 10, 0, 0);
+  ParsedDuration d = parseDurationToken("23:00", now);
+  TEST_ASSERT_TRUE(d.ok);
+  TEST_ASSERT_EQUAL_UINT32(13UL * 3600UL, d.secondsFromNow); // 10:00 -> 23:00
+}
+
+// HH:MM already passed today - the "smaller than current time -> next
+// day" rule from the request this feature was built for.
+void test_parseDurationToken_clock_time_already_passed_rolls_to_tomorrow(void) {
+  struct tm now = makeLocalTime(2026, 1, 1, 23, 30, 0);
+  ParsedDuration d = parseDurationToken("10:00", now);
+  TEST_ASSERT_TRUE(d.ok);
+  TEST_ASSERT_EQUAL_UINT32(10UL * 3600UL + 30UL * 60UL, d.secondsFromNow); // 23:30 -> 10:00 next day
+}
+
+// Exactly equal to the current time - also rolls to tomorrow rather than
+// scheduling an immediate (zero-delay) revert.
+void test_parseDurationToken_clock_time_equal_to_now_rolls_to_tomorrow(void) {
+  struct tm now = makeLocalTime(2026, 1, 1, 10, 0, 0);
+  ParsedDuration d = parseDurationToken("10:00", now);
+  TEST_ASSERT_TRUE(d.ok);
+  TEST_ASSERT_EQUAL_UINT32(24UL * 3600UL, d.secondsFromNow);
+}
+
+void test_parseDurationToken_rejects_out_of_range_clock_time(void) {
+  struct tm now = makeLocalTime(2026, 1, 1, 10, 0, 0);
+  TEST_ASSERT_FALSE(parseDurationToken("24:00", now).ok);
+  TEST_ASSERT_FALSE(parseDurationToken("12:60", now).ok);
+}
+
+void test_parseDurationToken_rejects_malformed_clock_time(void) {
+  struct tm now = makeLocalTime(2026, 1, 1, 10, 0, 0);
+  TEST_ASSERT_FALSE(parseDurationToken("1:30", now).ok);  // hour not 2 digits
+  TEST_ASSERT_FALSE(parseDurationToken("12:3", now).ok);  // minute not 2 digits
+  TEST_ASSERT_FALSE(parseDurationToken("ab:cd", now).ok);
+}
+
+// HH:MM specifically needs a synced clock (unlike plain minutes) -
+// resolving "at 23:00" against an unsynced (epoch-default) time-of-day
+// would silently schedule against the wrong wall-clock time.
+void test_parseDurationToken_clock_time_rejected_when_unsynced(void) {
+  struct tm now = {}; // tm_year 0 -> 1900, below the sync threshold
+  TEST_ASSERT_FALSE(parseDurationToken("23:00", now).ok);
+}
+
 // ---- commandDisplayName ----
 
 void test_commandDisplayName_every_command(void) {
@@ -323,6 +451,22 @@ int main(int argc, char** argv) {
   RUN_TEST(test_parseTelegramCommand_is_case_insensitive);
   RUN_TEST(test_parseTelegramCommand_on_without_target_is_unknown);
   RUN_TEST(test_parseTelegramCommand_unrecognized_text_is_unknown);
+  RUN_TEST(test_parseTelegramCommand_off_with_minutes_duration);
+  RUN_TEST(test_parseTelegramCommand_on_with_clock_time_duration);
+  RUN_TEST(test_parseTelegramCommand_off_without_duration_leaves_it_empty);
+  RUN_TEST(test_parseTelegramCommand_off_tolerates_extra_whitespace_around_duration);
+  RUN_TEST(test_parseTelegramCommand_snap_does_not_split_a_duration);
+  RUN_TEST(test_parseDurationToken_plain_minutes);
+  RUN_TEST(test_parseDurationToken_plain_minutes_works_without_synced_clock);
+  RUN_TEST(test_parseDurationToken_rejects_zero_minutes);
+  RUN_TEST(test_parseDurationToken_rejects_non_numeric_minutes);
+  RUN_TEST(test_parseDurationToken_rejects_empty_token);
+  RUN_TEST(test_parseDurationToken_clock_time_later_today);
+  RUN_TEST(test_parseDurationToken_clock_time_already_passed_rolls_to_tomorrow);
+  RUN_TEST(test_parseDurationToken_clock_time_equal_to_now_rolls_to_tomorrow);
+  RUN_TEST(test_parseDurationToken_rejects_out_of_range_clock_time);
+  RUN_TEST(test_parseDurationToken_rejects_malformed_clock_time);
+  RUN_TEST(test_parseDurationToken_clock_time_rejected_when_unsynced);
   RUN_TEST(test_commandDisplayName_every_command);
   return UNITY_END();
 }

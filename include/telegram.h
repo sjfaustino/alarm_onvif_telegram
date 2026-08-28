@@ -27,7 +27,14 @@ bool loadAlertEnabledPref(size_t index);
 // Polls getUpdates and applies commands, matched by case-insensitive
 // camera-name prefix ("/on D01" matches "D01-FDir"; an ambiguous prefix
 // lists the matches instead of applying anything):
-//   /on|/off <name/prefix>   - resume/mute alerts (subscription stays up)
+//   /on|/off <name/prefix> [duration] - resume/mute alerts (subscription
+//                              stays up either way). Optional trailing
+//                              duration schedules an automatic revert back
+//                              to the opposite state - see
+//                              parseDurationToken (telegram_parse.h) for
+//                              exactly what it accepts (plain minutes, or
+//                              a 24h "HH:MM" clock time). Omitted entirely
+//                              means permanent, the original behavior.
 //   /snap <name/prefix>      - fresh snapshot now, ignoring mute/cooldown
 //   /status                  - list every enabled camera's on/off state
 //   /uptime                  - board uptime
@@ -36,3 +43,9 @@ bool loadAlertEnabledPref(size_t index);
 // /reset requires canReset (off by default, even for the seeded Admin user
 // - see TelegramUser::canReset).
 void pollTelegramCommands(const CameraConfig cameras[], CameraState states[], size_t numCameras);
+
+// Flips alertsEnabled back for any camera whose timed /on or /off (see
+// pollTelegramCommands) has reached its scheduled revert time - call once
+// per loop() tick (main.cpp), same cadence as pollTelegramCommands itself.
+// Cheap when nothing's due: just a millis() comparison per camera.
+void checkScheduledAlertReverts(const CameraConfig cameras[], CameraState states[], size_t numCameras);

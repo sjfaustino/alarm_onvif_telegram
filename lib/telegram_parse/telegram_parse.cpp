@@ -1,6 +1,7 @@
 #include "telegram_parse.h"
 #include <ArduinoJson.h>
 #include <cstdlib>
+#include <cctype>
 
 std::vector<TelegramUpdate> parseTelegramUpdates(const String& jsonBody, String* error) {
   std::vector<TelegramUpdate> updates;
@@ -84,6 +85,25 @@ TelegramCommandPermission requiredPermissionForCommand(TelegramCommand command) 
   return TelegramCommandPermission::Unknown; // unreachable if every enumerator above is handled
 }
 
+// Splits "D01 30" into name="D01", duration="30" (both trimmed); "D01"
+// alone leaves duration empty. Only the first two whitespace-separated
+// tokens matter - anything after a second space is silently dropped
+// (parseDurationToken/telegram.cpp reject a garbled duration token on
+// their own, no need to duplicate that here).
+static void splitNameAndDuration(const String& rest, String& name, String& duration) {
+  String trimmed = rest;
+  trimmed.trim();
+  int sp = trimmed.indexOf(' ');
+  if (sp < 0) {
+    name = trimmed;
+    duration = "";
+    return;
+  }
+  name = trimmed.substring(0, sp);
+  duration = trimmed.substring(sp + 1);
+  duration.trim();
+}
+
 ParsedTelegramCommand parseTelegramCommand(const String& text) {
   ParsedTelegramCommand result;
   String lower = text;
@@ -97,10 +117,10 @@ ParsedTelegramCommand parseTelegramCommand(const String& text) {
     result.command = TelegramCommand::Reset;
   } else if (lower.startsWith("/on ")) {
     result.command = TelegramCommand::On;
-    result.cameraName = text.substring(4);
+    splitNameAndDuration(text.substring(4), result.cameraName, result.durationText);
   } else if (lower.startsWith("/off ")) {
     result.command = TelegramCommand::Off;
-    result.cameraName = text.substring(5);
+    splitNameAndDuration(text.substring(5), result.cameraName, result.durationText);
   } else if (lower.startsWith("/snap ")) {
     result.command = TelegramCommand::Snap;
     result.cameraName = text.substring(6);
@@ -110,6 +130,51 @@ ParsedTelegramCommand parseTelegramCommand(const String& text) {
 
   result.cameraName.trim();
   result.requiredPermission = requiredPermissionForCommand(result.command);
+  return result;
+}
+
+ParsedDuration parseDurationToken(const String& token, const struct tm& nowLocal) {
+  ParsedDuration result;
+  if (token.length() == 0) return result;
+
+  int colon = token.indexOf(':');
+  if (colon < 0) {
+    // Plain minutes - require every character to be a digit, so a typo
+    // like "30m" or "abc" doesn't silently parse as 0 via String::toInt().
+    for (size_t i = 0; i < token.length(); i++) {
+      if (!isdigit((unsigned char)token[i])) return result;
+    }
+    long minutes = token.toInt();
+    if (minutes <= 0) return result; // "0" isn't a valid timer
+    result.ok = true;
+    result.secondsFromNow = (unsigned long)minutes * 60UL;
+    return result;
+  }
+
+  // HH:MM - exactly 2 digits each, colon in the middle, nothing else.
+  if (token.length() != 5 || colon != 2) return result;
+  for (int i = 0; i < 5; i++) {
+    if (i == 2) continue; // the colon itself
+    if (!isdigit((unsigned char)token[i])) return result;
+  }
+  int hour = token.substring(0, 2).toInt();
+  int minute = token.substring(3, 5).toInt();
+  if (hour > 23 || minute > 59) return result;
+
+  // Resolving "at HH:MM" needs a real current time-of-day - same synced-
+  // clock check onvif_soap.cpp's isoTimeNow() uses (tm_year is still at
+  // the epoch default until NTP has actually set the clock at least once).
+  if (nowLocal.tm_year <= (2016 - 1900)) return result;
+
+  int nowSecOfDay = nowLocal.tm_hour * 3600 + nowLocal.tm_min * 60 + nowLocal.tm_sec;
+  int targetSecOfDay = hour * 3600 + minute * 60;
+  int deltaSec = targetSecOfDay - nowSecOfDay;
+  // Already passed, or exactly now - roll to tomorrow rather than firing
+  // (or scheduling a same-instant no-op revert) immediately.
+  if (deltaSec <= 0) deltaSec += 24 * 3600;
+
+  result.ok = true;
+  result.secondsFromNow = (unsigned long)deltaSec;
   return result;
 }
 

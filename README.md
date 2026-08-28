@@ -43,7 +43,13 @@ Arduino-ESP32/IDF releases.
   `pio run -e esp32s3` on the Firmware page instead of reflashing over USB. Uses
   the board's dual OTA app partitions - a failed or aborted upload leaves the
   running firmware untouched, and the board only reboots into the new image
-  once it's fully received and its checksum verifies.
+  once it's fully received and its checksum verifies. That only catches a
+  corrupted transfer, though - if a checksum-valid image itself crashes or
+  hangs on boot, ESP-IDF's app rollback (enabled in this board's sdkconfig)
+  automatically reverts to the previous working partition on the next reset;
+  `main.cpp`'s `setup()` confirms the new image healthy near the end of its
+  own run, not gated on WiFi connecting (a network outage during an update
+  shouldn't roll back otherwise-good firmware).
 - Any number of Telegram users, each independently configured for which cameras
   they hear from (specific list or "all, including future ones"), whether they get
   the heartbeat/boot messages, and two independent command permissions: `/on`,
@@ -51,7 +57,11 @@ Arduino-ESP32/IDF releases.
   fresh photo on demand, even from a camera currently muted with `/off`) - a user
   can have either, both, or neither, since pulling a live photo is a different
   kind of trust than silencing alerts. Commands are matched by camera name or
-  prefix and reply to whoever sent them.
+  prefix and reply to whoever sent them. `/on`/`/off` accept an optional trailing
+  timer - a number of minutes (`/off D01 30`) or a 24h clock time (`/off D01
+  23:00`, tomorrow if that time has already passed today) - after which the
+  camera automatically reverts to the opposite state; omitted entirely is
+  permanent, as before.
 - Dashboard login is opt-in but boots disabled: the board comes up with no password
   and a standing banner nagging you to set one, on every page, until you do. Once
   set (Security page), HTTP Basic Auth is required on every dashboard route,

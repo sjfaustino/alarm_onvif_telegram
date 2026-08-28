@@ -27,6 +27,17 @@ struct CameraState {
   // Telegram send is suppressed.
   bool     alertsEnabled = true;
 
+  // Pending auto-revert from a timed /on or /off (telegram.cpp's
+  // handleTelegramCommand/checkScheduledAlertReverts) - 0 means none
+  // scheduled. A millis() timestamp, not wall-clock - compared the same
+  // overflow-safe way as main.cpp's g_wifiRetryDueMs ((long)(millis() -
+  // due) >= 0), not a plain >=. Deliberately not persisted to NVS: a
+  // reboot cancels any pending timer and falls back to whatever
+  // loadAlertEnabledPref() last had saved, same as every other purely
+  // in-RAM per-boot field here.
+  unsigned long scheduledRevertDueMs = 0;
+  bool          scheduledRevertToOn = false; // state to revert *to* once due
+
   // Updated on every non-empty SOAP response - the "is this camera alive"
   // signal for checkCameraOnlineStatus.
   unsigned long lastContactMs = 0;
@@ -42,11 +53,13 @@ struct CameraState {
   const char* pass = nullptr;
 
   // Guards subscriptionActive, isOffline, alertsEnabled, hasAlerted,
-  // lastAlert, snapshotUri, user, and pass - the only fields both written
-  // by this camera's own task (camera.cpp) and read from another task
-  // (webserver.cpp's dashboard render, main.cpp's heartbeat, telegram.cpp's
-  // /on /off /snap command handling on loop()'s task). Every other field
-  // is touched only from the owning camera task, so it needs no lock.
+  // lastAlert, snapshotUri, user, pass, scheduledRevertDueMs, and
+  // scheduledRevertToOn - the only fields both written by this camera's
+  // own task (camera.cpp) and read from another task (webserver.cpp's
+  // dashboard render, main.cpp's heartbeat, telegram.cpp's /on /off /snap
+  // command handling and checkScheduledAlertReverts, all on loop()'s
+  // task). Every other field is touched only from the owning camera task,
+  // so it needs no lock.
   // Created once by cameraStateInit() before any task can see this camera -
   // see main.cpp's startMonitoring().
   SemaphoreHandle_t stateMutex = nullptr;

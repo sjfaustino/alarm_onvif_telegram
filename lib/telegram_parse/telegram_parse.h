@@ -1,6 +1,7 @@
 #pragma once
 #include <Arduino.h>
 #include <vector>
+#include <time.h> // struct tm - parseDurationToken's "now" parameter
 #include "camera_store.h" // CameraConfig
 
 // One entry from a Telegram getUpdates response's "result" array.
@@ -79,6 +80,14 @@ struct ParsedTelegramCommand {
   TelegramCommand command = TelegramCommand::Unknown;
   TelegramCommandPermission requiredPermission = TelegramCommandPermission::Unknown;
   String cameraName;
+
+  // /on and /off only: an optional trailing token after the camera name,
+  // e.g. "/off D01 30" or "/on D01 23:00" - "" means no timer was given
+  // (permanent on/off, the original behavior). Not yet interpreted as a
+  // duration - see parseDurationToken below, which needs the current local
+  // time and so can't live in this otherwise time-independent parser.
+  // Unused (always "") for every other command.
+  String durationText;
 };
 
 // The single place message text is matched against command syntax.
@@ -90,7 +99,39 @@ struct ParsedTelegramCommand {
 // duplication, since fixed). Case-insensitive; /on, /off, /snap
 // specifically require a trailing space and target to be recognized -
 // bare "/on" with nothing after it is Unknown, not a malformed /on.
+//
+// /on and /off additionally accept a second, space-separated token as a
+// timer, e.g. "/off D01 30" - everything after the camera name's own
+// first token goes into durationText verbatim (see parseDurationToken for
+// what it accepts), not re-split or validated here.
 ParsedTelegramCommand parseTelegramCommand(const String& text);
+
+// Interprets a /on or /off duration token (ParsedTelegramCommand::
+// durationText) relative to nowLocal, the caller's current local time
+// (telegram.cpp passes real localtime_r() output - kept as an explicit
+// parameter, not read internally, so this stays deterministic to test).
+// Two accepted forms:
+//  - A plain non-negative integer: minutes from now (e.g. "30" -> 1800s).
+//    Doesn't touch nowLocal at all, so this form works even before NTP
+//    has ever synced.
+//  - "HH:MM" (24h, always 2+2 digits, e.g. "23:00" or "07:05"): seconds
+//    until the next local wall-clock occurrence of that time - today if
+//    it's still later than nowLocal, tomorrow if that time has already
+//    passed (or is exactly now) - requires nowLocal to actually be
+//    synced (see the note on `ok` below).
+// Call only when durationText is non-empty - the caller (telegram.cpp)
+// treats "" as "no timer" before ever reaching this function, which has
+// no representation for "no duration" of its own.
+struct ParsedDuration {
+  // False if token was neither form above, an HH:MM value was out of
+  // range, or (HH:MM only) nowLocal doesn't look synced yet (tm_year <=
+  // 2016, this platform's/telegram.cpp's own "hasn't heard from NTP"
+  // check) - resolving "at 23:00" against an unsynced clock would silently
+  // schedule against the wrong wall-clock time.
+  bool ok = false;
+  unsigned long secondsFromNow = 0; // valid only if ok
+};
+ParsedDuration parseDurationToken(const String& token, const struct tm& nowLocal);
 
 // The canonical "/word" text for a recognized command, e.g. for
 // "You're not authorized to use ___." replies - "" for Unknown. Also a
