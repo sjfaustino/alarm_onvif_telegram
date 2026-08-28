@@ -1,5 +1,6 @@
 #include "webserver.h"
 #include "config.h" // SD_CHECK_INTERVAL_MAX_HOURS
+#include "build_version.h" // FIRMWARE_VERSION
 #include "webserver_network.h"
 #include "webserver_cameras.h"
 #include "webserver_users.h"

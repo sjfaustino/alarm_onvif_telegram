@@ -1,5 +1,5 @@
 #include "webserver_firmware.h"
-#include "config.h" // FIRMWARE_VERSION
+#include "build_version.h" // FIRMWARE_VERSION
 #include <esp_ota_ops.h>
 #include <nvs_flash.h>
 #include <nvs.h>

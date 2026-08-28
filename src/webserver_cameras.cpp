@@ -119,6 +119,26 @@ static String renderCameraForm(const CameraConfig& v, bool isEdit) {
           "in over this long, e.g. a dead PIR or a knocked-over camera"
           "<input type=\"text\" name=\"motionWatchdogHours\" value=\"" + String(v.motionWatchdogHours) +
           "\"></label>";
+  // Motion still updates the watchdog's clock during quiet hours (it's
+  // only the Telegram *send* that's suppressed - see triggerMotionAlert),
+  // so a watchdog window shorter than the quiet-hours window will
+  // legitimately trip on a camera that's working perfectly fine, purely
+  // because it hasn't seen motion during a stretch the user themselves
+  // configured as expected-quiet. Two independently-configured settings
+  // with no other cross-validation between them - flagged here rather
+  // than silently left for the user to discover as a confusing false alert.
+  if (v.quietHoursEnabled && v.quietStartMinute != v.quietEndMinute && v.motionWatchdogHours > 0) {
+    int windowMin = (v.quietEndMinute > v.quietStartMinute)
+        ? (v.quietEndMinute - v.quietStartMinute)
+        : (1440 - v.quietStartMinute + v.quietEndMinute); // wraps past midnight
+    if ((int)v.motionWatchdogHours * 60 <= windowMin) {
+      html += "<p class=\"hint\">\xE2\x9A\xA0\xEF\xB8\x8F The no-motion watchdog (" +
+              String(v.motionWatchdogHours) + "h) is shorter than or equal to the quiet hours window (" +
+              String(windowMin / 60) + "h" + String(windowMin % 60) + "m) - it will likely trip a false "
+              "alert every quiet period even though nothing's actually wrong. Consider raising the "
+              "watchdog hours above the quiet hours window length.</p>";
+    }
+  }
   html += "<label>Timelapse capture, minutes (0 = off) - stores a snapshot on this interval "
           "regardless of motion (never sent to Telegram, just kept in history/SD)"
           "<input type=\"text\" name=\"timelapseIntervalMin\" value=\"" + String(v.timelapseIntervalMin) +

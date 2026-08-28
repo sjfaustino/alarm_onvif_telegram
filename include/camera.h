@@ -30,6 +30,19 @@ struct CameraState {
   unsigned long lastRenew = 0;
   unsigned long lastRetry = 0;
 
+  // Last periodic retry of cameraFetchProfileAndSnapshotUri while
+  // subscribed but snapshotUri is still empty (camera.cpp's cameraTaskFn) -
+  // see that check's own comment for why this exists: the ordinary
+  // subscription-retry loop only ever runs cameraFetchProfileAndSnapshotUri
+  // ONCE, from the very first cameraSetupSequence call, and never again
+  // once eventServiceUrl is set (every later retry only touches the event/
+  // pull-point services) - a transient GetProfiles/GetSnapshotUri failure
+  // at that first attempt would otherwise permanently disable photo
+  // alerts/timelapse for this camera (motion detection keeps working fine,
+  // masking the problem) until a live config edit or a reboot forces full
+  // rediscovery.
+  unsigned long lastSnapshotUriRetryMs = 0;
+
   // Consecutive subscription-retry failures and resulting backoff delay
   // (doubles per failure, capped; reset to 0 on success) - see cameraTaskFn.
   uint8_t retryStreak     = 0;
@@ -63,7 +76,13 @@ struct CameraState {
   bool          scheduledRevertToOn = false; // state to revert *to* once due
 
   // Updated on every non-empty SOAP response - the "is this camera alive"
-  // signal for checkCameraOnlineStatus.
+  // signal for checkCameraOnlineStatus. Lock-guarded (see stateMutex's own
+  // comment below) - besides cameraSoapCall (this camera's own task),
+  // snapshot_history.cpp's pushCameraSnapshot also adjusts this (to
+  // exclude time spent blocked on the SD subsystem's own internal mutex
+  // from counting as camera silence), and that function is reachable from
+  // loop()'s task too (sendOnDemandSnapshot, via /snap), not just this
+  // camera's own task.
   unsigned long lastContactMs = 0;
 
   // So checkCameraOnlineStatus only alerts on a state transition.
@@ -123,13 +142,15 @@ struct CameraState {
 
   // Guards subscriptionActive, isOffline, alertsEnabled, hasAlerted,
   // lastAlert, snapshotUri, user, pass, scheduledRevertDueMs,
-  // scheduledRevertToOn, pendingConfig, and snapshotHistory (plus its
-  // Next/Count) - the only fields both written by this camera's own task
-  // (camera.cpp) and read from another task (webserver.cpp's dashboard
-  // render and /cameras/snapshot route, main.cpp's heartbeat,
-  // telegram.cpp's /on /off /snap command handling and
-  // checkScheduledAlertReverts, all on loop()'s task). Every other field
-  // is touched only from the owning camera task, so it needs no lock.
+  // scheduledRevertToOn, pendingConfig, snapshotHistory (plus its
+  // Next/Count), and lastContactMs - the only fields both written by this
+  // camera's own task (camera.cpp) and read/written from another task
+  // (webserver.cpp's dashboard render and /cameras/snapshot route,
+  // main.cpp's heartbeat, telegram.cpp's /on /off /snap command handling,
+  // checkScheduledAlertReverts, and pushCameraSnapshot's lastContactMs
+  // adjustment via sendOnDemandSnapshot, all on loop()'s task). Every
+  // other field is touched only from the owning camera task, so it needs
+  // no lock.
   // Created once by cameraStateInit() before any task can see this camera -
   // see main.cpp's startMonitoring().
   SemaphoreHandle_t stateMutex = nullptr;
@@ -191,8 +212,13 @@ class CameraStateLock {
 // if either is empty.
 bool resolveCameraCredentials(const CameraConfig& cfg, CameraState& st);
 
-// Runs GetCapabilities -> GetServiceCapabilities -> GetEventProperties ->
-// GetProfiles/GetSnapshotUri -> CreatePullPointSubscription, in order.
+// Runs GetCapabilities -> GetProfiles/GetSnapshotUri -> GetServiceCapabilities
+// -> GetEventProperties -> CreatePullPointSubscription, in order. A
+// GetProfiles/GetSnapshotUri failure is deliberately non-fatal here (motion
+// detection still works without a resolved snapshot URI) - see
+// cameraFetchProfileAndSnapshotUri's own call site comment, and
+// CameraState::lastSnapshotUriRetryMs for how a transient failure here
+// gets retried later instead of staying permanently broken.
 bool cameraSetupSequence(const CameraConfig& cfg, CameraState& st);
 
 // Individual steps, exposed separately so main.cpp can retry just the

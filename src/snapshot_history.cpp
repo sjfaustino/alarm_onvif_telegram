@@ -64,7 +64,26 @@ static bool readRamSnapshot(CameraState& st, size_t age, uint8_t** outBuf, size_
 
 void pushCameraSnapshot(const CameraConfig& cfg, CameraState& st, uint8_t* jpg, size_t jpgLen) {
   if (sdActive()) {
+    // writeSdSnapshot blocks on sd_store.cpp's internal mutex, which a
+    // concurrent full storage check (checkSnapshotStorage, when the
+    // automatic periodic check is enabled) can hold for a long walk - this
+    // camera task can't reach checkCameraOnlineStatus (camera.cpp) again
+    // until this call returns. Without the compensation below, that purely
+    // SD-internal delay would silently count against st.lastContactMs and
+    // could trip a false OFFLINE alert with nothing actually wrong with
+    // the camera - lastContactMs already reflects the camera's real last
+    // response (set in cameraSoapCall, before this write ever started), so
+    // advancing it by exactly how long this call was blocked just excludes
+    // that unrelated delay from "how long has this camera been silent,"
+    // rather than fabricating fresh contact that didn't happen.
+    unsigned long before = millis();
     writeSdSnapshot(cfg, jpg, jpgLen); // takes ownership regardless of outcome - see its own comment
+    unsigned long blockedMs = millis() - before;
+    // Lock-guarded - this function is reachable from loop()'s task too
+    // (sendOnDemandSnapshot, via /snap or handleAllCamerasCommand), not
+    // just the owning camera's own task. See cameraSoapCall's (camera.cpp)
+    // comment for why lastContactMs itself is lock-guarded now.
+    { CameraStateLock lock(st); st.lastContactMs += blockedMs; }
     return;
   }
   pushRamSnapshot(cfg, st, jpg, jpgLen);

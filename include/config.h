@@ -10,23 +10,11 @@
 // seeds NVS on first boot; after that the web UI is the only way to
 // change them.
 
-// Shown alongside every "Camera Monitor" label this project displays
-// (dashboard title/sidebar/login prompt, Telegram heartbeat/boot
-// messages, the config export header), so it's easy to tell at a glance
-// which exact build is actually running.
-//
-// FIRMWARE_BUILD_VERSION is injected by platformio.ini's extra_scripts
-// (scripts/generate_build_version.py) as "DDMMYYYY.HHMM" - the real
-// wall-clock time of this specific build, computed fresh on every
-// `pio run`/upload, not something anyone has to remember to bump by
-// hand. The #ifdef fallback keeps this header compilable on its own
-// (e.g. a stray tool that doesn't process extra_scripts) rather than a
-// hard error.
-#ifdef FIRMWARE_BUILD_VERSION
-static const char* FIRMWARE_VERSION = FIRMWARE_BUILD_VERSION;
-#else
-static const char* FIRMWARE_VERSION = "dev";
-#endif
+// FIRMWARE_VERSION lives in build_version.h, not here, even though this
+// is where every other project-wide constant lives - see that header's
+// own comment for why (short version: it changes on every build, and
+// config.h is included by nearly everything in src/, so baking it in
+// here would force a full rebuild on every single `pio run`/upload).
 
 // ============================================================
 // Timing (all in ms unless noted)
@@ -40,6 +28,13 @@ static const unsigned long RETRY_INTERVAL_MS        = 10000UL;
 // force a resubscribe. At PULL_INTERVAL_MS's 2s cadence, 5 is ~10s of
 // tolerance for a transient hiccup before treating the pullpoint as dead.
 static const uint8_t        PULL_MESSAGES_AMBIGUOUS_LIMIT = 5;
+// See CameraState::lastSnapshotUriRetryMs's own comment - how often a
+// subscribed camera with a still-unresolved snapshotUri retries
+// GetProfiles/GetSnapshotUri. Not too aggressive: a camera whose Media
+// service is genuinely absent (not just a transient failure) will keep
+// failing this cheaply but pointlessly forever, so this stays well above
+// the poll cadence.
+static const unsigned long SNAPSHOT_URI_RETRY_INTERVAL_MS = 5UL * 60UL * 1000UL; // 5 minutes
 static const uint16_t      HTTP_TIMEOUT_MS          = 10000;
 static const unsigned long HEARTBEAT_INTERVAL_MS    = 6UL * 60UL * 60UL * 1000UL; // liveness ping cadence
 static const unsigned long TELEGRAM_COMMAND_POLL_MS = 5000UL;        // /on, /off, /status polling cadence

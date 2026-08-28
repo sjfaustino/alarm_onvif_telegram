@@ -4,6 +4,22 @@
 #include "secrets.h"
 #include <Preferences.h>
 #include <esp_task_wdt.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+
+// Guards addCamera/updateCamera/deleteCamera's whole load-all-modify-one-
+// save-all sequence - without this, two near-simultaneous calls (two
+// browser tabs, or a retried form submit) each load the same starting
+// list, apply their own single change, and save independently - whichever
+// save lands second silently overwrites the first's change (a classic
+// lost update), with no error surfaced to either caller. Deliberately a
+// separate mutex from webserver_cameras.cpp's own g_saveMutex (which
+// guards that file's live-reload bookkeeping around a save, a webserver-
+// layer concern this storage layer has no business knowing about) - this
+// one protects the NVS read-modify-write invariant itself, for every
+// caller, not just the ones that happen to go through that specific route
+// handler.
+static SemaphoreHandle_t g_camerasMutex = xSemaphoreCreateMutex();
 
 static const char* NVS_NAMESPACE  = "camstore";
 // Legacy: the whole record list used to live under this one key, as a
@@ -192,39 +208,56 @@ bool saveCameras(const std::vector<CameraConfig>& cameras) {
 }
 
 bool addCamera(const CameraConfig& cam) {
+  xSemaphoreTake(g_camerasMutex, portMAX_DELAY);
   std::vector<CameraConfig> cams = loadCameras();
+  bool collides = false;
   for (auto& c : cams) {
-    if (c.name.equalsIgnoreCase(cam.name)) return false;
+    if (c.name.equalsIgnoreCase(cam.name)) { collides = true; break; }
   }
-  cams.push_back(cam);
-  return saveCameras(cams);
+  bool ok = false;
+  if (!collides) {
+    cams.push_back(cam);
+    ok = saveCameras(cams);
+  }
+  xSemaphoreGive(g_camerasMutex);
+  return ok;
 }
 
 bool deleteCamera(const String& name) {
+  xSemaphoreTake(g_camerasMutex, portMAX_DELAY);
   std::vector<CameraConfig> cams = loadCameras();
+  bool ok = false;
   for (size_t i = 0; i < cams.size(); i++) {
     if (cams[i].name.equalsIgnoreCase(name)) {
       cams.erase(cams.begin() + i);
-      return saveCameras(cams);
+      ok = saveCameras(cams);
+      break;
     }
   }
-  return false;
+  xSemaphoreGive(g_camerasMutex);
+  return ok;
 }
 
 bool updateCamera(const String& originalName, const CameraConfig& cam) {
+  xSemaphoreTake(g_camerasMutex, portMAX_DELAY);
   std::vector<CameraConfig> cams = loadCameras();
   int idx = -1;
   for (size_t i = 0; i < cams.size(); i++) {
     if (cams[i].name.equalsIgnoreCase(originalName)) { idx = (int)i; break; }
   }
-  if (idx < 0) return false;
-
-  for (size_t i = 0; i < cams.size(); i++) {
-    if ((int)i != idx && cams[i].name.equalsIgnoreCase(cam.name)) return false;
+  bool ok = false;
+  if (idx >= 0) {
+    bool collides = false;
+    for (size_t i = 0; i < cams.size(); i++) {
+      if ((int)i != idx && cams[i].name.equalsIgnoreCase(cam.name)) { collides = true; break; }
+    }
+    if (!collides) {
+      cams[idx] = cam;
+      ok = saveCameras(cams);
+    }
   }
-
-  cams[idx] = cam;
-  return saveCameras(cams);
+  xSemaphoreGive(g_camerasMutex);
+  return ok;
 }
 
 size_t restoreMissingCamerasFromSeed() {

@@ -8,6 +8,7 @@
 #include <esp_ota_ops.h>  // esp_ota_mark_app_valid_cancel_rollback()
 #include <cstdlib>
 #include "config.h"
+#include "build_version.h"
 #include "camera.h"
 #include "camera_store.h"
 #include "network_store.h"

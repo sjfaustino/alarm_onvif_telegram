@@ -619,7 +619,12 @@ void triggerSignalLossAlert(const CameraConfig& cfg, CameraState& st) {
 }
 
 void checkCameraOnlineStatus(const CameraConfig& cfg, CameraState& st) {
-  bool offlineNow = (millis() - st.lastContactMs) >= cfg.offlineThresholdMs;
+  // lastContactMs is lock-guarded (see cameraSoapCall's/pushCameraSnapshot's
+  // own comments) - pushCameraSnapshot can adjust it from loop()'s task
+  // (sendOnDemandSnapshot, via /snap), not just this camera's own task.
+  unsigned long lastContactMs;
+  { CameraStateLock lock(st); lastContactMs = st.lastContactMs; }
+  bool offlineNow = (millis() - lastContactMs) >= cfg.offlineThresholdMs;
   // isOffline is written only here, always from this camera's own task, so
   // this self-read needs no lock - only the write below does, since
   // webserver.cpp/main.cpp read it from other tasks.

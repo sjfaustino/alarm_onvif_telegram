@@ -5,6 +5,17 @@
 #include "secrets.h"
 #include <Preferences.h>
 #include <cstdlib> // strtoll
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+
+// Guards addTelegramUser/updateTelegramUser/deleteTelegramUser's whole
+// load-all-modify-one-save-all sequence - same reasoning as
+// camera_store.cpp's g_camerasMutex (see its own comment): without this,
+// two near-simultaneous calls each load the same starting list and save
+// independently, and whichever save lands second silently overwrites the
+// first's change with no error to either caller. This file previously had
+// no locking of any kind.
+static SemaphoreHandle_t g_usersMutex = xSemaphoreCreateMutex();
 
 static const char* NVS_NAMESPACE  = "tgusers";
 // Legacy single-key format - see camera_store.cpp's identical
@@ -150,10 +161,12 @@ bool saveTelegramUsers(const std::vector<TelegramUser>& users) {
 }
 
 bool addTelegramUser(const TelegramUser& user) {
+  xSemaphoreTake(g_usersMutex, portMAX_DELAY);
   std::vector<TelegramUser> users = loadTelegramUsers();
   int64_t newChatId = strtoll(user.chatId.c_str(), nullptr, 10);
+  bool collides = false;
   for (auto& u : users) {
-    if (u.name.equalsIgnoreCase(user.name)) return false;
+    if (u.name.equalsIgnoreCase(user.name)) { collides = true; break; }
     // Two different-named entries sharing one chat ID would double-send
     // every alert to that physical Telegram account (triggerMotionAlert's
     // recipient fan-out doesn't de-dup by chat ID) and make command
@@ -161,39 +174,54 @@ bool addTelegramUser(const TelegramUser& user) {
     // sender lookup is first-match-wins, so whichever record loads first
     // silently decides that account's canCommand/canSnap/canReset) -
     // reject the add outright instead of silently allowing either.
-    if (chatIdMatches(u.chatId, newChatId)) return false;
+    if (chatIdMatches(u.chatId, newChatId)) { collides = true; break; }
   }
-  users.push_back(user);
-  return saveTelegramUsers(users);
+  bool ok = false;
+  if (!collides) {
+    users.push_back(user);
+    ok = saveTelegramUsers(users);
+  }
+  xSemaphoreGive(g_usersMutex);
+  return ok;
 }
 
 bool deleteTelegramUser(const String& name) {
+  xSemaphoreTake(g_usersMutex, portMAX_DELAY);
   std::vector<TelegramUser> users = loadTelegramUsers();
+  bool ok = false;
   for (size_t i = 0; i < users.size(); i++) {
     if (users[i].name.equalsIgnoreCase(name)) {
       users.erase(users.begin() + i);
-      return saveTelegramUsers(users);
+      ok = saveTelegramUsers(users);
+      break;
     }
   }
-  return false;
+  xSemaphoreGive(g_usersMutex);
+  return ok;
 }
 
 bool updateTelegramUser(const String& originalName, const TelegramUser& user) {
+  xSemaphoreTake(g_usersMutex, portMAX_DELAY);
   std::vector<TelegramUser> users = loadTelegramUsers();
   int idx = -1;
   for (size_t i = 0; i < users.size(); i++) {
     if (users[i].name.equalsIgnoreCase(originalName)) { idx = (int)i; break; }
   }
-  if (idx < 0) return false;
-
-  int64_t newChatId = strtoll(user.chatId.c_str(), nullptr, 10);
-  for (size_t i = 0; i < users.size(); i++) {
-    if ((int)i == idx) continue;
-    if (users[i].name.equalsIgnoreCase(user.name)) return false;
-    // Same reasoning as addTelegramUser's own comment.
-    if (chatIdMatches(users[i].chatId, newChatId)) return false;
+  bool ok = false;
+  if (idx >= 0) {
+    int64_t newChatId = strtoll(user.chatId.c_str(), nullptr, 10);
+    bool collides = false;
+    for (size_t i = 0; i < users.size(); i++) {
+      if ((int)i == idx) continue;
+      if (users[i].name.equalsIgnoreCase(user.name)) { collides = true; break; }
+      // Same reasoning as addTelegramUser's own comment.
+      if (chatIdMatches(users[i].chatId, newChatId)) { collides = true; break; }
+    }
+    if (!collides) {
+      users[idx] = user;
+      ok = saveTelegramUsers(users);
+    }
   }
-
-  users[idx] = user;
-  return saveTelegramUsers(users);
+  xSemaphoreGive(g_usersMutex);
+  return ok;
 }

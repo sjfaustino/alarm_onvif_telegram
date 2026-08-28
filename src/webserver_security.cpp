@@ -5,7 +5,7 @@
 #include "telegram_users.h"
 #include "network_store.h"
 #include "sd_store.h"
-#include "config.h" // FIRMWARE_VERSION
+#include "build_version.h" // FIRMWARE_VERSION
 
 // snapshotUriOverride (buildConfigExport, below) is free text, not
 // necessarily using the intended {USER}/{PASS} placeholder pattern - a

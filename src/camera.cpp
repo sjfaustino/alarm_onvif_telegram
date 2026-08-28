@@ -78,6 +78,10 @@ bool resolveCameraCredentials(const CameraConfig& cfg, CameraState& st) {
 // updated - a non-empty response (even a SOAP fault) means the camera's
 // stack answered, which is what checkCameraOnlineStatus (telegram.cpp)
 // uses to tell a genuinely offline camera from one merely failing a call.
+// lastContactMs is lock-guarded (CameraState::stateMutex), not same-task-
+// only: pushCameraSnapshot (snapshot_history.cpp) also adjusts it, and
+// that function is reachable from loop()'s task too (sendOnDemandSnapshot,
+// via /snap or handleAllCamerasCommand), not just this camera's own task.
 static String cameraSoapCall(const CameraConfig& cfg, CameraState& st, const String& url,
                               const String& to, const String& action, const String& body) {
   const char* user; const char* pass;
@@ -87,7 +91,7 @@ static String cameraSoapCall(const CameraConfig& cfg, CameraState& st, const Str
   const char* basicUser = cfg.useWSSecurity ? nullptr : user;
   const char* basicPass = cfg.useWSSecurity ? nullptr : pass;
   String response = soapPost(cfg.name.c_str(), url, action, xml, basicUser, basicPass);
-  if (response.length() > 0) st.lastContactMs = millis();
+  if (response.length() > 0) { CameraStateLock lock(st); st.lastContactMs = millis(); }
   return response;
 }
 
@@ -563,6 +567,21 @@ void cameraTaskFn(void* pvParameters) {
           millis() - st.lastTimelapseMs >= (unsigned long)cfg.timelapseIntervalMin * 60000UL) {
         st.lastTimelapseMs = millis();
         triggerTimelapseCapture(cfg, st);
+      }
+      // Subscribed and polling fine, but the very first
+      // cameraFetchProfileAndSnapshotUri call (cameraSetupSequence) failed
+      // and nothing else ever retries it once eventServiceUrl is set (see
+      // CameraState::lastSnapshotUriRetryMs's own comment) - without this,
+      // a single transient GetProfiles/GetSnapshotUri failure permanently
+      // breaks photo alerts/timelapse for this camera while motion
+      // detection keeps working normally, masking the problem.
+      if (st.snapshotUri.length() == 0 &&
+          millis() - st.lastSnapshotUriRetryMs >= SNAPSHOT_URI_RETRY_INTERVAL_MS) {
+        st.lastSnapshotUriRetryMs = millis();
+        if (cameraFetchProfileAndSnapshotUri(cfg, st)) {
+          Serial.printf("[%s] Snapshot URI resolved on retry - photo alerts/timelapse now available.\n",
+                        cfg.name.c_str());
+        }
       }
     }
 
