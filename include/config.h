@@ -10,13 +10,23 @@
 // seeds NVS on first boot; after that the web UI is the only way to
 // change them.
 
-// Bump manually whenever you want to mark a release - shown alongside
-// every "Camera Monitor" label this project displays (dashboard title/
-// sidebar/login prompt, Telegram heartbeat/boot messages, the config
-// export header), so it's easy to tell at a glance which build is
-// actually running without checking the Firmware page's build
-// date/time. Not tied to git or the build system automatically.
-static const char* FIRMWARE_VERSION = "1.0";
+// Shown alongside every "Camera Monitor" label this project displays
+// (dashboard title/sidebar/login prompt, Telegram heartbeat/boot
+// messages, the config export header), so it's easy to tell at a glance
+// which exact build is actually running.
+//
+// FIRMWARE_BUILD_VERSION is injected by platformio.ini's extra_scripts
+// (scripts/generate_build_version.py) as "DDMMYYYY.HHMM" - the real
+// wall-clock time of this specific build, computed fresh on every
+// `pio run`/upload, not something anyone has to remember to bump by
+// hand. The #ifdef fallback keeps this header compilable on its own
+// (e.g. a stray tool that doesn't process extra_scripts) rather than a
+// hard error.
+#ifdef FIRMWARE_BUILD_VERSION
+static const char* FIRMWARE_VERSION = FIRMWARE_BUILD_VERSION;
+#else
+static const char* FIRMWARE_VERSION = "dev";
+#endif
 
 // ============================================================
 // Timing (all in ms unless noted)
