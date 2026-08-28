@@ -21,6 +21,16 @@ void test_delay_stays_at_cap_once_reached(void) {
   TEST_ASSERT_EQUAL_UINT32(300000UL, nextBackoffDelayMs(300000UL, 10000UL, 300000UL));
 }
 
+// unsigned long is 32-bit on this platform - previousDelayMs above
+// ULONG_MAX/2 makes the internal *2UL wrap to a small value. Without the
+// overflow guard, that wrapped value could read as "under capMs" and get
+// returned directly instead of the cap - the delay would shrink instead
+// of staying clamped. No real caller reaches this today, but this is a
+// shared primitive; verifies the guard, not just the reachable range.
+void test_delay_does_not_shrink_on_overflow(void) {
+  TEST_ASSERT_EQUAL_UINT32(300000UL, nextBackoffDelayMs(3000000000UL, 10000UL, 300000UL));
+}
+
 // Documents the full sequence both main.cpp (WiFi reconnect) and
 // camera.cpp (subscription retry) actually depend on: start, double,
 // double, ..., cap, cap forever - and instantly back to start the moment
@@ -77,6 +87,7 @@ int main(int argc, char** argv) {
   RUN_TEST(test_second_failure_doubles_the_previous_delay);
   RUN_TEST(test_delay_is_capped_and_does_not_exceed_cap);
   RUN_TEST(test_delay_stays_at_cap_once_reached);
+  RUN_TEST(test_delay_does_not_shrink_on_overflow);
   RUN_TEST(test_full_sequence_matches_both_callers_expectations);
   RUN_TEST(test_detectorSafeBackoffCapMs_half_the_threshold_when_under_global_cap);
   RUN_TEST(test_detectorSafeBackoffCapMs_threshold_equal_to_global_cap);

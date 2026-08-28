@@ -30,11 +30,26 @@ void test_renderEditDeleteActions_confirm_dialog_and_hidden_field_use_escaped_na
   TEST_ASSERT_TRUE(html.indexOf("value=\"A &amp; B\"") >= 0);
 }
 
+// The bug this exists to catch: the confirm() dialog's text sits inside a
+// single-quoted JS string NESTED inside a double-quoted onsubmit="..."
+// attribute. htmlEscape() used to leave ' untouched (only "/&/</> were
+// escaped), so a name containing a literal ' could break out of that JS
+// string and inject arbitrary script that runs the instant an admin
+// clicks Delete on that row - a real, confirmed XSS gap, not a
+// hypothetical. Verifies the single quote is now escaped to &#39;, not
+// left as a literal ' that would terminate the JS string early.
+void test_renderEditDeleteActions_confirm_dialog_escapes_single_quote(void) {
+  String html = renderEditDeleteActions("/cameras/edit?name=", "/delete", "a');alert(1);//");
+  TEST_ASSERT_TRUE(html.indexOf("confirm('Delete a&#39;);alert(1);//?')") >= 0);
+  TEST_ASSERT_TRUE(html.indexOf("');alert(1);//") < 0); // the raw breakout sequence must not appear anywhere
+}
+
 int main(int argc, char** argv) {
   UNITY_BEGIN();
   RUN_TEST(test_renderEditDeleteActions_edit_link_uses_route_base_and_encoded_name);
   RUN_TEST(test_renderEditDeleteActions_percent_encodes_special_characters_in_edit_link);
   RUN_TEST(test_renderEditDeleteActions_uses_given_delete_route);
   RUN_TEST(test_renderEditDeleteActions_confirm_dialog_and_hidden_field_use_escaped_name);
+  RUN_TEST(test_renderEditDeleteActions_confirm_dialog_escapes_single_quote);
   return UNITY_END();
 }

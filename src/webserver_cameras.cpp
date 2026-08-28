@@ -337,14 +337,23 @@ bool saveCameraSubmission(CameraConfig cam, const String& originalName, String& 
   }
 
   if (idx >= 0 && liveStates && idx < (int)liveStates->size()) {
-    String safeName = htmlEscape(cam.name);
+    // Deliberately NOT htmlEscape()d here - applyNote rides through a
+    // URL-encoded redirect query param (see webserver.cpp's /cameras/save
+    // and /cameras GET handlers) and is escaped exactly once, at the
+    // single point it's actually rendered into HTML (the /cameras GET
+    // handler). Escaping it here too used to seem like defense in depth,
+    // but it actually created a real reflected-XSS hole: the GET handler
+    // trusted that pre-escaping and skipped its own, which meant a direct
+    // request to /cameras?note=<script>...</script> (bypassing this POST
+    // flow entirely) rendered completely unescaped. One escaping point,
+    // not zero and not two.
     if (wasRunning && cam.enabled) {
       // Still enabled before and after - stage the new config for the
       // already-running task to pick up itself. See requestLiveConfigReload
       // (camera.h) for why this webserver task must never write the live
       // CameraConfig's String fields directly.
       requestLiveConfigReload((*liveStates)[idx], cam);
-      applyNote = "\"" + safeName + "\" updated - applying live, reconnecting now (no reboot needed).";
+      applyNote = "\"" + cam.name + "\" updated - applying live, reconnecting now (no reboot needed).";
     } else if (!wasRunning && cam.enabled) {
       // Was disabled (or simply never got a task at boot) and this edit
       // just enabled it. Staged via the same pendingConfig mechanism a
@@ -360,13 +369,13 @@ bool saveCameraSubmission(CameraConfig cam, const String& originalName, String& 
       requestLiveConfigReload((*liveStates)[idx], cam);
       spawnCameraTask(idx); // its own startup applies the staged config - see applyPendingConfigIfAny
       logEvent(cam.name + ": enabled via dashboard, monitoring started live");
-      applyNote = "\"" + safeName + "\" enabled - monitoring started live (no reboot needed).";
+      applyNote = "\"" + cam.name + "\" enabled - monitoring started live (no reboot needed).";
     } else if (wasRunning && !cam.enabled) {
       // Every other field change here (if any) still needs a reboot to
       // take effect too - there's no live task-teardown path yet, so
       // rather than apply a half-edit, this whole save waits for a
       // reboot, exactly like it always has for a disable.
-      applyNote = "\"" + safeName + "\" disabled, but its task is still running - reboot to fully stop it.";
+      applyNote = "\"" + cam.name + "\" disabled, but its task is still running - reboot to fully stop it.";
     }
     // else: wasn't running, still not enabled - nothing live to do.
   }

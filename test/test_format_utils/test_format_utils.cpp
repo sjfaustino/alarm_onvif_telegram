@@ -38,10 +38,18 @@ void test_htmlEscape_escapes_amp_lt_gt_quot(void) {
   TEST_ASSERT_EQUAL_STRING("&amp;&lt;&gt;&quot;", htmlEscape("&<>\"").c_str());
 }
 
-// Documented, intentional: single quotes are left alone since this project
-// never emits single-quoted HTML attributes.
-void test_htmlEscape_leaves_single_quote_untouched(void) {
-  TEST_ASSERT_EQUAL_STRING("it's fine", htmlEscape("it's fine").c_str());
+// A single quote must be escaped too, even though this project never
+// emits single-quoted HTML *attributes* - renderEditDeleteActions
+// (lib/webserver_html) interpolates an htmlEscape()d name into a
+// single-quoted JS string INSIDE a double-quoted onsubmit="..." attribute
+// (onsubmit="return confirm('...')"). The attribute itself being double-
+// quoted doesn't protect the JS string literal nested inside it - an
+// unescaped ' there breaks out of that string and lets the rest of the
+// name execute as script. This was a real, confirmed XSS gap, not a
+// hypothetical - a previous version of this test asserted the opposite
+// (unescaped) as "intentional," which is exactly how it went unnoticed.
+void test_htmlEscape_escapes_single_quote(void) {
+  TEST_ASSERT_EQUAL_STRING("it&#39;s fine", htmlEscape("it's fine").c_str());
 }
 
 void test_htmlEscape_leaves_plain_text_untouched(void) {
@@ -84,7 +92,7 @@ int main(int argc, char** argv) {
   RUN_TEST(test_formatElapsedSince_under_a_minute_is_just_now);
   RUN_TEST(test_formatElapsedSince_over_a_minute_uses_formatUptime);
   RUN_TEST(test_htmlEscape_escapes_amp_lt_gt_quot);
-  RUN_TEST(test_htmlEscape_leaves_single_quote_untouched);
+  RUN_TEST(test_htmlEscape_escapes_single_quote);
   RUN_TEST(test_htmlEscape_leaves_plain_text_untouched);
   RUN_TEST(test_urlEncode_leaves_unreserved_characters_untouched);
   RUN_TEST(test_urlEncode_percent_encodes_space_and_special_chars);

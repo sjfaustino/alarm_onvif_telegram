@@ -326,14 +326,18 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
 
   server.on("/cameras", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
     // note carries a one-time status banner across the POST-redirect-GET
-    // from /cameras/save (see that route below) - saveCameraSubmission
-    // already htmlEscape()s anything user-controlled (a camera name) that
-    // goes into it before it's ever URL-encoded into the redirect, and
-    // PsychicRequest url-decodes query params automatically (verified by
-    // reading PsychicRequest::_addParams, not assumed) - so what comes
-    // back out here is safe to hand to renderShell's own unescaped banner
-    // parameter as-is, same as every other banner in this file.
-    String note = request->getParam("note", "");
+    // from /cameras/save (see that route below) - htmlEscape()d HERE,
+    // the single point it's actually rendered into HTML, not earlier.
+    // This route is reachable directly (a bare GET, not just via the
+    // redirect this project itself issues), so it can never assume `note`
+    // arrived pre-escaped from a trusted caller - a previous version did
+    // assume exactly that, which made a direct request to
+    // /cameras?note=<script>...</script> render completely unescaped
+    // (reflected XSS, since PsychicRequest url-decodes query params
+    // automatically). saveCameraSubmission (webserver_cameras.cpp) now
+    // deliberately builds this value RAW, not pre-escaped, so it isn't
+    // double-escaped here.
+    String note = htmlEscape(request->getParam("note", ""));
     return response->send(
         200, "text/html",
         renderShell(Tab::Cameras, note, renderCamerasPanel(nullptr, false, g_liveCameras, g_liveStates)).c_str());

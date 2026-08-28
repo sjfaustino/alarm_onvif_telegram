@@ -29,6 +29,16 @@ String htmlEscape(const String& s) {
       case '<':  out += "&lt;";   break;
       case '>':  out += "&gt;";   break;
       case '"':  out += "&quot;"; break;
+      // A single quote left un-escaped is a real hole, not just theory:
+      // renderEditDeleteActions (lib/webserver_html) interpolates an
+      // htmlEscape()d name into a single-quoted JS string inside an
+      // onsubmit="return confirm('...')" attribute - the outer HTML
+      // attribute is double-quoted (safe, '"' is escaped above), but
+      // without this case a name containing a literal ' could still break
+      // out of the inner JS string and inject arbitrary script that runs
+      // when an admin clicks Delete on that row. &#39; (not &apos;, which
+      // isn't valid in every HTML context) is the universally-safe form.
+      case '\'': out += "&#39;";  break;
       default:   out += c;        break;
     }
   }
