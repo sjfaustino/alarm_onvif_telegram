@@ -4,6 +4,7 @@
 #include <vector>
 #include "camera.h"
 #include "camera_store.h"
+#include "onvif_discovery.h" // DiscoveredCamera
 
 // Cameras panel: live status table, Add/Edit form, Test Connection. Split
 // out of webserver.cpp - see webserver_network.h's comment for why.
@@ -91,3 +92,28 @@ void startTestAllCamerasAsync();
 // (internally locked) - renderCamerasPanel calls this itself, so it shows
 // up on a normal page load too, not just right after clicking the button.
 String renderTestAllStatus();
+
+// ============================================================
+// Network camera discovery (WS-Discovery) - like an NVR's own "search the
+// network" button. onvif_discovery.h (lib/) has the pure Probe-message-
+// building/ProbeMatch-parsing logic; these two functions are the ESP32-
+// specific UDP send/receive and background-task glue around it, same
+// split as testAllCameraConnections above.
+// ============================================================
+
+// Starts a WS-Discovery probe on a background FreeRTOS task instead of the
+// calling (PsychicHttp) task - same reasoning as startTestAllCamerasAsync
+// above: the listen window is a few seconds by design (has to give slower
+// cameras time to answer a multicast probe), which would otherwise block
+// the whole dashboard for that long. A no-op if a search is already in
+// progress. Call this from the /cameras/discover route handler.
+void startCameraDiscoveryAsync();
+
+// Renders the current discovery status: "a search is running" while one is
+// in progress, the last completed run's results (a table with an Add link
+// per discovered camera, prefilling the Add-camera form below with its
+// address and best-effort name - WS-Discovery never carries credentials,
+// so the user still types a username/password by hand) once one exists,
+// or "" if no search has run yet this boot. Safe to call from any task
+// (internally locked) - renderCamerasPanel calls this itself.
+String renderCameraDiscoveryStatus();

@@ -69,15 +69,27 @@ Arduino-ESP32/IDF releases.
   a rock-solid one in the live subscribed/OFFLINE status alone, so this is the
   one place that history is actually visible instead of silently resetting on
   every successful reconnect.
-- A "Test all cameras" button on the Cameras page runs the same real
-  GetCapabilities/GetEventProperties/GetSnapshotUri/CreatePullPointSubscription
-  sequence as a single camera's Test Connection button, once per already-saved
+- A "Test all cameras" button on the Cameras page checks reachability and
+  ONVIF event-service response (GetCapabilities/GetEventProperties - not a
+  full subscription test, to avoid disrupting the real subscription each
+  enabled camera's own monitoring task already holds) once per already-saved
   *enabled* camera (not whatever's currently typed into the Add/Edit form) - a
   quick way to see which cameras, if any, broke after a network change, without
-  clicking through each one by hand. Synchronous, not a background job, so it
-  can take a while if several cameras are unreachable (same "webserver ops are
-  lower priority than camera-task work" tradeoff this project already accepts
-  elsewhere) - the page says so.
+  clicking through each one by hand. Runs on a background task, so the rest of
+  the dashboard stays responsive while it works - reload the page to see
+  results once ready.
+- A "Search network for cameras" button on the Cameras page sends a
+  WS-Discovery multicast probe on the local network segment and lists what
+  answers, like an NVR's own camera search - click Add next to a result to
+  prefill the Add-camera form below with its device service URL and a
+  best-effort name (parsed from the reply's Scopes, if the camera includes
+  one). WS-Discovery never carries credentials, so username/password still
+  need to be typed in by hand. Also runs on a background task (the listen
+  window is a few seconds by design, to give slower cameras time to answer).
+  Multicast discovery only reaches devices on the same network segment as the
+  board - a camera on a different VLAN/subnet, or one that doesn't support
+  WS-Discovery at all, won't show up here even if it's reachable directly by
+  URL; add those manually instead.
 - Cameras and Telegram recipients are managed at runtime through a built-in
   sidebar dashboard ([hoeken/PsychicHttp](https://github.com/hoeken/PsychicHttp))
   and persisted in NVS - no more editing and reflashing `config.h`/`secrets.h` to

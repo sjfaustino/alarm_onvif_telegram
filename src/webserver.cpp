@@ -340,9 +340,24 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
     // deliberately builds this value RAW, not pre-escaped, so it isn't
     // double-escaped here.
     String note = htmlEscape(request->getParam("note", ""));
+
+    // prefillName/prefillUrl arrive from a discovered-camera "Add" link
+    // (webserver_cameras.cpp's renderCameraDiscoveryStatus) - PsychicRequest
+    // url-decodes query params automatically, and renderCameraForm below
+    // htmlEscape()s both before they ever reach the page, same as every
+    // other prefill path here (a failed save redisplay, an edit link).
+    String prefillUrl = request->getParam("prefillUrl", "");
+    CameraConfig prefill;
+    CameraConfig* prefillPtr = nullptr;
+    if (prefillUrl.length() > 0) {
+      prefill.name = request->getParam("prefillName", "");
+      prefill.deviceServiceUrl = prefillUrl;
+      prefillPtr = &prefill;
+    }
     return response->send(
         200, "text/html",
-        renderShell(Tab::Cameras, note, renderCamerasPanel(nullptr, false, g_liveCameras, g_liveStates)).c_str());
+        renderShell(Tab::Cameras, note, renderCamerasPanel(prefillPtr, false, g_liveCameras, g_liveStates))
+            .c_str());
   });
 
   server.on("/cameras/edit", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
@@ -401,6 +416,18 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
     return response->send(
         200, "text/html",
         renderShell(Tab::Cameras, banner, renderCamerasPanel(&submitted, isEdit, g_liveCameras, g_liveStates))
+            .c_str());
+  });
+
+  server.on("/cameras/discover", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
+    // Kicks off a background task and returns immediately - see
+    // startCameraDiscoveryAsync's own comment (webserver_cameras.h) for why
+    // this must never run synchronously on this request-handling task.
+    startCameraDiscoveryAsync();
+    return response->send(
+        200, "text/html",
+        renderShell(Tab::Cameras, "Searching the network for cameras in the background.",
+                    renderCamerasPanel(nullptr, false, g_liveCameras, g_liveStates))
             .c_str());
   });
 

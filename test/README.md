@@ -29,6 +29,7 @@ this way:
 | `telegram_parse`             | `telegram.cpp`                         | `parseTelegramUpdates` (ArduinoJson, replacing hand-rolled brace-counting) and the `/on`/`/off`/`/snap` camera-name prefix matching |
 | `backoff`                    | `main.cpp` + `camera.cpp` (duplicated) | The doubling-with-a-cap retry delay formula, previously hand-written twice and prone to drifting apart |
 | `camera_parse`               | `camera.cpp`                           | ONVIF `GetProfiles` response parsing (`parseProfiles`), motion/tamper/signal-loss event classification (`classifyCameraEvent`), and the per-topic state-value lookup (`extractEventStateValue`) |
+| `onvif_discovery`            | `webserver_cameras.cpp`                | WS-Discovery Probe message building (`buildProbeMessage`) and ProbeMatch reply parsing (`parseProbeMatch` - XAddrs/Scopes extraction) for the Cameras page's "Search network for cameras" button |
 | `telegram_multipart`         | `telegram.cpp`                         | `sendPhoto`'s multipart/form-data request builder (`buildMultipart`) - boundary/head/tail/Content-Length construction |
 | `format_utils`               | `main.cpp` + `webserver.cpp` (duplicated) | `formatUptime`, `formatElapsedSince`, `htmlEscape`, `urlEncode`, `extractHost` - `formatUptime` was independently hand-written in both files (byte-identical, silently able to drift) before this |
 

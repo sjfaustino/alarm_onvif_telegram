@@ -4,8 +4,11 @@
 #include "camera_tasks.h"
 #include "event_log_store.h"
 #include "snapshot_history.h"
+#include "onvif_soap.h" // makeUUID, for the discovery Probe's MessageID
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
+#include <WiFi.h>
+#include <WiFiUdp.h>
 #include <cctype>
 
 // Serializes saveCameraSubmission's whole "decide whether this camera was
@@ -241,6 +244,17 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
     html += renderEditDeleteActions("/cameras/edit?name=", "/delete", c.name) + "</td></tr>";
   }
   html += "</table>";
+
+  html += "<form method=\"POST\" action=\"/cameras/discover\">"
+          "<p><button type=\"submit\">Search network for cameras</button></p></form>";
+  html += "<p class=\"hint\">Sends a WS-Discovery probe on the local network segment and lists what "
+          "answers, like an NVR's own camera search - click Add next to a result to prefill the Add "
+          "form below with its address (WS-Discovery never carries credentials, so username/password "
+          "still need to be typed in by hand). Runs in the background; reload this page after clicking "
+          "to see results. Multicast discovery only reaches devices on the same network segment as "
+          "this board, so a camera on a different VLAN/subnet won't show up here even if it's directly "
+          "reachable by URL.</p>";
+  html += renderCameraDiscoveryStatus();
 
   if (!cams.empty()) {
     html += "<form method=\"POST\" action=\"/cameras/test-all\">"
@@ -626,6 +640,143 @@ String renderCameraTestAllResults(const std::vector<CameraTestResult>& results) 
     html += "<td>" + String(r.reachable ? "OK" : "FAIL") + "</td>";
     html += "<td>" + String(r.eventServiceOk ? "OK" : "FAIL") + "</td>";
     html += "<td>" + htmlEscape(r.detail) + "</td></tr>";
+  }
+  html += "</table>";
+  return html;
+}
+
+// ============================================================
+// Network camera discovery (WS-Discovery) - see webserver_cameras.h's own
+// comments on startCameraDiscoveryAsync/renderCameraDiscoveryStatus.
+// ============================================================
+
+static const IPAddress kWsDiscoveryMulticastAddr(239, 255, 255, 250);
+static const uint16_t  kWsDiscoveryPort = 3702;
+
+// Total time spent listening for ProbeMatch replies after sending the
+// probe(s). Long enough for a slower/busier camera to answer (WS-
+// Discovery has no guaranteed response time), short enough that the
+// button doesn't feel broken - matches the order of magnitude other
+// ONVIF discovery tools default to.
+static const unsigned long kDiscoveryListenMs = 4000;
+
+// UDP has no delivery guarantee, and a multicast probe is exactly the kind
+// of packet a busy Wi-Fi segment can drop - sending it more than once
+// (spaced out across the listen window, not back-to-back) catches a
+// camera that missed the first one without meaningfully lengthening the
+// wait, since replies from the first send are still being collected while
+// later sends go out.
+static const int kDiscoveryProbeCount = 3;
+
+static SemaphoreHandle_t g_discoveryMutex = xSemaphoreCreateMutex();
+static bool g_discoveryInProgress = false;
+static bool g_discoveryHasResults = false;
+static std::vector<DiscoveredCamera> g_discoveryResults;
+
+// The actual (slow) work - runs on discoveryTask's own background task,
+// never on the calling task. See kDiscoveryListenMs's comment for why this
+// blocks for several seconds by design.
+static std::vector<DiscoveredCamera> runCameraDiscovery() {
+  std::vector<DiscoveredCamera> found;
+  if (WiFi.status() != WL_CONNECTED) return found;
+
+  WiFiUDP udp;
+  if (udp.begin(0) == 0) return found; // 0 = OS-assigned ephemeral local port
+
+  unsigned long start = millis();
+  unsigned long nextProbeMs = start;
+  int probesSent = 0;
+  char buf[2048];
+
+  while ((long)(millis() - start) < (long)kDiscoveryListenMs) {
+    if (probesSent < kDiscoveryProbeCount && (long)(millis() - nextProbeMs) >= 0) {
+      String probe = buildProbeMessage(makeUUID());
+      udp.beginPacket(kWsDiscoveryMulticastAddr, kWsDiscoveryPort);
+      udp.write((const uint8_t*)probe.c_str(), probe.length());
+      udp.endPacket();
+      probesSent++;
+      nextProbeMs = millis() + 1000;
+    }
+
+    int size = udp.parsePacket();
+    if (size <= 0) {
+      delay(20);
+      continue;
+    }
+    int len = udp.read(buf, sizeof(buf) - 1);
+    if (len <= 0) continue;
+    buf[len] = '\0';
+
+    DiscoveredCamera dc;
+    if (!parseProbeMatch(String(buf), dc)) continue;
+
+    bool alreadySeen = false;
+    for (auto& existing : found) {
+      if (existing.xaddr == dc.xaddr) { alreadySeen = true; break; }
+    }
+    if (!alreadySeen) found.push_back(dc);
+  }
+
+  udp.stop();
+  return found;
+}
+
+static void cameraDiscoveryTask(void*) {
+  std::vector<DiscoveredCamera> results = runCameraDiscovery();
+  xSemaphoreTake(g_discoveryMutex, portMAX_DELAY);
+  g_discoveryResults = results;
+  g_discoveryHasResults = true;
+  g_discoveryInProgress = false;
+  xSemaphoreGive(g_discoveryMutex);
+  vTaskDelete(nullptr);
+}
+
+void startCameraDiscoveryAsync() {
+  bool alreadyRunning;
+  xSemaphoreTake(g_discoveryMutex, portMAX_DELAY);
+  alreadyRunning = g_discoveryInProgress;
+  if (!alreadyRunning) g_discoveryInProgress = true;
+  xSemaphoreGive(g_discoveryMutex);
+
+  if (alreadyRunning) return; // one search at a time - a second click while one's in flight is a no-op
+
+  // No TLS/HTTPClient work here (unlike the per-camera and test-all
+  // tasks), just UDP send/receive and light string parsing - a smaller
+  // stack than their 10240 is enough.
+  xTaskCreate(cameraDiscoveryTask, "camDiscover", 4096, nullptr, tskIDLE_PRIORITY + 1, nullptr);
+}
+
+String renderCameraDiscoveryStatus() {
+  bool inProgress, hasResults;
+  std::vector<DiscoveredCamera> results;
+  xSemaphoreTake(g_discoveryMutex, portMAX_DELAY);
+  inProgress = g_discoveryInProgress;
+  hasResults = g_discoveryHasResults;
+  if (hasResults) results = g_discoveryResults; // copied out under the lock, rendered outside it
+  xSemaphoreGive(g_discoveryMutex);
+
+  if (inProgress) {
+    return "<p class=\"hint\">Searching the network for cameras - reload this page in a few seconds "
+           "to see results. The rest of the dashboard stays responsive to everyone else in the "
+           "meantime.</p>";
+  }
+  if (!hasResults) return "";
+  if (results.empty()) {
+    return "<p class=\"hint\">No cameras answered the search. A camera already added above won't "
+           "necessarily show up again here even though it's working fine - some stacks stop announcing "
+           "themselves once they have an active subscription. Cameras on a different VLAN/subnet from "
+           "this board, or ones that don't support WS-Discovery at all, also won't be found this way - "
+           "add those manually with their known address instead.</p>";
+  }
+
+  String html = "<p>Cameras found on the network:</p><table><tr><th>Address</th><th>Name hint</th>"
+                "<th></th></tr>";
+  for (auto& d : results) {
+    String nameForForm = d.nameHint.length() > 0 ? d.nameHint : d.xaddr;
+    html += "<tr><td>" + htmlEscape(d.xaddr) + "</td><td>" +
+            (d.nameHint.length() > 0 ? htmlEscape(d.nameHint) : "<span class=\"hint\">(none)</span>") +
+            "</td><td><a href=\"/cameras?prefillName=" + urlEncode(nameForForm) +
+            "&prefillUrl=" + urlEncode(d.xaddr) + "\">Add</a></td></tr>";
   }
   html += "</table>";
   return html;
