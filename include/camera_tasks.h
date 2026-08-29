@@ -16,4 +16,13 @@
 // (webserver_cameras.cpp's saveCameraSubmission) are explicit about which
 // case they're in and only call this for the one it's actually safe for:
 // a slot that exists but has never had cameraStateInit()/a task before.
+//
+// TODO: no live teardown path exists for the two cases above (a brand-new
+// camera, or disabling/deleting one whose task is already running) - both
+// still require a reboot, and saveCameraSubmission's applyNote says so
+// explicitly rather than silently pretending the change applied. Adding
+// live teardown would need a way to signal a running cameraTaskFn to
+// unsubscribe and vTaskDelete itself, plus making g_cameras/g_cameraStates
+// growable (or pre-sized past what's currently configured) for the
+// brand-new-camera case - real work, not attempted yet.
 void spawnCameraTask(size_t index);

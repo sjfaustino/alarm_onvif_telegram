@@ -292,20 +292,12 @@ void spawnCameraTask(size_t index) {
   snprintf(taskName, sizeof(taskName), "cam%u", (unsigned)index);
   // 10KB stack covers the SOAP String churn plus a WiFiClientSecure TLS
   // handshake with headroom - bump if stack-canary warnings show up.
-  // Pinned to core 1 - the SAME core Arduino's own loopTask runs on by
-  // default on this platform (CONFIG_ARDUINO_RUNNING_CORE, verified
-  // against the actual pioarduino/ESP-IDF default), not core 0 as an
-  // earlier version of this comment incorrectly claimed. This does NOT
-  // fully isolate camera tasks from loopTask's own CPU time - a burst of
-  // cameras all reconnecting at once (e.g. right after a WiFi outage)
-  // dilutes loopTask's share via FreeRTOS's normal same-priority round-
-  // robin, rather than starving it outright. It DOES avoid the WiFi/BT
-  // driver's own internal tasks, which ESP-IDF pins to core 0 regardless
-  // of this setting - moving camera tasks to core 0 instead would trade
-  // this for contention against the WiFi stack itself, which would be
-  // worse (affects every camera, the dashboard, and Telegram, not just
-  // loopTask's own heartbeat/reconnect timing) - not changed for that
-  // reason, just documented accurately instead of the wrong claim before.
+  // Pinned to core 1, same as Arduino's own loopTask (CONFIG_ARDUINO_
+  // RUNNING_CORE) - a reconnect burst dilutes loopTask's share via normal
+  // round-robin rather than starving it, but avoids contending with
+  // ESP-IDF's WiFi/BT tasks, which stay pinned to core 0 regardless and
+  // would be worse to compete with directly (hits every camera, the
+  // dashboard, and Telegram, not just loopTask).
   BaseType_t created =
       xTaskCreatePinnedToCore(cameraTaskFn, taskName, 10240, ctx, tskIDLE_PRIORITY + 1, nullptr, 1);
   if (created != pdPASS) {

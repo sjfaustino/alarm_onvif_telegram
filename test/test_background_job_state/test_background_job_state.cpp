@@ -1,0 +1,63 @@
+#include <unity.h>
+#include "background_job_state.h"
+
+void setUp(void) {}
+void tearDown(void) {}
+
+void test_fresh_state_should_start(void) {
+  BackgroundJobState s;
+  TEST_ASSERT_TRUE(shouldStartBackgroundJob(s));
+}
+
+void test_in_progress_state_should_not_start(void) {
+  // The actual no-op-on-double-click behavior both callers (Test all
+  // cameras, Search network for cameras) depend on.
+  BackgroundJobState s;
+  s.inProgress = true;
+  TEST_ASSERT_FALSE(shouldStartBackgroundJob(s));
+}
+
+void test_markStarted_sets_inProgress(void) {
+  BackgroundJobState s = markBackgroundJobStarted(BackgroundJobState{});
+  TEST_ASSERT_TRUE(s.inProgress);
+}
+
+void test_markStarted_does_not_clear_a_previous_result(void) {
+  // A second run starting shouldn't erase the last completed run's
+  // results - status() still reports hasResult, inProgress just tells the
+  // renderer to show "running" instead of them (see the header's own
+  // comment on markBackgroundJobStarted).
+  BackgroundJobState s;
+  s.hasResult = true;
+  s = markBackgroundJobStarted(s);
+  TEST_ASSERT_TRUE(s.inProgress);
+  TEST_ASSERT_TRUE(s.hasResult);
+}
+
+void test_markFinished_clears_inProgress_and_sets_hasResult(void) {
+  BackgroundJobState s;
+  s.inProgress = true;
+  s = markBackgroundJobFinished(s);
+  TEST_ASSERT_FALSE(s.inProgress);
+  TEST_ASSERT_TRUE(s.hasResult);
+}
+
+void test_full_cycle_then_second_run_can_start_again(void) {
+  BackgroundJobState s;
+  TEST_ASSERT_TRUE(shouldStartBackgroundJob(s));
+  s = markBackgroundJobStarted(s);
+  TEST_ASSERT_FALSE(shouldStartBackgroundJob(s));
+  s = markBackgroundJobFinished(s);
+  TEST_ASSERT_TRUE(shouldStartBackgroundJob(s));
+}
+
+int main(int argc, char** argv) {
+  UNITY_BEGIN();
+  RUN_TEST(test_fresh_state_should_start);
+  RUN_TEST(test_in_progress_state_should_not_start);
+  RUN_TEST(test_markStarted_sets_inProgress);
+  RUN_TEST(test_markStarted_does_not_clear_a_previous_result);
+  RUN_TEST(test_markFinished_clears_inProgress_and_sets_hasResult);
+  RUN_TEST(test_full_cycle_then_second_run_can_start_again);
+  return UNITY_END();
+}

@@ -5,6 +5,7 @@
 #include "event_log_store.h"
 #include "snapshot_history.h"
 #include "onvif_soap.h" // makeUUID, for the discovery Probe's MessageID
+#include "background_job.h" // BackgroundJob<T>, shared by the test-all and discovery buttons below
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 #include <WiFi.h>
@@ -428,16 +429,16 @@ bool saveCameraSubmission(CameraConfig cam, const String& originalName, String& 
       applyNote = "\"" + cam.name + "\" enabled - monitoring started live (no reboot needed).";
     } else if (wasRunning && !cam.enabled) {
       // Every other field change here (if any) still needs a reboot to
-      // take effect too - there's no live task-teardown path yet, so
-      // rather than apply a half-edit, this whole save waits for a
-      // reboot, exactly like it always has for a disable.
+      // take effect too - there's no live task-teardown path yet (TODO in
+      // camera_tasks.h), so rather than apply a half-edit, this whole save
+      // waits for a reboot, exactly like it always has for a disable.
       applyNote = "\"" + cam.name + "\" disabled, but its task is still running - reboot to fully stop it.";
     }
     // else: wasn't running, still not enabled - nothing live to do.
   }
   // else: idx < 0 - this camera isn't in liveCameras at all (added to NVS
   // after this board's current boot) - still needs a reboot to get a live
-  // slot in the first place, same as always.
+  // slot in the first place, same as always (TODO in camera_tasks.h).
 
   xSemaphoreGive(g_saveMutex);
   return true;
@@ -575,31 +576,21 @@ std::vector<CameraTestResult> testAllCameraConnections() {
 // ============================================================
 // Background wrapper - see testAllCameraConnections' own comment for why
 // this can't just run synchronously on the calling (PsychicHttp) task.
+// BackgroundJob<T> (background_job.h) owns the mutex/state-machine part -
+// shared with cameraDiscoveryTask's own wrapper further down, which needs
+// the identical "start unless already running / finish / poll status"
+// shape for an unrelated result type.
 // ============================================================
 
-static SemaphoreHandle_t g_testAllMutex = xSemaphoreCreateMutex();
-static bool g_testAllInProgress = false;
-static bool g_testAllHasResults = false; // false until the first run this boot ever completes
-static std::vector<CameraTestResult> g_testAllResults;
+static BackgroundJob<std::vector<CameraTestResult>> g_testAllJob;
 
 static void testAllCamerasTask(void*) {
-  std::vector<CameraTestResult> results = testAllCameraConnections(); // the actual (slow) work
-  xSemaphoreTake(g_testAllMutex, portMAX_DELAY);
-  g_testAllResults = results;
-  g_testAllHasResults = true;
-  g_testAllInProgress = false;
-  xSemaphoreGive(g_testAllMutex);
+  g_testAllJob.finish(testAllCameraConnections()); // the actual (slow) work
   vTaskDelete(nullptr);
 }
 
 void startTestAllCamerasAsync() {
-  bool alreadyRunning;
-  xSemaphoreTake(g_testAllMutex, portMAX_DELAY);
-  alreadyRunning = g_testAllInProgress;
-  if (!alreadyRunning) g_testAllInProgress = true;
-  xSemaphoreGive(g_testAllMutex);
-
-  if (alreadyRunning) return; // one run at a time - a second click while one's in flight is a no-op
+  if (!g_testAllJob.tryStart()) return; // one run at a time - a second click while one's in flight is a no-op
 
   // Same stack size as a real per-camera monitoring task (camera_tasks.h) -
   // this does the identical TLS/HTTPClient/SOAP-string-building work per
@@ -608,20 +599,13 @@ void startTestAllCamerasAsync() {
 }
 
 String renderTestAllStatus() {
-  bool inProgress, hasResults;
-  std::vector<CameraTestResult> results;
-  xSemaphoreTake(g_testAllMutex, portMAX_DELAY);
-  inProgress = g_testAllInProgress;
-  hasResults = g_testAllHasResults;
-  if (hasResults) results = g_testAllResults; // copied out under the lock, rendered outside it
-  xSemaphoreGive(g_testAllMutex);
-
-  if (inProgress) {
+  auto st = g_testAllJob.status();
+  if (st.inProgress) {
     return "<p class=\"hint\">A camera connectivity test is running in the background - reload this "
            "page in a bit to see results. The rest of the dashboard stays responsive to everyone else "
            "in the meantime.</p>";
   }
-  if (hasResults) return renderCameraTestAllResults(results);
+  if (st.hasResult) return renderCameraTestAllResults(st.result);
   return "";
 }
 
@@ -668,10 +652,7 @@ static const unsigned long kDiscoveryListenMs = 4000;
 // later sends go out.
 static const int kDiscoveryProbeCount = 3;
 
-static SemaphoreHandle_t g_discoveryMutex = xSemaphoreCreateMutex();
-static bool g_discoveryInProgress = false;
-static bool g_discoveryHasResults = false;
-static std::vector<DiscoveredCamera> g_discoveryResults;
+static BackgroundJob<std::vector<DiscoveredCamera>> g_discoveryJob;
 
 // The actual (slow) work - runs on discoveryTask's own background task,
 // never on the calling task. See kDiscoveryListenMs's comment for why this
@@ -722,23 +703,12 @@ static std::vector<DiscoveredCamera> runCameraDiscovery() {
 }
 
 static void cameraDiscoveryTask(void*) {
-  std::vector<DiscoveredCamera> results = runCameraDiscovery();
-  xSemaphoreTake(g_discoveryMutex, portMAX_DELAY);
-  g_discoveryResults = results;
-  g_discoveryHasResults = true;
-  g_discoveryInProgress = false;
-  xSemaphoreGive(g_discoveryMutex);
+  g_discoveryJob.finish(runCameraDiscovery());
   vTaskDelete(nullptr);
 }
 
 void startCameraDiscoveryAsync() {
-  bool alreadyRunning;
-  xSemaphoreTake(g_discoveryMutex, portMAX_DELAY);
-  alreadyRunning = g_discoveryInProgress;
-  if (!alreadyRunning) g_discoveryInProgress = true;
-  xSemaphoreGive(g_discoveryMutex);
-
-  if (alreadyRunning) return; // one search at a time - a second click while one's in flight is a no-op
+  if (!g_discoveryJob.tryStart()) return; // one search at a time - a second click while one's in flight is a no-op
 
   // No TLS/HTTPClient work here (unlike the per-camera and test-all
   // tasks), just UDP send/receive and light string parsing - a smaller
@@ -747,20 +717,14 @@ void startCameraDiscoveryAsync() {
 }
 
 String renderCameraDiscoveryStatus() {
-  bool inProgress, hasResults;
-  std::vector<DiscoveredCamera> results;
-  xSemaphoreTake(g_discoveryMutex, portMAX_DELAY);
-  inProgress = g_discoveryInProgress;
-  hasResults = g_discoveryHasResults;
-  if (hasResults) results = g_discoveryResults; // copied out under the lock, rendered outside it
-  xSemaphoreGive(g_discoveryMutex);
-
-  if (inProgress) {
+  auto st = g_discoveryJob.status();
+  if (st.inProgress) {
     return "<p class=\"hint\">Searching the network for cameras - reload this page in a few seconds "
            "to see results. The rest of the dashboard stays responsive to everyone else in the "
            "meantime.</p>";
   }
-  if (!hasResults) return "";
+  if (!st.hasResult) return "";
+  const std::vector<DiscoveredCamera>& results = st.result;
   if (results.empty()) {
     return "<p class=\"hint\">No cameras answered the search. A camera already added above won't "
            "necessarily show up again here even though it's working fine - some stacks stop announcing "

@@ -30,6 +30,7 @@ this way:
 | `backoff`                    | `main.cpp` + `camera.cpp` (duplicated) | The doubling-with-a-cap retry delay formula, previously hand-written twice and prone to drifting apart |
 | `camera_parse`               | `camera.cpp`                           | ONVIF `GetProfiles` response parsing (`parseProfiles`), motion/tamper/signal-loss event classification (`classifyCameraEvent`), and the per-topic state-value lookup (`extractEventStateValue`) |
 | `onvif_discovery`            | `webserver_cameras.cpp`                | WS-Discovery Probe message building (`buildProbeMessage`) and ProbeMatch reply parsing (`parseProbeMatch` - XAddrs/Scopes extraction) for the Cameras page's "Search network for cameras" button |
+| `background_job_state`       | `webserver_cameras.cpp`                | The start/finish state-transition rules behind `BackgroundJob<T>` (`include/background_job.h`) - shared by the "Test all cameras" and "Search network for cameras" buttons, which each used to hand-write their own copy of this logic with no test of either |
 | `telegram_multipart`         | `telegram.cpp`                         | `sendPhoto`'s multipart/form-data request builder (`buildMultipart`) - boundary/head/tail/Content-Length construction |
 | `format_utils`               | `main.cpp` + `webserver.cpp` (duplicated) | `formatUptime`, `formatElapsedSince`, `htmlEscape`, `urlEncode`, `extractHost` - `formatUptime` was independently hand-written in both files (byte-identical, silently able to drift) before this |
 
