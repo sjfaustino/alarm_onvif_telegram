@@ -2,6 +2,7 @@
 #include "network_store.h"
 #include "format_utils.h"
 #include "wifi_scan.h"
+#include "webserver_html.h" // DiscoveryResultRow, renderDiscoveryResultsTable
 #include "background_job.h" // BackgroundJob<T>
 #include <WiFi.h>
 #include <freertos/FreeRTOS.h>
@@ -209,16 +210,41 @@ void handleSaveNetwork(PsychicRequest* request, String& banner) {
 // buttons) owns the mutex/state-machine part.
 // ============================================================
 
-static BackgroundJob<std::vector<WifiScanResult>> g_wifiScanJob;
+// A scan that genuinely found nothing nearby and a scan that outright
+// failed (radio/driver hiccup - WiFi.scanNetworks() returns negative)
+// used to render the identical "No networks found", which told a user
+// getting a real failure that their neighborhood is just quiet. Carrying
+// scanFailed alongside the result list is the whole fix.
+struct WifiScanOutcome {
+  bool scanFailed = false;
+  std::vector<WifiScanResult> networks;
+};
+
+static BackgroundJob<WifiScanOutcome> g_wifiScanJob;
+
+// Milliseconds to wait before actually starting the scan. The route
+// handler's HTTP response ("Scanning...") is queued to send over this same
+// WiFi radio moments before this task starts - without a short head start,
+// WiFi.scanNetworks()'s channel-hopping could begin while that response is
+// still in flight, delaying or corrupting delivery of the very "scan
+// started" confirmation the click was supposed to produce. The user is
+// already waiting several seconds for the scan itself; this adds an
+// unnoticeable fraction of one more.
+static const unsigned long kScanStartDelayMs = 500;
 
 // The actual (slow) work - runs on wifiScanTask's own background task,
 // never on the calling task. See startWifiScanAsync's own comment for why
 // running this synchronously on the request-handling task would be worse
 // than just slow.
-static std::vector<WifiScanResult> runWifiScan() {
-  std::vector<WifiScanResult> raw;
+static WifiScanOutcome runWifiScan() {
+  delay(kScanStartDelayMs);
+
+  WifiScanOutcome outcome;
   int16_t n = WiFi.scanNetworks();
-  if (n > 0) {
+  if (n < 0) {
+    outcome.scanFailed = true;
+  } else if (n > 0) {
+    std::vector<WifiScanResult> raw;
     raw.reserve(n);
     for (int16_t i = 0; i < n; i++) {
       WifiScanResult r;
@@ -227,9 +253,10 @@ static std::vector<WifiScanResult> runWifiScan() {
       r.encrypted = WiFi.encryptionType(i) != WIFI_AUTH_OPEN;
       raw.push_back(r);
     }
+    outcome.networks = dedupeSortWifiScanResults(raw);
   }
   WiFi.scanDelete(); // frees the scan's own internal buffer regardless of n
-  return dedupeSortWifiScanResults(raw);
+  return outcome;
 }
 
 static void wifiScanTask(void*) {
@@ -249,16 +276,17 @@ String renderWifiScanStatus() {
            "results. This board's own WiFi traffic may briefly pause while the scan runs.</p>";
   }
   if (!st.hasResult) return "";
-  if (st.result.empty()) {
+  if (st.result.scanFailed) {
+    return "<p class=\"hint\">The WiFi scan didn't complete (a radio/driver hiccup) - try again.</p>";
+  }
+  if (st.result.networks.empty()) {
     return "<p class=\"hint\">No networks found.</p>";
   }
 
-  String html = "<p>Networks found:</p><table><tr><th>SSID</th><th>Signal</th><th>Security</th><th></th></tr>";
-  for (auto& n : st.result) {
-    html += "<tr><td>" + htmlEscape(n.ssid) + "</td><td>" + String(n.rssi) + " dBm</td><td>" +
-            (n.encrypted ? "Encrypted" : "Open") + "</td><td>"
-            "<a href=\"/network?prefillSsid=" + urlEncode(n.ssid) + "\">Add</a></td></tr>";
+  std::vector<DiscoveryResultRow> rows;
+  for (auto& n : st.result.networks) {
+    rows.push_back({{n.ssid, String(n.rssi) + " dBm", n.encrypted ? "Encrypted" : "Open"},
+                     {{"prefillSsid", n.ssid}}});
   }
-  html += "</table>";
-  return html;
+  return "<p>Networks found:</p>" + renderDiscoveryResultsTable({"SSID", "Signal", "Security"}, "/network", rows);
 }

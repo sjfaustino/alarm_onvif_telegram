@@ -733,15 +733,12 @@ String renderCameraDiscoveryStatus() {
            "add those manually with their known address instead.</p>";
   }
 
-  String html = "<p>Cameras found on the network:</p><table><tr><th>Address</th><th>Name hint</th>"
-                "<th></th></tr>";
+  std::vector<DiscoveryResultRow> rows;
   for (auto& d : results) {
     String nameForForm = d.nameHint.length() > 0 ? d.nameHint : d.xaddr;
-    html += "<tr><td>" + htmlEscape(d.xaddr) + "</td><td>" +
-            (d.nameHint.length() > 0 ? htmlEscape(d.nameHint) : "<span class=\"hint\">(none)</span>") +
-            "</td><td><a href=\"/cameras?prefillName=" + urlEncode(nameForForm) +
-            "&prefillUrl=" + urlEncode(d.xaddr) + "\">Add</a></td></tr>";
+    rows.push_back({{d.xaddr, d.nameHint.length() > 0 ? d.nameHint : "(none)"},
+                     {{"prefillName", nameForForm}, {"prefillUrl", d.xaddr}}});
   }
-  html += "</table>";
-  return html;
+  return "<p>Cameras found on the network:</p>" +
+         renderDiscoveryResultsTable({"Address", "Name hint"}, "/cameras", rows);
 }

@@ -44,6 +44,37 @@ void test_renderEditDeleteActions_confirm_dialog_escapes_single_quote(void) {
   TEST_ASSERT_TRUE(html.indexOf("');alert(1);//") < 0); // the raw breakout sequence must not appear anywhere
 }
 
+// ---- renderDiscoveryResultsTable ----
+
+void test_renderDiscoveryResultsTable_renders_headers_and_cells(void) {
+  std::vector<String> headers = {"SSID", "Signal"};
+  std::vector<DiscoveryResultRow> rows = {{{"HomeWiFi", "-45 dBm"}, {{"prefillSsid", "HomeWiFi"}}}};
+  String html = renderDiscoveryResultsTable(headers, "/network", rows);
+  TEST_ASSERT_TRUE(html.indexOf("<th>SSID</th><th>Signal</th><th></th>") >= 0);
+  TEST_ASSERT_TRUE(html.indexOf("<td>HomeWiFi</td><td>-45 dBm</td>") >= 0);
+}
+
+void test_renderDiscoveryResultsTable_builds_add_link_from_params(void) {
+  std::vector<DiscoveryResultRow> rows = {
+      {{"cam"}, {{"prefillName", "Front Door"}, {"prefillUrl", "http://192.168.1.50/onvif/device_service"}}}};
+  String html = renderDiscoveryResultsTable({"Name"}, "/cameras", rows);
+  TEST_ASSERT_TRUE(html.indexOf("<a href=\"/cameras?prefillName=Front%20Door&prefillUrl=http%3A%2F%2F"
+                                 "192.168.1.50%2Fonvif%2Fdevice_service\">Add</a>") >= 0);
+}
+
+void test_renderDiscoveryResultsTable_escapes_cell_content(void) {
+  std::vector<DiscoveryResultRow> rows = {{{"<script>alert(1)</script>"}, {}}};
+  String html = renderDiscoveryResultsTable({"Name"}, "/network", rows);
+  TEST_ASSERT_TRUE(html.indexOf("<script>alert(1)</script>") < 0); // must not appear unescaped
+  TEST_ASSERT_TRUE(html.indexOf("&lt;script&gt;") >= 0);
+}
+
+void test_renderDiscoveryResultsTable_empty_rows_still_renders_header(void) {
+  String html = renderDiscoveryResultsTable({"SSID"}, "/network", {});
+  TEST_ASSERT_TRUE(html.indexOf("<th>SSID</th><th></th>") >= 0);
+  TEST_ASSERT_TRUE(html.indexOf("<a href=") < 0); // no rows, no Add links
+}
+
 int main(int argc, char** argv) {
   UNITY_BEGIN();
   RUN_TEST(test_renderEditDeleteActions_edit_link_uses_route_base_and_encoded_name);
@@ -51,5 +82,9 @@ int main(int argc, char** argv) {
   RUN_TEST(test_renderEditDeleteActions_uses_given_delete_route);
   RUN_TEST(test_renderEditDeleteActions_confirm_dialog_and_hidden_field_use_escaped_name);
   RUN_TEST(test_renderEditDeleteActions_confirm_dialog_escapes_single_quote);
+  RUN_TEST(test_renderDiscoveryResultsTable_renders_headers_and_cells);
+  RUN_TEST(test_renderDiscoveryResultsTable_builds_add_link_from_params);
+  RUN_TEST(test_renderDiscoveryResultsTable_escapes_cell_content);
+  RUN_TEST(test_renderDiscoveryResultsTable_empty_rows_still_renders_header);
   return UNITY_END();
 }

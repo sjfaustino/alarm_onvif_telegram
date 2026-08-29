@@ -1,5 +1,7 @@
 #pragma once
 #include <Arduino.h> // explicit, not chained - see camera_serialize.h's comment
+#include <vector>
+#include <utility> // std::pair
 
 // Small pure HTML-snippet builders shared across the dashboard's list
 // panels (Cameras, Telegram Users) - split out because webserver_cameras.cpp
@@ -15,3 +17,23 @@
 // cameras delete via plain "/delete", users via "/users/delete" - so this
 // takes the exact route rather than assuming one).
 String renderEditDeleteActions(const String& editRouteBase, const String& deleteRoute, const String& itemName);
+
+// One row in a "discovered resource" results table (renderDiscoveryResultsTable
+// below) - the Cameras page's "Search network for cameras" and the Network
+// page's "Search WiFi networks" both produce this same shape: a few
+// descriptive columns plus an Add link that prefills another page's form
+// via query params, differing only in which columns are shown and which
+// page/params Add points at. cells and addParams are raw, NOT
+// pre-escaped/encoded - renderDiscoveryResultsTable does that itself, one
+// escaping point, same as renderEditDeleteActions above.
+struct DiscoveryResultRow {
+  std::vector<String> cells;                       // one per columnHeaders entry, in order
+  std::vector<std::pair<String, String>> addParams; // Add link's query params, name -> raw value
+};
+
+// Renders a "<column headers>...Add" results table. addPath is the Add
+// link's target page (e.g. "/network") - each row's addParams are appended
+// to it as "?name=value&...". Shared by the two callers described above,
+// which used to each hand-roll this exact table shape independently.
+String renderDiscoveryResultsTable(const std::vector<String>& columnHeaders, const String& addPath,
+                                    const std::vector<DiscoveryResultRow>& rows);

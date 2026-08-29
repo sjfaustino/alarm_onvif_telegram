@@ -10,3 +10,23 @@ String renderEditDeleteActions(const String& editRouteBase, const String& delete
   html += "<button type=\"submit\">Delete</button></form>";
   return html;
 }
+
+String renderDiscoveryResultsTable(const std::vector<String>& columnHeaders, const String& addPath,
+                                    const std::vector<DiscoveryResultRow>& rows) {
+  String html = "<table><tr>";
+  for (auto& h : columnHeaders) html += "<th>" + h + "</th>"; // static English column labels, not user data
+  html += "<th></th></tr>";
+
+  for (auto& row : rows) {
+    html += "<tr>";
+    for (auto& cell : row.cells) html += "<td>" + htmlEscape(cell) + "</td>";
+
+    String href = addPath;
+    for (size_t i = 0; i < row.addParams.size(); i++) {
+      href += (i == 0 ? "?" : "&") + row.addParams[i].first + "=" + urlEncode(row.addParams[i].second);
+    }
+    html += "<td><a href=\"" + href + "\">Add</a></td></tr>";
+  }
+  html += "</table>";
+  return html;
+}
