@@ -171,7 +171,7 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
       CameraState& st = (*liveStates)[idx];
       bool subscribed, offline, alertsEnabled, hasAlerted;
       uint32_t lastAlert;
-      unsigned long revertDueMs;
+      unsigned long revertDueMs, totalReconnects;
       bool revertToOn;
       {
         CameraStateLock lock(st);
@@ -182,6 +182,7 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
         lastAlert = st.lastAlert;
         revertDueMs = st.scheduledRevertDueMs;
         revertToOn = st.scheduledRevertToOn;
+        totalReconnects = st.totalReconnects;
       }
       liveStatus = subscribed ? "subscribed" : "not subscribed";
       if (offline) liveStatus += " - OFFLINE";
@@ -192,6 +193,12 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
       if (revertDueMs != 0 && (long)(millis() - revertDueMs) < 0) {
         liveStatus += " - auto " + String(revertToOn ? "ON" : "OFF") + " in " +
                       formatUptime(revertDueMs - millis());
+      }
+      // Omitted entirely at 0 (the common, healthy case) - see
+      // CameraState::totalReconnects' own comment for why this is worth
+      // surfacing separately from "subscribed"/"OFFLINE" above.
+      if (totalReconnects > 0) {
+        liveStatus += " - " + String(totalReconnects) + " reconnect(s) since boot";
       }
       if (hasAlerted) lastAlertStr = formatElapsedSince(lastAlert, millis());
 
@@ -234,6 +241,17 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
     html += renderEditDeleteActions("/cameras/edit?name=", "/delete", c.name) + "</td></tr>";
   }
   html += "</table>";
+
+  if (!cams.empty()) {
+    html += "<form method=\"POST\" action=\"/cameras/test-all\">"
+            "<p><button type=\"submit\">Test all cameras</button></p></form>";
+    html += "<p class=\"hint\">Runs the same real connectivity test as a single camera's Test "
+            "Connection button, once per already-saved ENABLED camera (not whatever's currently typed "
+            "into the form below) - useful after a network change to see which cameras, if any, broke. "
+            "Synchronous, not a background job: with several unreachable cameras this can take a while "
+            "(each one can take up to a few multiples of the SOAP timeout before giving up), so give it "
+            "a moment after clicking.</p>";
+  }
 
   html += renderCameraForm(prefill ? *prefill : CameraConfig(), isEdit);
 
@@ -466,4 +484,97 @@ String testCameraConnection(CameraConfig cfg) {
   }
 
   return result;
+}
+
+// Runs the same real ONVIF call sequence as testCameraConnection above,
+// just packaged as a condensed CameraTestResult instead of a prose
+// paragraph - deliberately a separate function rather than having one
+// call the other: testCameraConnection's wording differentiates each
+// failure mode in more detail than a few booleans can cheaply reconstruct,
+// and this one's caller (testAllCameraConnections) needs a compact,
+// uniform shape to build a one-row-per-camera table from. Both are simple
+// enough to keep in sync by inspection if the underlying ONVIF sequence
+// ever changes.
+static CameraTestResult testOneCameraConnectionBrief(const CameraConfig& cfg) {
+  CameraTestResult r;
+  r.name = cfg.name;
+
+  CameraState st;
+  if (!resolveCameraCredentials(cfg, st)) {
+    r.detail = "no username/password set";
+    return r;
+  }
+
+  if (!cameraDiscoverServices(cfg, st)) {
+    r.detail = "device service unreachable, or no ONVIF event service found";
+    return r;
+  }
+  r.reachable = true;
+
+  if (cameraGetEventServiceCapabilities(cfg, st) && cameraGetEventProperties(cfg, st)) {
+    r.eventServiceOk = true;
+  } else {
+    r.detail = "event service didn't respond to GetServiceCapabilities/GetEventProperties";
+  }
+
+  if (cameraCreatePullPoint(cfg, st)) {
+    r.subscriptionOk = true;
+  } else if (r.detail.length() == 0) {
+    r.detail = "CreatePullPointSubscription failed";
+  }
+
+  if (cfg.snapshotUriOverride.length() > 0 || st.mediaServiceUrl.length() > 0) {
+    if (!(cameraFetchProfileAndSnapshotUri(cfg, st) && st.snapshotUri.length() > 0) && r.detail.length() == 0) {
+      r.detail = "snapshot URI could not be resolved - photo alerts won't work";
+    }
+  } else if (r.detail.length() == 0) {
+    r.detail = "no media service found and no snapshot override set - photo alerts won't work";
+  }
+
+  return r;
+}
+
+// Tests every ENABLED camera currently persisted in NVS, one after
+// another - deliberately synchronous/blocking, not a background job:
+// this is a low-frequency, admin-triggered action (same "webserver ops
+// are lower priority, the human works in seconds" tradeoff already
+// accepted elsewhere in this project - the Gallery page's per-thumbnail
+// cost, the periodic SD storage check), and each camera's own test can
+// itself take up to a few multiples of HTTP_TIMEOUT_MS if it's
+// unreachable, so testing several down cameras at once can genuinely
+// take a while. The page copy warns about this rather than hiding it.
+std::vector<CameraTestResult> testAllCameraConnections() {
+  std::vector<CameraTestResult> results;
+  for (auto& cfg : loadCameras()) {
+    if (!cfg.enabled) {
+      CameraTestResult r;
+      r.name = cfg.name;
+      r.skipped = true;
+      results.push_back(r);
+      continue;
+    }
+    results.push_back(testOneCameraConnectionBrief(cfg));
+  }
+  return results;
+}
+
+String renderCameraTestAllResults(const std::vector<CameraTestResult>& results) {
+  if (results.empty()) {
+    return "No cameras configured yet - nothing to test.";
+  }
+  String html = "<p>Test all cameras - results:</p><table><tr><th>Camera</th><th>Reachable</th>"
+                "<th>Event service</th><th>Subscription</th><th>Detail</th></tr>";
+  for (auto& r : results) {
+    html += "<tr><td>" + htmlEscape(r.name) + "</td>";
+    if (r.skipped) {
+      html += "<td colspan=\"3\">Skipped (disabled)</td><td></td></tr>";
+      continue;
+    }
+    html += "<td>" + String(r.reachable ? "OK" : "FAIL") + "</td>";
+    html += "<td>" + String(r.eventServiceOk ? "OK" : "FAIL") + "</td>";
+    html += "<td>" + String(r.subscriptionOk ? "OK" : "FAIL") + "</td>";
+    html += "<td>" + htmlEscape(r.detail) + "</td></tr>";
+  }
+  html += "</table>";
+  return html;
 }

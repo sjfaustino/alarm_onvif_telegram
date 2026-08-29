@@ -88,6 +88,22 @@ struct CameraState {
   // So checkCameraOnlineStatus only alerts on a state transition.
   bool     isOffline = false;
 
+  // How many times this camera's subscription has had to be re-established
+  // since boot (cameraTaskFn's retry loop, camera.cpp) - counts the initial
+  // connect too if it didn't succeed on the very first attempt, not just
+  // later reconnects. RAM-only, resets on reboot like the rest of this
+  // struct. Surfaced on the Cameras dashboard page as a "how flaky has
+  // this camera actually been" signal that a live-status snapshot alone
+  // can't show: a camera that flaps (drops and reconnects repeatedly, but
+  // is subscribed again by the time anyone looks) reads exactly the same
+  // as a rock-solid one in "Live Status" - retryStreak/pullAmbiguousStreak
+  // (below) both reset to 0 on a successful reconnect, which is correct
+  // for their own backoff/resubscribe-trigger purposes but means neither
+  // one alone tells you this history either. Lock-guarded - written only
+  // by this camera's own task, but read cross-task by the dashboard
+  // render (webserver_cameras.cpp), same as lastContactMs above.
+  unsigned long totalReconnects = 0;
+
   // Real motion detection timestamp (independent of mute/cooldown/quiet
   // hours) - the "is this camera still actually seeing motion" signal for
   // checkMotionWatchdog (camera.cpp). Same-task-only (written/read only by
@@ -143,13 +159,13 @@ struct CameraState {
   // Guards subscriptionActive, isOffline, alertsEnabled, hasAlerted,
   // lastAlert, snapshotUri, user, pass, scheduledRevertDueMs,
   // scheduledRevertToOn, pendingConfig, snapshotHistory (plus its
-  // Next/Count), and lastContactMs - the only fields both written by this
-  // camera's own task (camera.cpp) and read/written from another task
-  // (webserver.cpp's dashboard render and /cameras/snapshot route,
-  // main.cpp's heartbeat, telegram.cpp's /on /off /snap command handling,
-  // checkScheduledAlertReverts, and pushCameraSnapshot's lastContactMs
-  // adjustment via sendOnDemandSnapshot, all on loop()'s task). Every
-  // other field is touched only from the owning camera task, so it needs
+  // Next/Count), lastContactMs, and totalReconnects - the only fields both
+  // written by this camera's own task (camera.cpp) and read/written from
+  // another task (webserver.cpp's dashboard render and /cameras/snapshot
+  // route, main.cpp's heartbeat, telegram.cpp's /on /off /snap command
+  // handling, checkScheduledAlertReverts, and pushCameraSnapshot's
+  // lastContactMs adjustment via sendOnDemandSnapshot, all on loop()'s
+  // task). Every other field is touched only from the owning camera task, so it needs
   // no lock.
   // Created once by cameraStateInit() before any task can see this camera -
   // see main.cpp's startMonitoring().

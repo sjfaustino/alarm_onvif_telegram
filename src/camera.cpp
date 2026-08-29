@@ -539,6 +539,10 @@ void cameraTaskFn(void* pvParameters) {
           Serial.printf("[%s] Subscription recovered.\n", cfg.name.c_str());
           st.retryStreak = 0;
           st.retryDelayMs = 0;
+          // Lock-guarded write, unlike retryStreak/retryDelayMs above -
+          // totalReconnects is read cross-task by the dashboard (see its
+          // own comment, camera.h).
+          { CameraStateLock lock(st); st.totalReconnects++; }
         } else {
           // Never let the retry cadence alone go slower than half this
           // camera's offline threshold - see RETRY_BACKOFF_MAX_MS's and

@@ -62,7 +62,22 @@ Arduino-ESP32/IDF releases.
   for longer than its own offline threshold (per-camera, default 5 minutes), it's
   flagged OFFLINE and an immediate Telegram alert goes out (and another when it
   recovers) - independent of the 6-hour heartbeat, and shown live on the Cameras
-  dashboard page.
+  dashboard page. The Cameras page also shows how many times each camera's
+  subscription has had to be re-established since boot ("N reconnect(s) since
+  boot", omitted when zero) - a camera that flaps (drops and reconnects
+  repeatedly but is back up by the time you happen to look) reads identically to
+  a rock-solid one in the live subscribed/OFFLINE status alone, so this is the
+  one place that history is actually visible instead of silently resetting on
+  every successful reconnect.
+- A "Test all cameras" button on the Cameras page runs the same real
+  GetCapabilities/GetEventProperties/GetSnapshotUri/CreatePullPointSubscription
+  sequence as a single camera's Test Connection button, once per already-saved
+  *enabled* camera (not whatever's currently typed into the Add/Edit form) - a
+  quick way to see which cameras, if any, broke after a network change, without
+  clicking through each one by hand. Synchronous, not a background job, so it
+  can take a while if several cameras are unreachable (same "webserver ops are
+  lower priority than camera-task work" tradeoff this project already accepts
+  elsewhere) - the page says so.
 - Cameras and Telegram recipients are managed at runtime through a built-in
   sidebar dashboard ([hoeken/PsychicHttp](https://github.com/hoeken/PsychicHttp))
   and persisted in NVS - no more editing and reflashing `config.h`/`secrets.h` to

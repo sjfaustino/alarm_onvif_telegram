@@ -46,3 +46,26 @@ bool saveCameraSubmission(CameraConfig cam, const String& originalName, String& 
 // -> GetProfiles/GetSnapshotUri -> CreatePullPointSubscription sequence
 // against cfg without touching NVS - see the .cpp for the full rationale.
 String testCameraConnection(CameraConfig cfg);
+
+// One camera's result from testAllCameraConnections below - a condensed
+// version of what testCameraConnection's own prose paragraph says, sized
+// for a one-row-per-camera summary table instead of a full paragraph per
+// camera.
+struct CameraTestResult {
+  String name;
+  bool skipped = false;        // true only for a disabled camera - nothing was actually tested
+  bool reachable = false;      // cameraDiscoverServices succeeded
+  bool eventServiceOk = false; // GetServiceCapabilities/GetEventProperties - only meaningful if reachable
+  bool subscriptionOk = false; // CreatePullPointSubscription - only meaningful if reachable
+  String detail;               // short human reason for the first failure, "" if fully OK
+};
+
+// Runs the same real test sequence as testCameraConnection, once per
+// ENABLED camera currently in NVS (not whatever's typed into the Add/Edit
+// form) - a disabled camera is reported as skipped, not probed. See the
+// .cpp for why this is synchronous/blocking rather than a background job.
+std::vector<CameraTestResult> testAllCameraConnections();
+
+// Renders testAllCameraConnections' results as a summary table, for use as
+// a renderShell banner (raw HTML, like testCameraConnection's own string).
+String renderCameraTestAllResults(const std::vector<CameraTestResult>& results);

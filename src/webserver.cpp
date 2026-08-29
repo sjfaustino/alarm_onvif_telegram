@@ -404,6 +404,14 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
             .c_str());
   });
 
+  server.on("/cameras/test-all", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
+    String banner = renderCameraTestAllResults(testAllCameraConnections());
+    return response->send(
+        200, "text/html",
+        renderShell(Tab::Cameras, banner, renderCamerasPanel(nullptr, false, g_liveCameras, g_liveStates))
+            .c_str());
+  });
+
   // Serves one entry from the camera's snapshot history - SD-backed if
   // sdActive() (sd_store.h), else the PSRAM ring fallback; see
   // snapshot_history.h, the single place that decides which. age=0
