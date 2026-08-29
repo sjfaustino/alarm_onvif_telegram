@@ -292,9 +292,38 @@ void spawnCameraTask(size_t index) {
   snprintf(taskName, sizeof(taskName), "cam%u", (unsigned)index);
   // 10KB stack covers the SOAP String churn plus a WiFiClientSecure TLS
   // handshake with headroom - bump if stack-canary warnings show up.
-  // Pinned to core 1 so camera tasks get real parallel execution instead
-  // of competing with the WiFi/BT stack and loopTask on core 0.
-  xTaskCreatePinnedToCore(cameraTaskFn, taskName, 10240, ctx, tskIDLE_PRIORITY + 1, nullptr, 1);
+  // Pinned to core 1 - the SAME core Arduino's own loopTask runs on by
+  // default on this platform (CONFIG_ARDUINO_RUNNING_CORE, verified
+  // against the actual pioarduino/ESP-IDF default), not core 0 as an
+  // earlier version of this comment incorrectly claimed. This does NOT
+  // fully isolate camera tasks from loopTask's own CPU time - a burst of
+  // cameras all reconnecting at once (e.g. right after a WiFi outage)
+  // dilutes loopTask's share via FreeRTOS's normal same-priority round-
+  // robin, rather than starving it outright. It DOES avoid the WiFi/BT
+  // driver's own internal tasks, which ESP-IDF pins to core 0 regardless
+  // of this setting - moving camera tasks to core 0 instead would trade
+  // this for contention against the WiFi stack itself, which would be
+  // worse (affects every camera, the dashboard, and Telegram, not just
+  // loopTask's own heartbeat/reconnect timing) - not changed for that
+  // reason, just documented accurately instead of the wrong claim before.
+  BaseType_t created =
+      xTaskCreatePinnedToCore(cameraTaskFn, taskName, 10240, ctx, tskIDLE_PRIORITY + 1, nullptr, 1);
+  if (created != pdPASS) {
+    // Genuine memory pressure (many cameras, a large PSRAM snapshot
+    // history) can make task creation itself fail - previously silent,
+    // leaving this camera with no task at all, indistinguishable on the
+    // dashboard from "has a task but isn't subscribed yet" unless this is
+    // surfaced loudly. Not a per-camera credential/config problem, so no
+    // dashboard edit fixes it - only freeing memory (or a reboot) does.
+    delete ctx; // never handed to a task, so nothing else will free it
+    Serial.printf("[%s] FATAL: xTaskCreatePinnedToCore failed (out of memory?) - this camera will NOT "
+                  "be monitored until the board is rebooted (ideally with more free memory).\n",
+                  g_cameras[index].name.c_str());
+    logEvent(g_cameras[index].name + ": task creation FAILED (out of memory?) - NOT being monitored");
+    sendTelegramMessage("\xE2\x9A\xA0\xEF\xB8\x8F " + g_cameras[index].name +
+                         ": failed to start its monitoring task (likely out of memory) - it is NOT "
+                         "being monitored. A reboot may free enough memory to fix this.");
+  }
 }
 
 // Everything that needs a working network connection: NTP, mDNS, the web

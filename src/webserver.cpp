@@ -405,10 +405,14 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
   });
 
   server.on("/cameras/test-all", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
-    String banner = renderCameraTestAllResults(testAllCameraConnections());
+    // Kicks off a background task and returns immediately - see
+    // startTestAllCamerasAsync's own comment (webserver_cameras.h) for why
+    // this must never run synchronously on this request-handling task.
+    startTestAllCamerasAsync();
     return response->send(
         200, "text/html",
-        renderShell(Tab::Cameras, banner, renderCamerasPanel(nullptr, false, g_liveCameras, g_liveStates))
+        renderShell(Tab::Cameras, "Test started in the background.",
+                    renderCamerasPanel(nullptr, false, g_liveCameras, g_liveStates))
             .c_str());
   });
 

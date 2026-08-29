@@ -50,22 +50,44 @@ String testCameraConnection(CameraConfig cfg);
 // One camera's result from testAllCameraConnections below - a condensed
 // version of what testCameraConnection's own prose paragraph says, sized
 // for a one-row-per-camera summary table instead of a full paragraph per
-// camera.
+// camera. Deliberately does NOT include a CreatePullPointSubscription
+// check the way testCameraConnection's single-camera test does - see
+// testAllCameraConnections' own comment for why: an already-monitored
+// camera (the common case "test all" runs against) already has a real,
+// live subscription from its own running task, and creating a second one
+// per click risks disrupting it on a camera firmware that only supports
+// one active subscription at a time. reachable/eventServiceOk are a
+// strong enough "did my network change break this camera" signal without
+// that risk.
 struct CameraTestResult {
   String name;
   bool skipped = false;        // true only for a disabled camera - nothing was actually tested
   bool reachable = false;      // cameraDiscoverServices succeeded
   bool eventServiceOk = false; // GetServiceCapabilities/GetEventProperties - only meaningful if reachable
-  bool subscriptionOk = false; // CreatePullPointSubscription - only meaningful if reachable
   String detail;               // short human reason for the first failure, "" if fully OK
 };
 
-// Runs the same real test sequence as testCameraConnection, once per
-// ENABLED camera currently in NVS (not whatever's typed into the Add/Edit
-// form) - a disabled camera is reported as skipped, not probed. See the
-// .cpp for why this is synchronous/blocking rather than a background job.
+// Tests every ENABLED camera currently in NVS (not whatever's typed into
+// the Add/Edit form) - a disabled camera is reported as skipped, not
+// probed. This is the actual (slow) work - see startTestAllCamerasAsync
+// below for why nothing calls this directly from a request handler.
 std::vector<CameraTestResult> testAllCameraConnections();
 
 // Renders testAllCameraConnections' results as a summary table, for use as
 // a renderShell banner (raw HTML, like testCameraConnection's own string).
 String renderCameraTestAllResults(const std::vector<CameraTestResult>& results);
+
+// Starts testAllCameraConnections() on a background FreeRTOS task instead
+// of running it on the calling task - see testAllCameraConnections' own
+// comment for why a synchronous bulk test would block the whole
+// dashboard, not just the requester, for potentially minutes. A no-op
+// (doesn't start a second overlapping run) if a test is already in
+// progress. Call this from the /cameras/test-all route handler.
+void startTestAllCamerasAsync();
+
+// Renders the current bulk-test status: "a test is running" while one is
+// in progress, the last completed run's results table once one exists, or
+// "" if no test has ever run this boot. Safe to call from any task
+// (internally locked) - renderCamerasPanel calls this itself, so it shows
+// up on a normal page load too, not just right after clicking the button.
+String renderTestAllStatus();
