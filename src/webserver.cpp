@@ -317,13 +317,30 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
   });
 
   server.on("/network", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
-    return response->send(200, "text/html", renderShell(Tab::Network, "", renderNetworkPanel()).c_str());
+    // prefillSsid arrives from a scanned-network "Add" link
+    // (webserver_network.cpp's renderWifiScanStatus) - PsychicRequest
+    // url-decodes query params automatically, and renderNetworkPanel
+    // htmlEscape()s it before it ever reaches the page.
+    String prefillSsid = request->getParam("prefillSsid", "");
+    return response->send(
+        200, "text/html", renderShell(Tab::Network, "", renderNetworkPanel(prefillSsid)).c_str());
   });
 
   server.on("/network/save", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
     String banner;
     handleSaveNetwork(request, banner);
     return response->send(200, "text/html", renderShell(Tab::Network, banner, renderNetworkPanel()).c_str());
+  });
+
+  server.on("/network/scan", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
+    // Kicks off a background task and returns immediately - see
+    // startWifiScanAsync's own comment (webserver_network.h) for why this
+    // must never run synchronously on this request-handling task.
+    startWifiScanAsync();
+    return response->send(
+        200, "text/html",
+        renderShell(Tab::Network, "Scanning for WiFi networks in the background.", renderNetworkPanel())
+            .c_str());
   });
 
   server.on("/cameras", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {

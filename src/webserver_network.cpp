@@ -1,11 +1,15 @@
 #include "webserver_network.h"
 #include "network_store.h"
 #include "format_utils.h"
+#include "wifi_scan.h"
+#include "background_job.h" // BackgroundJob<T>
 #include <WiFi.h>
+#include <freertos/FreeRTOS.h>
 #include <cctype>
 
-String renderNetworkPanel() {
+String renderNetworkPanel(const String& prefillSsid) {
   WifiCredentials creds = loadWifiCredentials();
+  if (prefillSsid.length() > 0) creds.primary.ssid = prefillSsid;
 
   String connectedRole;
   if (WiFi.SSID() == creds.primary.ssid) connectedRole = " (primary)";
@@ -20,6 +24,15 @@ String renderNetworkPanel() {
   html += "<tr><th>mDNS address</th><td>http://" + htmlEscape(creds.hostname) + ".local/</td></tr>";
   html += "<tr><th>Uptime</th><td>" + formatUptime(millis()) + "</td></tr>";
   html += "</table>";
+
+  html += "<form method=\"POST\" action=\"/network/scan\">"
+          "<p><button type=\"submit\">Search WiFi networks</button></p></form>";
+  html += "<p class=\"hint\">Scans for nearby networks and lists what's found - click Add next to one "
+          "to fill in its name below (the password still needs to be typed in by hand). Runs in the "
+          "background; reload this page after clicking to see results. The scan briefly interrupts "
+          "this board's own WiFi traffic while it hops channels, so the dashboard may pause for a "
+          "moment around when it runs.</p>";
+  html += renderWifiScanStatus();
 
   html += "<fieldset><legend>Primary WiFi</legend><form method=\"POST\" action=\"/network/save\">";
   html += "<label>SSID<input type=\"text\" name=\"ssid\" value=\"" + htmlEscape(creds.primary.ssid) + "\" required></label>";
@@ -187,4 +200,65 @@ void handleSaveNetwork(PsychicRequest* request, String& banner) {
     return;
   }
   banner = "Saved - reboot the board to apply the new network configuration.";
+}
+
+// ============================================================
+// WiFi network scan - see webserver_network.h's own comments on
+// startWifiScanAsync/renderWifiScanStatus. BackgroundJob<T> (shared with
+// the Cameras page's "Test all cameras"/"Search network for cameras"
+// buttons) owns the mutex/state-machine part.
+// ============================================================
+
+static BackgroundJob<std::vector<WifiScanResult>> g_wifiScanJob;
+
+// The actual (slow) work - runs on wifiScanTask's own background task,
+// never on the calling task. See startWifiScanAsync's own comment for why
+// running this synchronously on the request-handling task would be worse
+// than just slow.
+static std::vector<WifiScanResult> runWifiScan() {
+  std::vector<WifiScanResult> raw;
+  int16_t n = WiFi.scanNetworks();
+  if (n > 0) {
+    raw.reserve(n);
+    for (int16_t i = 0; i < n; i++) {
+      WifiScanResult r;
+      r.ssid = WiFi.SSID(i);
+      r.rssi = WiFi.RSSI(i);
+      r.encrypted = WiFi.encryptionType(i) != WIFI_AUTH_OPEN;
+      raw.push_back(r);
+    }
+  }
+  WiFi.scanDelete(); // frees the scan's own internal buffer regardless of n
+  return dedupeSortWifiScanResults(raw);
+}
+
+static void wifiScanTask(void*) {
+  g_wifiScanJob.finish(runWifiScan());
+  vTaskDelete(nullptr);
+}
+
+void startWifiScanAsync() {
+  if (!g_wifiScanJob.tryStart()) return; // one scan at a time - a second click while one's in flight is a no-op
+  xTaskCreate(wifiScanTask, "wifiScan", 4096, nullptr, tskIDLE_PRIORITY + 1, nullptr);
+}
+
+String renderWifiScanStatus() {
+  auto st = g_wifiScanJob.status();
+  if (st.inProgress) {
+    return "<p class=\"hint\">Scanning for WiFi networks - reload this page in a few seconds to see "
+           "results. This board's own WiFi traffic may briefly pause while the scan runs.</p>";
+  }
+  if (!st.hasResult) return "";
+  if (st.result.empty()) {
+    return "<p class=\"hint\">No networks found.</p>";
+  }
+
+  String html = "<p>Networks found:</p><table><tr><th>SSID</th><th>Signal</th><th>Security</th><th></th></tr>";
+  for (auto& n : st.result) {
+    html += "<tr><td>" + htmlEscape(n.ssid) + "</td><td>" + String(n.rssi) + " dBm</td><td>" +
+            (n.encrypted ? "Encrypted" : "Open") + "</td><td>"
+            "<a href=\"/network?prefillSsid=" + urlEncode(n.ssid) + "\">Add</a></td></tr>";
+  }
+  html += "</table>";
+  return html;
 }

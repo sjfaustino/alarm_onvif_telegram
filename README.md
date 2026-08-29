@@ -323,7 +323,13 @@ has, on the PSRAM-only ring, without one.
      this setting entirely). Leave it blank to keep captions in UTC. Saving writes to
      NVS immediately but only takes effect after the
      next reboot - a live change could drop the board off the network with
-     no way back to this page if the new credentials are wrong.
+     no way back to this page if the new credentials are wrong. A "Search WiFi
+     networks" button scans for nearby networks and lists what's found (signal
+     strength, open/encrypted) with an Add link per network that fills in the
+     Primary SSID field below (the password still needs to be typed by hand).
+     Runs on a background task, same as the Cameras page's search/test-all
+     buttons - the scan briefly pauses the board's own WiFi traffic while it
+     hops channels, so the dashboard may stall for a moment around when it runs.
    - **Cameras** — add/edit/delete/view, each row showing live subscription status
      (with an OFFLINE flag - see below) and how long ago it last alerted ("never" if
      it hasn't yet). Fill in the device service URL, credentials, alert cooldown
