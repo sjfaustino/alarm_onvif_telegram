@@ -30,3 +30,16 @@ String renderDiscoveryResultsTable(const std::vector<String>& columnHeaders, con
   html += "</table>";
   return html;
 }
+
+String renderDataTable(const std::vector<String>& columnHeaders, const std::vector<std::vector<String>>& rows) {
+  String html = "<table><tr>";
+  for (auto& h : columnHeaders) html += "<th>" + h + "</th>";
+  html += "</tr>";
+  for (auto& row : rows) {
+    html += "<tr>";
+    for (auto& cell : row) html += "<td>" + htmlEscape(cell) + "</td>";
+    html += "</tr>";
+  }
+  html += "</table>";
+  return html;
+}

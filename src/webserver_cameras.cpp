@@ -12,18 +12,14 @@
 #include <WiFiUdp.h>
 #include <cctype>
 
-// Serializes saveCameraSubmission's whole "decide whether this camera was
-// already running, then apply live or note a reboot's needed" section
-// below - PsychicHttp can run more than one request concurrently, and
-// without this, two near-simultaneous saves of the same *newly-enabled*
-// camera could both observe wasRunning==false (cam.enabled in
-// liveCameras only flips once the spawned task's own applyPendingConfigIfAny
-// actually runs, which is asynchronous - not immediately when
-// spawnCameraTask returns) and both call spawnCameraTask for the same
-// slot, leaving two tasks fighting over one CameraConfig/CameraState.
-// Camera saves are a low-frequency, admin-driven action, not a hot path -
-// serializing all of them (even ones for different cameras) costs nothing
-// worth avoiding a per-camera locking scheme for.
+// Serializes saveCameraSubmission's "decide whether this camera was
+// already running, then apply live or note a reboot's needed" section -
+// without it, two near-simultaneous saves of the same newly-enabled
+// camera could both observe wasRunning==false (liveCameras[i].enabled
+// only flips once the spawned task's applyPendingConfigIfAny actually
+// runs, asynchronously) and both spawn a task for the same slot. Saves
+// are low-frequency and admin-driven, so serializing all of them (even
+// different cameras) costs nothing worth a per-camera locking scheme.
 static SemaphoreHandle_t g_saveMutex = xSemaphoreCreateMutex();
 
 // Formats minutes-since-midnight as "HH:MM" for pre-filling an
@@ -394,16 +390,13 @@ bool saveCameraSubmission(CameraConfig cam, const String& originalName, String& 
   }
 
   if (idx >= 0 && liveStates && idx < (int)liveStates->size()) {
-    // Deliberately NOT htmlEscape()d here - applyNote rides through a
-    // URL-encoded redirect query param (see webserver.cpp's /cameras/save
-    // and /cameras GET handlers) and is escaped exactly once, at the
-    // single point it's actually rendered into HTML (the /cameras GET
-    // handler). Escaping it here too used to seem like defense in depth,
-    // but it actually created a real reflected-XSS hole: the GET handler
-    // trusted that pre-escaping and skipped its own, which meant a direct
-    // request to /cameras?note=<script>...</script> (bypassing this POST
-    // flow entirely) rendered completely unescaped. One escaping point,
-    // not zero and not two.
+    // Deliberately NOT htmlEscape()d here - applyNote rides a URL-encoded
+    // redirect query param and is escaped exactly once, at the single
+    // point it's rendered (the /cameras GET handler). Escaping it here too
+    // used to seem like defense in depth, but created a real reflected-XSS
+    // hole: the GET handler trusted the pre-escaping and skipped its own,
+    // so a direct /cameras?note=<script>...</script> request (bypassing
+    // this POST flow) rendered completely unescaped. One escaping point.
     if (wasRunning && cam.enabled) {
       // Still enabled before and after - stage the new config for the
       // already-running task to pick up itself. See requestLiveConfigReload
@@ -412,16 +405,12 @@ bool saveCameraSubmission(CameraConfig cam, const String& originalName, String& 
       requestLiveConfigReload((*liveStates)[idx], cam);
       applyNote = "\"" + cam.name + "\" updated - applying live, reconnecting now (no reboot needed).";
     } else if (!wasRunning && cam.enabled) {
-      // Was disabled (or simply never got a task at boot) and this edit
-      // just enabled it. Staged via the same pendingConfig mechanism a
-      // running camera's edit uses, NOT written into (*liveCameras)[idx]
-      // directly from here - even though no task owns this slot yet,
-      // CameraConfig itself has no locking of its own, and other tasks
-      // (heartbeat, /status, this same dashboard) may read
-      // cameras[i].enabled/.name for it without a lock the instant it
-      // flips to enabled. cameraStateInit() first, so that lock actually
-      // means something (a never-spawned camera's mutex doesn't exist
-      // yet) - see requestLiveConfigReload's comment.
+      // Was disabled (or never got a task at boot) and this edit enabled
+      // it. Staged via the same pendingConfig mechanism a running camera's
+      // edit uses, not written into (*liveCameras)[idx] directly - other
+      // tasks may read cameras[i].enabled/.name without a lock the instant
+      // it flips to enabled, and CameraConfig itself has no locking of its
+      // own. cameraStateInit() first, so that lock exists to mean anything.
       cameraStateInit((*liveStates)[idx]);
       requestLiveConfigReload((*liveStates)[idx], cam);
       spawnCameraTask(idx); // its own startup applies the staged config - see applyPendingConfigIfAny
@@ -505,21 +494,15 @@ String testCameraConnection(CameraConfig cfg) {
   return result;
 }
 
-// Runs a read-only subset of testCameraConnection's own ONVIF call
-// sequence, packaged as a condensed CameraTestResult instead of a prose
-// paragraph - deliberately a separate function rather than having one
-// call the other: testCameraConnection's wording differentiates each
-// failure mode in more detail than a few booleans can cheaply reconstruct,
-// and this one's caller (testAllCameraConnections) needs a compact,
-// uniform shape to build a one-row-per-camera table from. Deliberately
-// stops after GetServiceCapabilities/GetEventProperties and never calls
-// cameraCreatePullPoint - see CameraTestResult's own comment (header) for
-// why: this runs against every enabled camera at once, most of which
-// already have a real, live subscription from their own monitoring task,
-// and creating a second one per click on every single one of them is a
-// meaningfully bigger risk than testCameraConnection's existing single-
-// camera version (used deliberately, one camera at a time, usually while
-// actively editing that specific camera).
+// Runs a read-only subset of testCameraConnection's ONVIF call sequence,
+// packaged as a condensed CameraTestResult - a separate function rather
+// than reusing testCameraConnection because its caller
+// (testAllCameraConnections) needs a compact, uniform shape for a
+// one-row-per-camera table, not a differentiated prose paragraph.
+// Deliberately never calls cameraCreatePullPoint - see CameraTestResult's
+// header comment for why creating a second subscription on every already-
+// monitored camera at once is a bigger risk than the single-camera
+// version's deliberate one-at-a-time use.
 static CameraTestResult testOneCameraConnectionBrief(const CameraConfig& cfg) {
   CameraTestResult r;
   r.name = cfg.name;
@@ -546,18 +529,12 @@ static CameraTestResult testOneCameraConnectionBrief(const CameraConfig& cfg) {
 }
 
 // Tests every ENABLED camera currently persisted in NVS, one after
-// another. Runs on its own background FreeRTOS task (see
-// startTestAllCamerasAsync below) rather than the calling task directly -
-// this project's PsychicHttp setup services one HTTP request at a time
-// (no async worker pool configured), so running this synchronously on the
-// request-handling task would make the ENTIRE dashboard unreachable - not
-// just slow for whoever clicked the button, but a hard block for every
-// other page load, from anyone, for the whole test's duration (which can
-// legitimately run into minutes if several cameras are down at once).
-// That's a materially worse tradeoff than this project's other accepted
-// "webserver ops are lower priority" costs (the Gallery page's per-
-// thumbnail cost, the periodic SD storage check), which only ever slow
-// down the one request that triggered them.
+// another. Runs on its own background FreeRTOS task (startTestAllCamerasAsync
+// below), not the calling task directly - PsychicHttp here services one
+// request at a time (no async worker pool), so running this synchronously
+// would make the entire dashboard unreachable for every other request, not
+// just slow the clicker, for as long as the test takes (can be minutes
+// with several cameras down).
 std::vector<CameraTestResult> testAllCameraConnections() {
   std::vector<CameraTestResult> results;
   for (auto& cfg : loadCameras()) {
@@ -613,20 +590,20 @@ String renderCameraTestAllResults(const std::vector<CameraTestResult>& results) 
   if (results.empty()) {
     return "No cameras configured yet - nothing to test.";
   }
-  String html = "<p>Test all cameras - results:</p><table><tr><th>Camera</th><th>Reachable</th>"
-                "<th>Event service</th><th>Detail</th></tr>";
+  std::vector<std::vector<String>> rows;
   for (auto& r : results) {
-    html += "<tr><td>" + htmlEscape(r.name) + "</td>";
     if (r.skipped) {
-      html += "<td colspan=\"2\">Skipped (disabled)</td><td></td></tr>";
+      // Was a merged colspan="2" cell before switching to the shared
+      // renderDataTable (webserver_html.h) - same information, one cosmetic
+      // difference: "Skipped (disabled)" no longer visually spans both the
+      // Reachable and Event service columns, just sits in the first one.
+      rows.push_back({r.name, "Skipped (disabled)", "", ""});
       continue;
     }
-    html += "<td>" + String(r.reachable ? "OK" : "FAIL") + "</td>";
-    html += "<td>" + String(r.eventServiceOk ? "OK" : "FAIL") + "</td>";
-    html += "<td>" + htmlEscape(r.detail) + "</td></tr>";
+    rows.push_back({r.name, r.reachable ? "OK" : "FAIL", r.eventServiceOk ? "OK" : "FAIL", r.detail});
   }
-  html += "</table>";
-  return html;
+  return "<p>Test all cameras - results:</p>" +
+         renderDataTable({"Camera", "Reachable", "Event service", "Detail"}, rows);
 }
 
 // ============================================================

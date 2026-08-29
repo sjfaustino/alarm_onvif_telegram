@@ -29,27 +29,17 @@ bool telegramCAConfigured() {
          strstr(TELEGRAM_ROOT_CA, "-----END CERTIFICATE-----") != nullptr;
 }
 
-// ============================================================
-// Camera -> Telegram
-//
-// PSRAM is a hard requirement (main.cpp's setup() refuses to boot without
-// it): a motion alert can go to more than one Telegram user, so the JPEG
-// is fetched from the camera once, held in memory, and resent per
-// recipient (see triggerMotionAlert below). SNAPSHOT_MAX_BYTES (much
-// smaller than SNAPSHOT_MAX_BYTES_PSRAM) survives only as
-// allocateSnapshotBuffer's fallback cap if a PSRAM allocation itself fails.
-// ============================================================
+// Camera -> Telegram. PSRAM is a hard requirement (main.cpp's setup()
+// refuses to boot without it): a motion alert can go to more than one
+// user, so the JPEG is fetched once and resent per recipient (see
+// triggerMotionAlert below). SNAPSHOT_MAX_BYTES only matters as
+// allocateSnapshotBuffer's fallback cap if a PSRAM allocation fails.
 
-// Allocates up to `cap` bytes for a snapshot buffer, preferring PSRAM.
-// If that allocation itself fails, falls back to internal RAM - but only
-// up to SNAPSHOT_MAX_BYTES, not the original (possibly much larger,
-// PSRAM-sized) `cap`: internal RAM is scarce on this board (typically a
-// few hundred KB free at best once WiFi/TLS have their own allocations),
-// so retrying the exact size that just failed on PSRAM would almost
-// certainly just fail again immediately, silently defeating this
-// fallback's whole purpose. `cap` is updated in place to whatever was
-// actually allocated, so every caller reads/writes at most that many
-// bytes into the buffer, never the original (now too-large) request.
+// Allocates up to `cap` bytes, preferring PSRAM. On failure, falls back to
+// internal RAM but capped at SNAPSHOT_MAX_BYTES, not the original
+// (possibly much larger) `cap` - internal RAM is scarce here, so retrying
+// the exact size that just failed on PSRAM would likely just fail again.
+// `cap` is updated in place to whatever was actually allocated.
 static uint8_t* allocateSnapshotBuffer(size_t& cap) {
   uint8_t* buf = (uint8_t*)heap_caps_malloc(cap, MALLOC_CAP_SPIRAM);
   if (buf) return buf;
@@ -105,22 +95,16 @@ static size_t readSomeBytes(HTTPClient& http, NetworkClient* stream, uint8_t* bu
   return total;
 }
 
-// Buffers a snapshot fully (into PSRAM if available, else internal RAM -
-// see allocateSnapshotBuffer above) up to `cap` bytes. Used both as the
-// primary path on PSRAM boards and as the no-Content-Length fallback on
-// non-PSRAM boards. Caller must free() the returned buffer.
+// Buffers a snapshot fully (PSRAM if available, else internal RAM) up to
+// `cap` bytes. Caller must free() the returned buffer.
 //
-// Reads via http.getStreamPtr() - the RAW underlying socket, bypassing
-// HTTPClient's own response-body decoding entirely (that only happens
-// inside writeToStream()/getString(), verified against this project's
-// vendored HTTPClient.cpp). That's fine for the ordinary case (a
-// Content-Length-known body, or a no-Content-Length body simply delimited
-// by the connection closing), which is why this stays the fast, cap-
-// bounded default path - but it must never be used for a
-// Transfer-Encoding: chunked response, where the "bytes" read this way
-// would actually be raw chunk-size/CRLF framing interleaved with the real
-// data, corrupting the JPEG. See fetchSnapshotBufferedChunked below for
-// that case - fetchOneSnapshot is responsible for picking the right one.
+// Reads via http.getStreamPtr() - the raw socket, bypassing HTTPClient's
+// own response-body decoding. Fine for a Content-Length-known or
+// connection-close-delimited body, but must never be used for a
+// Transfer-Encoding: chunked response, where these "bytes" would actually
+// be raw chunk-size/CRLF framing interleaved with the real data,
+// corrupting the JPEG. See fetchSnapshotBufferedChunked below for that
+// case - fetchOneSnapshot picks the right one.
 static uint8_t* fetchSnapshotBuffered(HTTPClient& http, size_t& outLen, size_t cap) {
   outLen = 0;
   uint8_t* buf = allocateSnapshotBuffer(cap); // cap may shrink here (internal-RAM fallback) - read that back below
@@ -138,15 +122,12 @@ static uint8_t* fetchSnapshotBuffered(HTTPClient& http, size_t& outLen, size_t c
 }
 
 // Buffers a chunked-transfer-encoded snapshot via HTTPClient::getString(),
-// which - unlike fetchSnapshotBuffered's raw stream reads above - does
-// correctly decode chunk framing internally. Only used when the response
-// actually IS chunked (fetchOneSnapshot checks the real header, not just
-// an absent Content-Length, which could just as easily mean "connection-
-// close-delimited" instead). getString() reads the whole body into one
-// String regardless of size, so it's capped here (not truly streamed/
-// bounded during the read itself) - acceptable for a snapshot from a
-// camera this project's user configured and trusts, not arbitrary/
-// adversarial input. Caller must free() the returned buffer.
+// which correctly decodes chunk framing (unlike fetchSnapshotBuffered's
+// raw stream reads). Only used when the response actually IS chunked.
+// getString() reads the whole body into one String regardless of size, so
+// it's capped here rather than bounded during the read - acceptable for a
+// camera this project's user configured and trusts, not adversarial
+// input. Caller must free() the returned buffer.
 static uint8_t* fetchSnapshotBufferedChunked(HTTPClient& http, size_t& outLen) {
   outLen = 0;
   String body = http.getString();
@@ -279,21 +260,16 @@ static int currentLocalMinuteOfDay() {
   return tmStruct.tm_hour * 60 + tmStruct.tm_min;
 }
 
-// Low-level single-recipient send (JSON body, no photo) - the actual HTTPS
-// round trip. Used both directly (command replies go back to whoever sent
-// the command, not everyone) and by sendTelegramMessage() below (broadcast).
-//
-// Uses HTTPClient rather than a raw WiFiClientSecure + hand-built request
-// line (unlike sendTelegramPhotoBuffered, which streams a multipart body
-// HTTPClient has no API for) - HTTPClient correctly handles chunked
-// transfer-encoding on the response, which a manual "read until idle, split
-// on the first \r\n\r\n" parser doesn't; api.telegram.org is free to send
-// a chunked response and has been observed to.
 // Shared outbound JSON-POST mechanics for every Telegram Bot API method
 // this project calls with a JSON body - sendMessage (plain or with an
 // inline keyboard) and answerCallbackQuery. `method` is the API method
-// name (e.g. "sendMessage"); `doc` is the caller's already-built request
-// body.
+// name; `doc` is the caller's already-built request body.
+//
+// Uses HTTPClient, not a raw WiFiClientSecure + hand-built request line
+// (unlike sendTelegramPhotoBuffered, which streams a multipart body
+// HTTPClient can't) - HTTPClient correctly handles chunked
+// transfer-encoding on the response, which api.telegram.org has been
+// observed to send and a manual parser wouldn't.
 static bool sendTelegramApiCall(const String& method, JsonDocument& doc) {
   WiFiClientSecure client;
   client.setCACert(TELEGRAM_ROOT_CA); // see telegram_ca.h if this needs refreshing
@@ -555,16 +531,12 @@ void triggerTimelapseCapture(const CameraConfig& cfg, CameraState& st) {
 // Gathers this camera's subscribed recipients and, if there are any and
 // the cooldown has cleared, spends it (lastAlert/hasAlerted) and returns
 // them - shared by triggerTamperAlert/triggerSignalLossAlert below.
-// Returns empty (and spends nothing) if muted, still cooling down, or
-// nobody's subscribed - same "don't burn the cooldown on nothing" rule
-// triggerMotionAlert documents, though that function doesn't use this
-// helper itself: it has one more gate (snapshotUri must be resolved)
-// before the cooldown should be spent, which tamper/signal-loss alerts
-// don't share (tamper degrades to text-only, signal-loss is always
-// text-only), so unifying all three into one helper would mean forcing
-// motion's extra gate onto events that don't need it, or forcing this
-// simpler version's ordering onto motion and losing its "no snapshot URI
-// yet" pre-cooldown check.
+// Returns empty (spending nothing) if muted, cooling down, or nobody's
+// subscribed. triggerMotionAlert doesn't use this: it has one more gate
+// (snapshotUri resolved) before the cooldown should be spent, which
+// tamper/signal-loss don't share (tamper degrades to text-only,
+// signal-loss is always text-only) - not unified into one helper to avoid
+// forcing that extra gate onto events that don't need it.
 static std::vector<String> beginCameraAlert(const CameraConfig& cfg, CameraState& st, uint32_t nowMs) {
   bool alertsEnabled;
   { CameraStateLock lock(st); alertsEnabled = st.alertsEnabled; }
@@ -679,33 +651,25 @@ void checkMotionWatchdog(const CameraConfig& cfg, CameraState& st) {
 // ============================================================
 // Remote on/off control (Telegram commands)
 //
-// pollTelegramCommands() is called periodically from loop() and does a
-// short (timeout=0, not long-poll) getUpdates round trip. lastUpdateId is
-// persisted in NVS (see loadLastUpdateId/saveLastUpdateId below) - it used
-// not to be, on the theory that redelivering a couple of already-applied
-// commands after a reboot is harmless since /on/off/snap/status/uptime are
-// idempotent. /reset broke that assumption: redelivering it after the
-// reboot it itself caused re-executes /reset again, forever - an infinite
-// reboot loop hit in the field the very first time /reset was used.
+// pollTelegramCommands() runs periodically from loop() (short getUpdates,
+// not long-poll). lastUpdateId is persisted in NVS - it used not to be, on
+// the theory that redelivering a couple of already-applied idempotent
+// commands after a reboot is harmless. /reset broke that: redelivering it
+// after the reboot it caused re-executes /reset again, forever - a real
+// infinite reboot loop hit the first time /reset was used.
 //
-// Persisting on every single update (the first fix) closed that loop but
-// opened a smaller one: Telegram delivers every inbound message to
-// getUpdates regardless of who sent it, so an unauthenticated flood of
-// messages would have forced an NVS write per message with zero
-// permission check. pollTelegramCommands() below persists once per poll
-// instead (bounded, matches the original harmless-redelivery assumption
-// for everything except /reset).
+// Persisting on every update closed that loop but opened a smaller one:
+// Telegram delivers every inbound message regardless of sender, so an
+// unauthenticated flood would force an NVS write per message. Persisting
+// once per poll instead (below) bounds that while keeping the original
+// redelivery assumption for everything except /reset.
 //
-// /reset is the one command that can't wait for that end-of-poll persist -
-// ESP.restart() never returns, so the code would never get back around to
-// it. That's handled inside handleTelegramCommand's own /reset branch, not
-// guessed at here: pollTelegramCommands has no special-cased knowledge of
-// which commands are "dangerous" (an earlier version tried that, checking
-// canReset and the command text here before dispatching - two places
-// having to agree on what /reset is turned out to be exactly the kind of
-// thing that drifts out of sync). handleTelegramCommand persists
-// immediately, right before the action that actually needs it, which is
-// also the right place for any future command that needs the same thing.
+// /reset can't wait for that end-of-poll persist - ESP.restart() never
+// returns - so it's persisted inside handleTelegramCommand's own /reset
+// branch, immediately before the restart, rather than pollTelegramCommands
+// pre-guessing which commands are "dangerous" (an earlier version did
+// exactly that, checking canReset/the command text in two places that
+// drifted out of sync with each other).
 // ============================================================
 
 static const char* TELEGRAM_STATE_NAMESPACE = "tgstate";
@@ -933,19 +897,15 @@ static void sendCameraPickerKeyboard(const TelegramUser& sender, TelegramCommand
 }
 
 // lastUpdateId is this poll's running highest update_id, already advanced
-// past `text`'s own update - passed through so the Reset case below can
-// persist it immediately, before ESP.restart(). See this section's top
-// comment for why that decision belongs here and not in pollTelegramCommands.
+// past `text`'s own update - passed through so the Reset case can persist
+// it immediately, before ESP.restart() (see this section's top comment).
 //
 // text is parsed exactly once, by parseTelegramCommand (telegram_parse.h) -
-// command identity, required permission, and (for On/Off/Snap) the camera
-// name are all decided there and used as-is below, instead of being
-// re-derived a second time here the way an earlier version did. The
-// switch below has no default case, and platformio.ini enables
-// -Werror=switch specifically because this toolchain's default flags
-// otherwise accept a non-exhaustive switch silently (verified, not
-// assumed) - so a new TelegramCommand added without a case here is a
-// build failure, not a silent "unrecognized, ignored".
+// command identity, permission, and camera name are decided there and
+// used as-is below, not re-derived here. The switch below has no default
+// case (-Werror=switch, telegram_parse's library.json) so a new
+// TelegramCommand added without a case here is a build failure, not a
+// silent "unrecognized, ignored".
 static void handleTelegramCommand(const TelegramUser& sender, const String& text, const CameraConfig cameras[],
                                    CameraState states[], size_t numCameras, long lastUpdateId) {
   Serial.printf("[Telegram] Command from user \"%s\": \"%s\"\n", sender.name.c_str(), text.c_str());
@@ -1195,13 +1155,11 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
 }
 
 // Handles an inline-keyboard button tap (sendCameraPickerKeyboard above) -
-// upd.callbackData is "<verb>|<cameraNameOrAll>", e.g. "off|D01-FrontDoor"
-// or "snap|all". `sender` has already passed the same chat-id lookup and
-// canCommand||canSnap||canReset gate pollTelegramCommands applies to every
-// update - this function still re-checks the SPECIFIC permission the
-// tapped verb needs (canCommand for on/off, canSnap for snap), exactly
-// like the text-command path does via requiredPermissionForCommand -
-// callback_data is client-supplied and never trusted alone.
+// upd.callbackData is "<verb>|<cameraNameOrAll>", e.g. "off|D01-FrontDoor".
+// `sender` has already passed pollTelegramCommands' general permission
+// gate, but this still re-checks the SPECIFIC permission the tapped verb
+// needs (canCommand for on/off, canSnap for snap) - callback_data is
+// client-supplied and never trusted alone.
 static void handleTelegramCallbackQuery(const TelegramUser& sender, const TelegramUpdate& upd,
                                          const CameraConfig cameras[], CameraState states[], size_t numCameras) {
   int sep = upd.callbackData.indexOf('|');
@@ -1348,16 +1306,12 @@ void pollTelegramCommands(const CameraConfig cameras[], CameraState states[], si
 
   std::vector<TelegramUser> users = loadTelegramUsers();
   for (auto& upd : updates) {
-    // Advanced in RAM for every update (keeps the offset moving so the
-    // same batch isn't refetched next poll), but NOT persisted to NVS here
-    // - Telegram delivers every inbound message to getUpdates regardless
-    // of sender, so persisting per-update would let anyone who finds this
-    // bot force an NVS write just by sending it messages, no permission
-    // required. Persisted once at the very end of this loop instead,
-    // covering the normal case (redelivering an already-applied /on/off/
-    // snap/status/uptime after a reboot is harmless - see this section's
-    // top comment) in one write per poll regardless of how many messages
-    // arrived, spam included.
+    // Advanced in RAM for every update (so the same batch isn't refetched
+    // next poll), but NOT persisted to NVS here - Telegram delivers every
+    // inbound message regardless of sender, so persisting per-update would
+    // let anyone who finds this bot force an NVS write with no permission
+    // required. Persisted once at the end of this loop instead (see this
+    // section's top comment).
     if (upd.updateId > lastUpdateId) lastUpdateId = upd.updateId;
     if (!upd.hasChatId) continue; // no message on this update (edited_message, channel_post, ...)
 

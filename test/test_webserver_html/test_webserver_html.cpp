@@ -75,6 +75,29 @@ void test_renderDiscoveryResultsTable_empty_rows_still_renders_header(void) {
   TEST_ASSERT_TRUE(html.indexOf("<a href=") < 0); // no rows, no Add links
 }
 
+// ---- renderDataTable ----
+
+void test_renderDataTable_renders_headers_and_cells_with_no_add_column(void) {
+  std::vector<String> headers = {"Camera", "Reachable"};
+  std::vector<std::vector<String>> rows = {{"D01-FrontDoor", "OK"}};
+  String html = renderDataTable(headers, rows);
+  TEST_ASSERT_TRUE(html.indexOf("<th>Camera</th><th>Reachable</th></tr>") >= 0);
+  TEST_ASSERT_TRUE(html.indexOf("<td>D01-FrontDoor</td><td>OK</td>") >= 0);
+  TEST_ASSERT_TRUE(html.indexOf("<a href=") < 0); // no per-row action column
+}
+
+void test_renderDataTable_escapes_cell_content(void) {
+  std::vector<std::vector<String>> rows = {{"<script>alert(1)</script>"}};
+  String html = renderDataTable({"Detail"}, rows);
+  TEST_ASSERT_TRUE(html.indexOf("<script>alert(1)</script>") < 0);
+  TEST_ASSERT_TRUE(html.indexOf("&lt;script&gt;") >= 0);
+}
+
+void test_renderDataTable_empty_rows_still_renders_header(void) {
+  String html = renderDataTable({"Camera"}, {});
+  TEST_ASSERT_TRUE(html.indexOf("<th>Camera</th></tr>") >= 0);
+}
+
 int main(int argc, char** argv) {
   UNITY_BEGIN();
   RUN_TEST(test_renderEditDeleteActions_edit_link_uses_route_base_and_encoded_name);
@@ -86,5 +109,8 @@ int main(int argc, char** argv) {
   RUN_TEST(test_renderDiscoveryResultsTable_builds_add_link_from_params);
   RUN_TEST(test_renderDiscoveryResultsTable_escapes_cell_content);
   RUN_TEST(test_renderDiscoveryResultsTable_empty_rows_still_renders_header);
+  RUN_TEST(test_renderDataTable_renders_headers_and_cells_with_no_add_column);
+  RUN_TEST(test_renderDataTable_escapes_cell_content);
+  RUN_TEST(test_renderDataTable_empty_rows_still_renders_header);
   return UNITY_END();
 }

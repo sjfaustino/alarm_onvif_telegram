@@ -40,33 +40,26 @@ static AuthenticationMiddleware g_authMiddleware;
 
 // ============================================================
 // Login rate-limiting - HTTP Basic Auth over plain HTTP has no throttling
-// of its own, so without this a wrong-password guess costs an attacker
-// nothing but one more request. Runs as its own middleware, registered
-// BEFORE g_authMiddleware in startWebServer() (PsychicMiddlewareChain runs
-// middleware in the order added - verified by reading its runChain()
-// implementation, not assumed), so a locked-out IP never reaches the real
-// credential check at all.
+// of its own, so without this a wrong-password guess costs nothing but
+// one more request. Registered BEFORE g_authMiddleware in startWebServer()
+// (PsychicMiddlewareChain runs middleware in registration order, verified
+// against runChain()), so a locked-out IP never reaches the real
+// credential check.
 //
 // Tracks consecutive failed logins per source IP; RATE_LIMIT_MAX_FAILURES
-// in a row locks that IP out for an escalating duration - nextBackoffDelayMs
-// (backoff.h), the same doubling-with-cap helper WiFi reconnect and camera
-// subscription retry already use - reoffending after a lockout expires
-// doubles the next one, up to RATE_LIMIT_LOCKOUT_MAX_MS. A single
-// successful login from that IP forgives it completely (fail count and
-// lockout duration both reset to 0).
+// in a row locks that IP out for an escalating duration (nextBackoffDelayMs,
+// backoff.h - same helper WiFi reconnect/camera retry use), doubling on
+// reoffense up to RATE_LIMIT_LOCKOUT_MAX_MS. One successful login fully
+// forgives that IP.
 //
-// Applies to every route for that IP during a lockout, not just the login
-// itself - untangling "let already-known-good credentials bypass a
-// lockout" would partially defeat the point, and a legitimate user who
-// knows the real password just waits out what should be a rare, short
-// window rather than guessing.
+// Applies to every route for that IP during a lockout, not just login -
+// letting known-good credentials bypass it would partially defeat the
+// point, and a legitimate user just waits out a rare, short window.
 //
-// Deliberately in-RAM only, not persisted - a reboot clears every lockout,
-// same as every other purely in-RAM per-boot state in this project (see
-// CameraState::scheduledRevertDueMs for the same reasoning). Tracks at
-// most MAX_TRACKED_IPS distinct addresses - a home LAN device doesn't
-// need to remember more distinct offending IPs than that; once full, the
-// least-recently-seen entry is evicted to make room for a new one.
+// In-RAM only, not persisted - a reboot clears every lockout, same as
+// other per-boot state here. Tracks at most MAX_TRACKED_IPS addresses
+// (a home LAN doesn't need more); the least-recently-seen entry is
+// evicted once full.
 // ============================================================
 
 static const uint8_t       RATE_LIMIT_MAX_FAILURES     = 5;               // consecutive failures before a lockout

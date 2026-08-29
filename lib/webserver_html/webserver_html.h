@@ -37,3 +37,13 @@ struct DiscoveryResultRow {
 // which used to each hand-roll this exact table shape independently.
 String renderDiscoveryResultsTable(const std::vector<String>& columnHeaders, const String& addPath,
                                     const std::vector<DiscoveryResultRow>& rows);
+
+// Renders a plain "<column headers>...<rows>" table with no per-row action
+// column - for a read-only results table like "Test all cameras" (no
+// Add/Edit/Delete per row). A sibling of renderDiscoveryResultsTable above
+// rather than one function covering both shapes with an optional Add
+// column: that would trade this file's small duplication for a worse
+// one - a function whose meaning changes based on which optional
+// arguments happen to be empty. Cells are raw, NOT pre-escaped - escaped
+// internally, same one-escaping-point rule as renderDiscoveryResultsTable.
+String renderDataTable(const std::vector<String>& columnHeaders, const std::vector<std::vector<String>>& rows);

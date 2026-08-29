@@ -121,16 +121,14 @@ static void initWatchdog() {
 }
 
 // Human text for esp_reset_reason() - folded into the boot Telegram message
-// and an early Serial line, so "why did it reboot" doesn't require having
-// been watching Serial at the exact moment it happened. Not extracted to a
-// lib/ pure function like the rest of this project's testable logic:
-// esp_reset_reason_t is an ESP-IDF type unavailable under the native/
-// ArduinoFake test environment, and this is a straight enum->string table
-// with nothing to get subtly wrong. Deliberately a `default:` case (unlike
-// this project's own TelegramCommand/TelegramCommandPermission switches,
-// see telegram_parse.h) - esp_reset_reason_t belongs to the framework, not
-// this project, so a future IDF version adding a new enumerator should
-// fall through to "unknown", not force a rebuild-breaking change here.
+// and an early Serial line, so "why did it reboot" doesn't need Serial
+// watched at the exact moment. Not a lib/ pure function like this
+// project's other testable logic: esp_reset_reason_t is an ESP-IDF type
+// unavailable under the native test environment, and this is a plain
+// enum->string table. Deliberately has a `default:` (unlike this
+// project's own TelegramCommand switches) - esp_reset_reason_t belongs to
+// the framework, so a future IDF enumerator should fall through to
+// "unknown", not force a rebuild-breaking change here.
 static String describeResetReason() {
   switch (esp_reset_reason()) {
     case ESP_RST_POWERON:   return "power-on";
@@ -462,29 +460,22 @@ void setup() {
   }
 
   // Confirms this firmware image is healthy, canceling ESP-IDF's OTA
-  // rollback safety net for it (this build's sdkconfig does have
-  // CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE set - verified against the
-  // actual shipped framework package, not assumed). Without this call, a
-  // firmware flashed via the dashboard's /firmware/update that boot-loops
-  // (crashes or hangs past the watchdog timeout before ever reaching this
-  // line) gets automatically reverted to the previous working partition by
-  // the bootloader on the *next* reset - otherwise a bad OTA upload would
-  // permanently strand the board until someone gets a USB cable to it.
+  // rollback safety net (CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE is set).
+  // Without this, firmware flashed via /firmware/update that boot-loops
+  // gets auto-reverted to the previous working partition on the next
+  // reset - otherwise a bad OTA upload would permanently strand the board
+  // until someone gets a USB cable to it.
   //
-  // Placed at the very end of setup(), not gated on WiFi actually
-  // connecting above - a real network outage during a firmware update
-  // shouldn't roll back otherwise-good firmware, and simply reaching this
-  // line already means every deliberate halt point (the PSRAM gate) and
-  // every crash-prone init step (camera task creation, web server start)
-  // survived without a panic or watchdog reset.
+  // Placed at the end of setup(), not gated on WiFi connecting above - a
+  // network outage during an update shouldn't roll back otherwise-good
+  // firmware, and reaching this line already means every crash-prone init
+  // step survived without a panic or watchdog reset.
   esp_err_t rollbackErr = esp_ota_mark_app_valid_cancel_rollback();
   if (rollbackErr == ESP_OK) {
     Serial.println("OTA rollback: this firmware confirmed healthy - won't auto-revert on the next reboot.");
   }
-  // Any other result (e.g. no rollback was pending - the normal case on
-  // every boot except the one right after a firmware update) is expected
-  // and not logged as an error; see esp_ota_mark_app_valid_cancel_rollback's
-  // own documentation for what else it can return.
+  // Any other result (e.g. no rollback pending - the normal case except
+  // right after a firmware update) is expected, not logged as an error.
 }
 
 void loop() {
@@ -524,19 +515,15 @@ void loop() {
   }
 
   // Automatic full SD storage check - off by default (sdCheckIntervalHours()
-  // == 0), opt-in via the Storage page. Runs from loop() rather than a
-  // dedicated task since it's inherently a background/webserver-tier
-  // concern, not camera-critical - same "human works in seconds, cameras
-  // work in milliseconds" priority the rest of the webserver work already
-  // follows. checkSnapshotStorage() holds the SD mutex for its entire walk
-  // (see its own comment), so a large history can briefly delay a camera's
-  // own SD write while this runs - the tradeoff of running it unattended at
-  // all, same one the manual "check storage" button always had.
+  // == 0), opt-in via the Storage page. Runs from loop(), not a dedicated
+  // task - background/webserver-tier concern, not camera-critical.
+  // checkSnapshotStorage() holds the SD mutex for its entire walk, so a
+  // large history can briefly delay a camera's own SD write while this
+  // runs - same tradeoff the manual "check storage" button always had.
   // Clamped here, at the point of use, not just at the dashboard save
-  // (webserver.cpp clamps to SD_CHECK_INTERVAL_MAX_HOURS=720) - the
-  // NVS-load path (loadSdSettings) applies no clamp of its own, so a
-  // hand-edited/imported blob could still hold a value large enough to
-  // overflow the *3600000UL multiply (32-bit unsigned long wraps above
+  // (which clamps to SD_CHECK_INTERVAL_MAX_HOURS=720) - loadSdSettings
+  // applies no clamp of its own, so a hand-edited NVS blob could hold a
+  // value large enough to overflow the *3600000UL multiply (wraps above
   // ~1193 hours), same overflow class already fixed for
   // motionWatchdogHours (telegram.cpp's checkMotionWatchdog).
   uint32_t safeSdCheckHours = sdCheckIntervalHours();
