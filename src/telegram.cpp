@@ -424,6 +424,17 @@ bool sendTelegramMessage(const String& text) {
     if (!u.systemMessages) continue;
     anyRecipient = true;
     if (sendTelegramMessageTo(u.chatId, text)) anyOk = true;
+    // Each recipient can independently block on g_telegramNetMutex for up
+    // to TELEGRAM_NET_MUTEX_TIMEOUT_MS (45s) before a send is even
+    // attempted - with several systemMessages recipients configured, this
+    // loop alone can exceed the 90s task watchdog timeout on loop()'s task
+    // (main.cpp), before the caller (sendHeartbeat, checkScheduledAlertReverts,
+    // checkCameraOnlineStatus, ...) ever gets a chance to return and feed
+    // it itself. A no-op (harmless ESP_ERR_NOT_FOUND, ignored like every
+    // other reset call in this project) when called from a camera task,
+    // which was never subscribed to this watchdog in the first place - see
+    // initWatchdog()'s own comment (main.cpp).
+    esp_task_wdt_reset();
   }
   if (!anyRecipient) {
     Serial.println("sendTelegramMessage: no Telegram user has systemMessages enabled - nothing sent.");
@@ -1430,10 +1441,21 @@ static void handleTelegramCallbackQuery(const TelegramUser& sender, const Telegr
   answerTelegramCallback(upd.callbackQueryId, "");
 }
 
-// Called once per loop() tick (main.cpp). Cheap: just a millis() comparison
-// per camera when nothing's due. Overflow-safe comparison (see
-// CameraState::scheduledRevertDueMs's comment) matches main.cpp's own
-// g_wifiRetryDueMs pattern.
+// Called once per loop() tick (main.cpp), unconditionally - unlike
+// sendHeartbeat/checkNvsUsage/checkWifiSignal there, not gated behind an
+// interval of its own. Cheap when nothing's due: just a millis()
+// comparison per camera. Overflow-safe comparison (see CameraState::
+// scheduledRevertDueMs's comment) matches main.cpp's own g_wifiRetryDueMs
+// pattern. NOT cheap once something IS due, though - sendTelegramMessage
+// below fans out to every systemMessages recipient (each up to a 45s
+// g_telegramNetMutex wait - see that function's own comment) and is
+// called separately for EVERY camera whose timer expires in the same
+// tick, so several cameras timing out together (e.g. several muted with
+// the same duration via the Cameras page's Mute all) is a real nested
+// worst case for loop()'s 90s task watchdog. sendTelegramMessage now
+// resets it per recipient internally, but this loop also resets after
+// each camera's own revert completes, matching the same per-iteration
+// feeding handleAllCamerasCommand's "/snap all" loop already does.
 void checkScheduledAlertReverts(const CameraConfig cameras[], CameraState states[], size_t numCameras) {
   for (size_t i = 0; i < numCameras; i++) {
     unsigned long dueMs;
@@ -1452,6 +1474,7 @@ void checkScheduledAlertReverts(const CameraConfig cameras[], CameraState states
                   cameras[i].name.c_str(), revertToOn ? "ON" : "OFF");
     logEvent(String(cameras[i].name) + " alerts: " + (revertToOn ? "ON" : "OFF") + " (timer expired)");
     sendTelegramMessage(String(cameras[i].name) + " alerts: " + (revertToOn ? "ON" : "OFF") + " (timer expired)");
+    esp_task_wdt_reset();
   }
 }
 
