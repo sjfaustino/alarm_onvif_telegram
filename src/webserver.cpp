@@ -682,6 +682,42 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
     return response->send(200, "text/plain", buildConfigExport().c_str());
   });
 
+  server.on("/import", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
+    String text = request->getParam("configText", "");
+    ConfigImportApplyResult r = applyConfigImport(text);
+
+    String banner;
+    if (!r.anyDomainFound) {
+      banner = "No valid configuration sections found in this file - nothing was changed. "
+                "(Only files exported by this build or later can be restored - an older export "
+                "has nothing for Import to read.)";
+    } else {
+      String imported, skipped;
+      auto addImported = [&](const String& s) { if (imported.length() > 0) imported += ", "; imported += s; };
+      if (r.camerasImported) addImported(String(r.cameraCount) + " camera(s)");
+      if (r.usersImported) addImported(String(r.userCount) + " Telegram user(s)");
+      if (r.networkImported) addImported("network settings");
+      if (r.sdSettingsImported) addImported("SD settings");
+
+      auto addSkipped = [&](const String& s) { if (skipped.length() > 0) skipped += ", "; skipped += s; };
+      if (!r.camerasImported) addSkipped("Cameras");
+      if (!r.usersImported) addSkipped("Telegram Users");
+      if (!r.networkImported) addSkipped("Network");
+      if (!r.sdSettingsImported) addSkipped("SD Settings");
+
+      banner = imported.length() > 0 ? ("Imported " + imported + ".") : "Nothing was imported.";
+      if (skipped.length() > 0) {
+        banner += " " + skipped + " not found in this file (or failed to save) - left unchanged.";
+      }
+      if (r.camerasImported || r.networkImported) {
+        banner += " Passwords are blank for anything just imported - re-enter them (Cameras/"
+                  "Network pages) before rebooting.";
+      }
+      if (imported.length() > 0) banner += " Reboot the board (Maintenance page) to apply.";
+    }
+    return response->send(200, "text/html", renderShell(Tab::Security, banner, renderSecurityPanel()).c_str());
+  });
+
   server.on("/security/save", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
     String username = request->getParam("username", "");
     String password = request->getParam("password", "");
