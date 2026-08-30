@@ -1,4 +1,5 @@
 #include "webserver_cameras.h"
+#include "config.h" // CAMERA_ALERT_COOLDOWN_MAX_MS/CAMERA_OFFLINE_THRESHOLD_MAX_MS/CAMERA_SNAPSHOT_BURST_MAX
 #include "format_utils.h"
 #include "webserver_html.h"
 #include "camera_tasks.h"
@@ -406,26 +407,34 @@ CameraConfig parseCameraForm(PsychicRequest* request) {
   long cooldownSec = request->getParam("alertCooldownSec", "30").toInt();
   // A blank/zero/negative field shouldn't produce a 0ms cooldown (alerts on
   // every single poll) - fall back to CameraConfig's own default instead.
-  // Upper-capped at 24h (86400s): unsigned long is 32-bit on this platform,
-  // and *1000UL overflows/wraps above ~4,294,967s - a fat-fingered huge
-  // cooldown would otherwise silently wrap into a tiny one (alert spam
-  // instead of the throttling actually requested), same overflow class
-  // motionWatchdogHours/timelapseIntervalMin below are already clamped
-  // against.
-  if (cooldownSec > 86400) cooldownSec = 86400;
+  // Upper-capped at CAMERA_ALERT_COOLDOWN_MAX_MS (config.h, 24h): unsigned
+  // long is 32-bit on this platform, and *1000UL overflows/wraps above
+  // ~4,294,967s - a fat-fingered huge cooldown would otherwise silently
+  // wrap into a tiny one (alert spam instead of the throttling actually
+  // requested), same overflow class motionWatchdogHours/timelapseIntervalMin
+  // below are already clamped against. This is a form-input sanity bound,
+  // not the only guard - see telegram.cpp's safeAlertCooldownMs for the
+  // point-of-use clamp that also covers a value that bypassed this form
+  // entirely (a hand-edited/imported NVS blob).
+  long cooldownMaxSec = (long)(CAMERA_ALERT_COOLDOWN_MAX_MS / 1000UL);
+  if (cooldownSec > cooldownMaxSec) cooldownSec = cooldownMaxSec;
   c.alertCooldownMs = cooldownSec > 0 ? (unsigned long)cooldownSec * 1000UL : CameraConfig().alertCooldownMs;
 
   long offlineMin = request->getParam("offlineThresholdMin", "5").toInt();
-  // Upper-capped at 7 days (10080min), same overflow reasoning as above -
-  // *60000UL wraps above ~71583 minutes.
-  if (offlineMin > 10080) offlineMin = 10080;
+  // Upper-capped at CAMERA_OFFLINE_THRESHOLD_MAX_MS (7 days), same overflow
+  // reasoning as above - *60000UL wraps above ~71583 minutes. See
+  // telegram.cpp's safeOfflineThresholdMs for the point-of-use clamp.
+  long offlineMaxMin = (long)(CAMERA_OFFLINE_THRESHOLD_MAX_MS / 60000UL);
+  if (offlineMin > offlineMaxMin) offlineMin = offlineMaxMin;
   c.offlineThresholdMs = offlineMin > 0 ? (unsigned long)offlineMin * 60000UL : CameraConfig().offlineThresholdMs;
 
   long burstCount = request->getParam("snapshotBurstCount", "1").toInt();
-  // Clamp to [1, 10]: blank/zero/negative falls back to 1 shot, and the
-  // cap stops a fat-fingered number from flooding past Telegram's rate limit.
+  // Clamp to [1, CAMERA_SNAPSHOT_BURST_MAX]: blank/zero/negative falls back
+  // to 1 shot, and the cap stops a fat-fingered number from flooding past
+  // Telegram's rate limit. See telegram.cpp's safeSnapshotBurstCount for
+  // the point-of-use clamp.
   if (burstCount < 1) burstCount = 1;
-  if (burstCount > 10) burstCount = 10;
+  if (burstCount > (long)CAMERA_SNAPSHOT_BURST_MAX) burstCount = (long)CAMERA_SNAPSHOT_BURST_MAX;
   c.snapshotBurstCount = (unsigned int)burstCount;
 
   c.quietHoursEnabled = request->hasParam("quietHoursEnabled");

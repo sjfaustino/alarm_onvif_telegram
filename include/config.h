@@ -165,6 +165,18 @@ static const uint32_t SD_CHECK_INTERVAL_MAX_HOURS = 720;
 // 43200min = 30 days.
 static const unsigned long NTP_SYNC_MAX_MINUTES = 43200UL;
 
+// Clamps for CameraConfig's three alert-throttling fields (Cameras page) -
+// same "hand-edited/imported NVS blob bypasses the form entirely" reasoning
+// as the constants above. webserver_cameras.cpp's parseCameraForm clamps
+// user input to these; telegram.cpp re-clamps at each point of use (see
+// its own comments - an unclamped alertCooldownMs/snapshotBurstCount pair
+// is exactly the multi-camera Telegram burst class this project has
+// already been burned by once, see git history around "Serialize Telegram
+// TLS sends to fix multi-camera burst SSL failures").
+static const unsigned long CAMERA_ALERT_COOLDOWN_MAX_MS = 86400000UL;    // 24h
+static const unsigned long CAMERA_OFFLINE_THRESHOLD_MAX_MS = 604800000UL; // 7 days
+static const unsigned int CAMERA_SNAPSHOT_BURST_MAX = 10;
+
 // Cap on /activity.log (sd_store.cpp's appendActivityLogLine) - the SD-
 // persisted mirror of the in-memory Activity log (event_log_store.h).
 // Once a line's append would push the file past this, it's deleted and

@@ -1,4 +1,5 @@
 #include "telegram.h"
+#include "config.h" // CAMERA_ALERT_COOLDOWN_MAX_MS/CAMERA_OFFLINE_THRESHOLD_MAX_MS/CAMERA_SNAPSHOT_BURST_MAX
 #include "telegram_ca.h"
 #include "telegram_users.h"
 #include "telegram_parse.h"
@@ -504,6 +505,47 @@ static uint8_t* fetchOneSnapshot(const CameraConfig& cfg, CameraState& st, size_
   return jpg;
 }
 
+// Clamped here, at the point of use, not just at the dashboard save
+// (webserver_cameras.cpp's parseCameraForm clamps user input to
+// [1,CAMERA_ALERT_COOLDOWN_MAX_MS]) - same "hand-edited/imported NVS blob
+// bypasses the form entirely" reasoning as motionWatchdogHours above, the
+// SD storage check interval, and ntpSyncIntervalMs (main.cpp's setupTime).
+// A 0 here isn't a "disabled" sentinel - every motion poll would re-alert
+// with no throttling at all, and skip triggerMotionAlert's own digest-
+// suppression entirely (it only engages while a cooldown is actually
+// running) - exactly the unthrottled multi-camera Telegram burst class
+// this project has already been burned by once (see git history around
+// "Serialize Telegram TLS sends to fix multi-camera burst SSL failures").
+// Import (webserver_security.cpp) writes this field with no clamp of its
+// own at all.
+static unsigned long safeAlertCooldownMs(const CameraConfig& cfg) {
+  unsigned long ms = cfg.alertCooldownMs;
+  if (ms == 0) ms = CameraConfig().alertCooldownMs;
+  if (ms > CAMERA_ALERT_COOLDOWN_MAX_MS) ms = CAMERA_ALERT_COOLDOWN_MAX_MS;
+  return ms;
+}
+
+// Same idea as safeAlertCooldownMs. A 0 here would make
+// checkCameraOnlineStatus's offlineNow computation (millis() -
+// lastContactMs >= 0) always true, permanently mis-showing a healthy
+// camera as OFFLINE instead of the throttling actually intended.
+static unsigned long safeOfflineThresholdMs(const CameraConfig& cfg) {
+  unsigned long ms = cfg.offlineThresholdMs;
+  if (ms == 0) ms = CameraConfig().offlineThresholdMs;
+  if (ms > CAMERA_OFFLINE_THRESHOLD_MAX_MS) ms = CAMERA_OFFLINE_THRESHOLD_MAX_MS;
+  return ms;
+}
+
+// Same idea as safeAlertCooldownMs. An unclamped burst count sent with no
+// delay between shots (see triggerMotionAlert's own comment below) is
+// exactly the "flooding past Telegram's rate limit" the dashboard form's
+// own clamp exists to prevent.
+static unsigned int safeSnapshotBurstCount(const CameraConfig& cfg) {
+  unsigned int shots = (cfg.snapshotBurstCount > 0) ? cfg.snapshotBurstCount : 1;
+  if (shots > CAMERA_SNAPSHOT_BURST_MAX) shots = CAMERA_SNAPSHOT_BURST_MAX;
+  return shots;
+}
+
 void triggerMotionAlert(const CameraConfig& cfg, CameraState& st) {
   // alertsEnabled is written by loop()'s task (pollTelegramCommands'
   // /on//off), this function runs on the camera's own task - cross-task
@@ -516,7 +558,7 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st) {
   // task, so this self-read needs no lock - only cross-task readers
   // (webserver.cpp) do.
   uint32_t nowMs = millis();
-  if (st.hasAlerted && nowMs - st.lastAlert < cfg.alertCooldownMs) {
+  if (st.hasAlerted && nowMs - st.lastAlert < safeAlertCooldownMs(cfg)) {
     // Only counted while a real snapshot send (below) is what started this
     // cooldown - digestArmed stays false through a quiet-hours cycle (see
     // that branch below), so motion suppressed during a quiet stretch
@@ -575,7 +617,7 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st) {
   st.digestArmed = true;
   st.suppressedMotionCount = 0;
 
-  unsigned int shots = (cfg.snapshotBurstCount > 0) ? cfg.snapshotBurstCount : 1;
+  unsigned int shots = safeSnapshotBurstCount(cfg);
   logEvent(cfg.name + ": motion alert, " + String(shots) + " shot(s) to " +
            String(recipients.size()) + " recipient(s)");
 
@@ -627,7 +669,7 @@ static std::vector<String> beginCameraAlert(const CameraConfig& cfg, CameraState
   { CameraStateLock lock(st); alertsEnabled = st.alertsEnabled; }
   if (!alertsEnabled) return {};
 
-  if (st.hasAlerted && nowMs - st.lastAlert < cfg.alertCooldownMs) return {};
+  if (st.hasAlerted && nowMs - st.lastAlert < safeAlertCooldownMs(cfg)) return {};
 
   std::vector<String> recipients;
   for (auto& u : loadTelegramUsers()) {
@@ -681,7 +723,8 @@ void checkCameraOnlineStatus(const CameraConfig& cfg, CameraState& st) {
   // (sendOnDemandSnapshot, via /snap), not just this camera's own task.
   unsigned long lastContactMs;
   { CameraStateLock lock(st); lastContactMs = st.lastContactMs; }
-  bool offlineNow = (millis() - lastContactMs) >= cfg.offlineThresholdMs;
+  unsigned long offlineThresholdMs = safeOfflineThresholdMs(cfg);
+  bool offlineNow = (millis() - lastContactMs) >= offlineThresholdMs;
   // isOffline is written only here, always from this camera's own task, so
   // this self-read needs no lock - only the write below does, since
   // webserver.cpp/main.cpp read it from other tasks.
@@ -699,10 +742,14 @@ void checkCameraOnlineStatus(const CameraConfig& cfg, CameraState& st) {
     }
   }
   if (offlineNow) {
-    Serial.printf("[%s] OFFLINE - no response for over %lus.\n", cfg.name.c_str(), cfg.offlineThresholdMs / 1000UL);
-    logEvent(cfg.name + ": OFFLINE (no response for over " + String(cfg.offlineThresholdMs / 60000UL) + "m)");
+    // Reports the same (possibly clamped) threshold actually enforced above,
+    // not the raw cfg field - otherwise a value clamped by
+    // safeOfflineThresholdMs would make this message describe a threshold
+    // that was never really in effect.
+    Serial.printf("[%s] OFFLINE - no response for over %lus.\n", cfg.name.c_str(), offlineThresholdMs / 1000UL);
+    logEvent(cfg.name + ": OFFLINE (no response for over " + String(offlineThresholdMs / 60000UL) + "m)");
     sendTelegramMessage("\xE2\x9A\xA0\xEF\xB8\x8F " + cfg.name + " is OFFLINE - no response for over " +
-                         String(cfg.offlineThresholdMs / 60000UL) + " minute(s).");
+                         String(offlineThresholdMs / 60000UL) + " minute(s).");
   } else {
     Serial.printf("[%s] Back ONLINE.\n", cfg.name.c_str());
     logEvent(cfg.name + ": back ONLINE");
@@ -752,7 +799,7 @@ void checkMotionWatchdog(const CameraConfig& cfg, CameraState& st) {
 // camera.h), same reasoning as checkMotionWatchdog above - no lock needed.
 void checkPendingMotionDigest(const CameraConfig& cfg, CameraState& st) {
   if (!st.digestArmed) return; // no real send is currently being tracked
-  if (millis() - st.lastAlert < cfg.alertCooldownMs) return; // cooldown still running - not due yet
+  if (millis() - st.lastAlert < safeAlertCooldownMs(cfg)) return; // cooldown still running - not due yet
 
   st.digestArmed = false; // one flush per cooldown cycle, whatever the count
   uint32_t count = st.suppressedMotionCount;
