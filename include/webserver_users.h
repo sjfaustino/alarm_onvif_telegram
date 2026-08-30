@@ -2,6 +2,7 @@
 #include <Arduino.h>
 #include <PsychicHttp.h>
 #include "telegram_users.h"
+#include "background_job.h" // BackgroundJobStartOutcome
 
 // Telegram Users panel: user list, Add/Edit form (permissions, camera
 // subscriptions). Split out of webserver.cpp - see webserver_network.h's
@@ -33,8 +34,10 @@ bool saveUserSubmission(const TelegramUser& user, const String& originalName, St
 
 // Starts sendTestMessage() on a background FreeRTOS task instead of the
 // calling task. A no-op (doesn't start a second overlapping run) if one is
-// already in progress. Call this from the /users/test route handler.
-void startTestMessageAsync();
+// already in progress - the return value tells the caller which of the
+// three outcomes happened, for the /users/test route handler to show an
+// accurate banner instead of always assuming success.
+BackgroundJobStartOutcome startTestMessageAsync();
 
 // Renders the current test-message status: "sending in the background"
 // while one is in progress, the last completed run's result once one

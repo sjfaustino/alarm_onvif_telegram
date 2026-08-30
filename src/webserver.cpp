@@ -288,6 +288,20 @@ static void delayedRebootTask(void*) {
 static bool   g_otaError = false;
 static String g_otaErrorMsg;
 
+// Picks the right banner for a startXAsync() result - every background-job
+// route below used to hardcode the "started" text unconditionally, even
+// when tryStart() was actually a no-op (already running) or xTaskCreate
+// failed (out of memory) - see BackgroundJobStartOutcome's own comment
+// (background_job.h) for the incident that motivated splitting this out.
+static String backgroundJobBanner(BackgroundJobStartOutcome outcome, const String& startedText,
+                                   const String& alreadyRunningText, const String& failedText) {
+  switch (outcome) {
+    case BackgroundJobStartOutcome::AlreadyRunning: return alreadyRunningText;
+    case BackgroundJobStartOutcome::FailedToStart:  return failedText;
+    default:                                        return startedText;
+  }
+}
+
 void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraState>* liveStates) {
   g_liveCameras = liveCameras;
   g_liveStates = liveStates;
@@ -332,11 +346,11 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
     // Kicks off a background task and returns immediately - see
     // startWifiScanAsync's own comment (webserver_network.h) for why this
     // must never run synchronously on this request-handling task.
-    startWifiScanAsync();
-    return response->send(
-        200, "text/html",
-        renderShell(Tab::Network, "Scanning for WiFi networks in the background.", renderNetworkPanel())
-            .c_str());
+    String banner = backgroundJobBanner(
+        startWifiScanAsync(), "Scanning for WiFi networks in the background.",
+        "A WiFi scan is already running in the background - reload in a moment to see its result.",
+        "Could not start the WiFi scan - the device is low on memory right now. Try again in a moment.");
+    return response->send(200, "text/html", renderShell(Tab::Network, banner, renderNetworkPanel()).c_str());
   });
 
   server.on("/cameras", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
@@ -429,14 +443,16 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
     // testCfg (not submitted - this one has the resolved password) is
     // heap-copied by startTestConnectionAsync, so it's safe to let it go
     // out of scope here.
-    startTestConnectionAsync(testCfg);
+    String banner = backgroundJobBanner(
+        startTestConnectionAsync(testCfg),
+        "Testing camera connection in the background - reload this page in a moment to see the result.",
+        "A connection test is already running in the background - reload in a moment to see its result.",
+        "Could not start the connection test - the device is low on memory right now. Try again in a moment.");
 
     submitted.pass = "";
     return response->send(
         200, "text/html",
-        renderShell(Tab::Cameras, "Testing camera connection in the background - reload this page in "
-                    "a moment to see the result.",
-                    renderCamerasPanel(&submitted, isEdit, g_liveCameras, g_liveStates))
+        renderShell(Tab::Cameras, banner, renderCamerasPanel(&submitted, isEdit, g_liveCameras, g_liveStates))
             .c_str());
   });
 
@@ -444,11 +460,13 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
     // Kicks off a background task and returns immediately - see
     // startCameraDiscoveryAsync's own comment (webserver_cameras.h) for why
     // this must never run synchronously on this request-handling task.
-    startCameraDiscoveryAsync();
+    String banner = backgroundJobBanner(
+        startCameraDiscoveryAsync(), "Searching the network for cameras in the background.",
+        "A network search is already running in the background - reload in a moment to see its result.",
+        "Could not start the network search - the device is low on memory right now. Try again in a moment.");
     return response->send(
         200, "text/html",
-        renderShell(Tab::Cameras, "Searching the network for cameras in the background.",
-                    renderCamerasPanel(nullptr, false, g_liveCameras, g_liveStates))
+        renderShell(Tab::Cameras, banner, renderCamerasPanel(nullptr, false, g_liveCameras, g_liveStates))
             .c_str());
   });
 
@@ -456,11 +474,13 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
     // Kicks off a background task and returns immediately - see
     // startTestAllCamerasAsync's own comment (webserver_cameras.h) for why
     // this must never run synchronously on this request-handling task.
-    startTestAllCamerasAsync();
+    String banner = backgroundJobBanner(
+        startTestAllCamerasAsync(), "Test started in the background.",
+        "A test is already running in the background - reload in a moment to see its result.",
+        "Could not start the test - the device is low on memory right now. Try again in a moment.");
     return response->send(
         200, "text/html",
-        renderShell(Tab::Cameras, "Test started in the background.",
-                    renderCamerasPanel(nullptr, false, g_liveCameras, g_liveStates))
+        renderShell(Tab::Cameras, banner, renderCamerasPanel(nullptr, false, g_liveCameras, g_liveStates))
             .c_str());
   });
 
@@ -606,11 +626,14 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
     // Kicks off a background task and returns immediately - see
     // startTestMessageAsync's own comment (webserver_users.h) for why this
     // must never run synchronously on this request-handling task.
-    startTestMessageAsync();
+    String banner = backgroundJobBanner(
+        startTestMessageAsync(), "Sending a test message in the background.",
+        "A test message is already being sent in the background - reload in a moment to see its result.",
+        "Could not start sending the test message - the device is low on memory right now. Try again in a "
+        "moment.");
     return response->send(
         200, "text/html",
-        renderShell(Tab::Users, "Sending a test message in the background.", renderUsersPanel(nullptr, false))
-            .c_str());
+        renderShell(Tab::Users, banner, renderUsersPanel(nullptr, false)).c_str());
   });
 
   server.on("/activity", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
@@ -733,10 +756,11 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
     // Kicks off a background task and returns immediately - see
     // startStorageCheckAsync's own comment (webserver_storage.h) for why
     // this must never run synchronously on this request-handling task.
-    startStorageCheckAsync();
-    return response->send(
-        200, "text/html",
-        renderShell(Tab::Storage, "Checking storage in the background.", renderStoragePanel()).c_str());
+    String banner = backgroundJobBanner(
+        startStorageCheckAsync(), "Checking storage in the background.",
+        "A storage check is already running in the background - reload in a moment to see its result.",
+        "Could not start the storage check - the device is low on memory right now. Try again in a moment.");
+    return response->send(200, "text/html", renderShell(Tab::Storage, banner, renderStoragePanel()).c_str());
   });
 
   server.on("/storage/erase", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
@@ -744,11 +768,11 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
     // Kicks off a background task and returns immediately - see
     // startEraseAllAsync's own comment (webserver_storage.h) for why this
     // must never run synchronously on this request-handling task.
-    startEraseAllAsync();
-    return response->send(
-        200, "text/html",
-        renderShell(Tab::Storage, "Erasing all snapshot history in the background.", renderStoragePanel())
-            .c_str());
+    String banner = backgroundJobBanner(
+        startEraseAllAsync(), "Erasing all snapshot history in the background.",
+        "An erase is already running in the background - reload in a moment to see its result.",
+        "Could not start the erase - the device is low on memory right now. Try again in a moment.");
+    return response->send(200, "text/html", renderShell(Tab::Storage, banner, renderStoragePanel()).c_str());
   });
 
   server.on("/security", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {

@@ -12,6 +12,19 @@
 // block - one implementation now, instead of two independently-typed
 // copies of the same locking logic.
 //
+// What happened when a caller tried to start a job - lets a PsychicHttp
+// route handler tell the person who actually clicked the button what
+// happened, instead of always assuming success. Before this existed, every
+// startXAsync() returned void and every route handler hardcoded an
+// optimistic "started in the background" banner regardless of outcome -
+// including the FailedToStart case below, where the only trace was a
+// Serial.println nobody browsing the dashboard would ever see.
+enum class BackgroundJobStartOutcome {
+  Started,        // tryStart() and the task creation that followed both succeeded - a new run is in flight
+  AlreadyRunning, // tryStart() returned false - one was already in flight, this call changed nothing
+  FailedToStart,  // xTaskCreate failed (out of memory?) after tryStart() succeeded; rolled back via cancelStart()
+};
+
 // T is whatever the job produces - a std::vector<CameraTestResult>, a
 // std::vector<DiscoveredCamera>. Must be default-constructible.
 template <typename T>

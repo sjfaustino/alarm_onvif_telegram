@@ -89,8 +89,8 @@ static void storageCheckTask(void*) {
   vTaskDelete(nullptr);
 }
 
-void startStorageCheckAsync() {
-  if (!g_storageCheckJob.tryStart()) return; // one check at a time - a second click while one's in flight is a no-op
+BackgroundJobStartOutcome startStorageCheckAsync() {
+  if (!g_storageCheckJob.tryStart()) return BackgroundJobStartOutcome::AlreadyRunning; // one check at a time - a second click while one's in flight is a no-op
 
   // No TLS/HTTPClient work here, just SD file I/O and light path-string
   // building - a smaller stack than the TLS-heavy tasks (camera_tasks.h's
@@ -104,7 +104,9 @@ void startStorageCheckAsync() {
     g_storageCheckJob.cancelStart();
     Serial.println("[webserver_storage] ERROR: failed to start the storage check task (out of memory?) "
                     "- try again once memory frees up.");
+    return BackgroundJobStartOutcome::FailedToStart;
   }
+  return BackgroundJobStartOutcome::Started;
 }
 
 String renderStorageCheckStatus() {
@@ -134,8 +136,8 @@ static void eraseAllTask(void*) {
   vTaskDelete(nullptr);
 }
 
-void startEraseAllAsync() {
-  if (!g_eraseAllJob.tryStart()) return; // one erase at a time - a second click while one's in flight is a no-op
+BackgroundJobStartOutcome startEraseAllAsync() {
+  if (!g_eraseAllJob.tryStart()) return BackgroundJobStartOutcome::AlreadyRunning; // one erase at a time - a second click while one's in flight is a no-op
 
   // Same sizing reasoning as startStorageCheckAsync above - SD file I/O
   // only, no TLS/HTTPClient work.
@@ -147,7 +149,9 @@ void startEraseAllAsync() {
     g_eraseAllJob.cancelStart();
     Serial.println("[webserver_storage] ERROR: failed to start the erase-all task (out of memory?) "
                     "- try again once memory frees up.");
+    return BackgroundJobStartOutcome::FailedToStart;
   }
+  return BackgroundJobStartOutcome::Started;
 }
 
 String renderEraseAllStatus() {

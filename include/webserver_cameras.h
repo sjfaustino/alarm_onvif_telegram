@@ -5,6 +5,7 @@
 #include "camera.h"
 #include "camera_store.h"
 #include "onvif_discovery.h" // DiscoveredCamera
+#include "background_job.h" // BackgroundJobStartOutcome
 
 // Cameras panel: live status table, Add/Edit form, Test Connection. Split
 // out of webserver.cpp - see webserver_network.h's comment for why.
@@ -86,8 +87,10 @@ String testCameraConnection(CameraConfig cfg);
 // Starts testCameraConnection(cfg) on a background FreeRTOS task instead
 // of the calling task. A no-op (doesn't start a second overlapping run,
 // same "one at a time" rule test-all/discovery already follow) if a test
-// is already in progress. Call this from the /cameras/test route handler.
-void startTestConnectionAsync(const CameraConfig& cfg);
+// is already in progress - the return value tells the caller which of the
+// three outcomes happened, for the /cameras/test route handler to show an
+// accurate banner instead of always assuming success.
+BackgroundJobStartOutcome startTestConnectionAsync(const CameraConfig& cfg);
 
 // Renders the current Test Connection status: "testing in the background"
 // while one is in progress, the last completed run's result (already
@@ -133,8 +136,10 @@ String renderCameraTestAllResults(const std::vector<CameraTestResult>& results);
 // comment for why a synchronous bulk test would block the whole
 // dashboard, not just the requester, for potentially minutes. A no-op
 // (doesn't start a second overlapping run) if a test is already in
-// progress. Call this from the /cameras/test-all route handler.
-void startTestAllCamerasAsync();
+// progress - the return value tells the caller which of the three
+// outcomes happened, for the /cameras/test-all route handler to show an
+// accurate banner instead of always assuming success.
+BackgroundJobStartOutcome startTestAllCamerasAsync();
 
 // Renders the current bulk-test status: "a test is running" while one is
 // in progress, the last completed run's results table once one exists, or
@@ -156,8 +161,10 @@ String renderTestAllStatus();
 // above: the listen window is a few seconds by design (has to give slower
 // cameras time to answer a multicast probe), which would otherwise block
 // the whole dashboard for that long. A no-op if a search is already in
-// progress. Call this from the /cameras/discover route handler.
-void startCameraDiscoveryAsync();
+// progress - the return value tells the caller which of the three
+// outcomes happened, for the /cameras/discover route handler to show an
+// accurate banner instead of always assuming success.
+BackgroundJobStartOutcome startCameraDiscoveryAsync();
 
 // Renders the current discovery status: "a search is running" while one is
 // in progress, the last completed run's results (a table with an Add link

@@ -1,6 +1,7 @@
 #pragma once
 #include <Arduino.h>
 #include <PsychicHttp.h>
+#include "background_job.h" // BackgroundJobStartOutcome
 
 // Network panel: WiFi status, network config form (primary/backup SSID,
 // hostname, static IP vs DHCP, NTP server, POSIX TZ). Split out of
@@ -33,9 +34,11 @@ void handleSaveNetwork(PsychicRequest* request, String& banner);
 // interrupts its own traffic while it hops channels; running it
 // synchronously on the request-handling task risks stalling the very
 // request that triggered it, on top of blocking every other page load for
-// the scan's duration. A no-op if a scan is already in progress. Call this
-// from the /network/scan route handler.
-void startWifiScanAsync();
+// the scan's duration. A no-op if a scan is already in progress - the
+// return value tells the caller which of the three outcomes happened, for
+// the /network/scan route handler to show an accurate banner instead of
+// always assuming success.
+BackgroundJobStartOutcome startWifiScanAsync();
 
 // Renders the current scan status: "a scan is running" while one is in
 // progress, the last completed scan's results (a table with an Add link

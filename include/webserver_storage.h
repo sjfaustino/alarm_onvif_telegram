@@ -1,5 +1,6 @@
 #pragma once
 #include <Arduino.h>
+#include "background_job.h" // BackgroundJobStartOutcome
 
 // Storage panel content (SD card status, enable/disable toggle, a
 // readability check, and an erase-all-history action). Split out of
@@ -32,9 +33,11 @@ String renderStoragePanel();
 
 // Starts checkSnapshotStorage() (sd_store.h) on a background FreeRTOS task
 // instead of the calling task. A no-op (doesn't start a second overlapping
-// run) if a check is already in progress. Call this from the
-// /storage/check route handler.
-void startStorageCheckAsync();
+// run) if a check is already in progress - the return value tells the
+// caller which of the three outcomes happened, for the /storage/check
+// route handler to show an accurate banner instead of always assuming
+// success.
+BackgroundJobStartOutcome startStorageCheckAsync();
 
 // Renders the current check status: "checking in the background" while
 // one is in progress, the last completed run's result once one exists, or
@@ -45,9 +48,11 @@ String renderStorageCheckStatus();
 
 // Starts eraseAllSnapshots() (sd_store.h) on a background FreeRTOS task
 // instead of the calling task. A no-op (doesn't start a second overlapping
-// run) if an erase is already in progress. Call this from the
-// /storage/erase route handler.
-void startEraseAllAsync();
+// run) if an erase is already in progress - the return value tells the
+// caller which of the three outcomes happened, for the /storage/erase
+// route handler to show an accurate banner instead of always assuming
+// success.
+BackgroundJobStartOutcome startEraseAllAsync();
 
 // Renders the current erase status: "erasing in the background" while one
 // is in progress, the last completed run's result once one exists, or ""

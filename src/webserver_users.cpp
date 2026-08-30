@@ -144,8 +144,8 @@ static void sendTestMessageTask(void*) {
   vTaskDelete(nullptr);
 }
 
-void startTestMessageAsync() {
-  if (!g_testMessageJob.tryStart()) return; // one send at a time - a second click while one's in flight is a no-op
+BackgroundJobStartOutcome startTestMessageAsync() {
+  if (!g_testMessageJob.tryStart()) return BackgroundJobStartOutcome::AlreadyRunning; // one send at a time - a second click while one's in flight is a no-op
 
   // Same stack size as a real per-camera monitoring task (camera_tasks.h) -
   // this does the same WiFiClientSecure/HTTPClient TLS work a single SOAP
@@ -158,7 +158,9 @@ void startTestMessageAsync() {
     g_testMessageJob.cancelStart();
     Serial.println("[webserver_users] ERROR: failed to start the test message task (out of memory?) - "
                     "try again once memory frees up.");
+    return BackgroundJobStartOutcome::FailedToStart;
   }
+  return BackgroundJobStartOutcome::Started;
 }
 
 String renderTestMessageStatus() {

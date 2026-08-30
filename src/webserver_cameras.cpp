@@ -690,8 +690,8 @@ static void testConnectionTask(void* param) {
   vTaskDelete(nullptr);
 }
 
-void startTestConnectionAsync(const CameraConfig& cfg) {
-  if (!g_testConnectionJob.tryStart()) return; // one test at a time - a second click while one's in flight is a no-op
+BackgroundJobStartOutcome startTestConnectionAsync(const CameraConfig& cfg) {
+  if (!g_testConnectionJob.tryStart()) return BackgroundJobStartOutcome::AlreadyRunning; // one test at a time - a second click while one's in flight is a no-op
 
   // Freed by testConnectionTask itself once it's done with it - same
   // ownership pattern as camera_tasks.h's CameraTaskContext.
@@ -710,7 +710,9 @@ void startTestConnectionAsync(const CameraConfig& cfg) {
     g_testConnectionJob.cancelStart();
     Serial.println("[webserver_cameras] ERROR: failed to start the Test Connection task (out of memory?) "
                     "- try again once memory frees up.");
+    return BackgroundJobStartOutcome::FailedToStart;
   }
+  return BackgroundJobStartOutcome::Started;
 }
 
 String renderTestConnectionStatus() {
@@ -796,8 +798,8 @@ static void testAllCamerasTask(void*) {
   vTaskDelete(nullptr);
 }
 
-void startTestAllCamerasAsync() {
-  if (!g_testAllJob.tryStart()) return; // one run at a time - a second click while one's in flight is a no-op
+BackgroundJobStartOutcome startTestAllCamerasAsync() {
+  if (!g_testAllJob.tryStart()) return BackgroundJobStartOutcome::AlreadyRunning; // one run at a time - a second click while one's in flight is a no-op
 
   // Same stack size as a real per-camera monitoring task (camera_tasks.h) -
   // this does the identical TLS/HTTPClient/SOAP-string-building work per
@@ -810,7 +812,9 @@ void startTestAllCamerasAsync() {
     g_testAllJob.cancelStart();
     Serial.println("[webserver_cameras] ERROR: failed to start the Test All Cameras task (out of memory?) "
                     "- try again once memory frees up.");
+    return BackgroundJobStartOutcome::FailedToStart;
   }
+  return BackgroundJobStartOutcome::Started;
 }
 
 String renderTestAllStatus() {
@@ -922,8 +926,8 @@ static void cameraDiscoveryTask(void*) {
   vTaskDelete(nullptr);
 }
 
-void startCameraDiscoveryAsync() {
-  if (!g_discoveryJob.tryStart()) return; // one search at a time - a second click while one's in flight is a no-op
+BackgroundJobStartOutcome startCameraDiscoveryAsync() {
+  if (!g_discoveryJob.tryStart()) return BackgroundJobStartOutcome::AlreadyRunning; // one search at a time - a second click while one's in flight is a no-op
 
   // No TLS/HTTPClient work here (unlike the per-camera and test-all
   // tasks), so a smaller stack than their 10240 is enough - but
@@ -940,7 +944,9 @@ void startCameraDiscoveryAsync() {
     g_discoveryJob.cancelStart();
     Serial.println("[webserver_cameras] ERROR: failed to start the camera discovery task (out of memory?) "
                     "- try again once memory frees up.");
+    return BackgroundJobStartOutcome::FailedToStart;
   }
+  return BackgroundJobStartOutcome::Started;
 }
 
 String renderCameraDiscoveryStatus() {
