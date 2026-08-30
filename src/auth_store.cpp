@@ -7,7 +7,16 @@ static const char* NVS_KEY_PASS  = "pass";
 
 DashboardAuth loadDashboardAuth() {
   Preferences prefs;
-  prefs.begin(NVS_NAMESPACE, true); // read-only
+  // Opened read-write, even though nothing here ever calls put*() - a
+  // read-only open against a namespace that's never been written (the
+  // common case here: no dashboard password ever set) fails with
+  // ESP_ERR_NVS_NOT_FOUND, which the framework itself logs as an
+  // "[E][Preferences.cpp] nvs_open failed: NOT_FOUND" error on EVERY
+  // single request (this is called from renderShell(), once per page
+  // load). A read-write open instead lazily creates the (still-empty)
+  // namespace the first time this runs, silencing that spam for good -
+  // getString's own defaults below still apply either way.
+  prefs.begin(NVS_NAMESPACE, false);
   DashboardAuth auth;
   auth.username = prefs.getString(NVS_KEY_USER, "");
   auth.password = prefs.getString(NVS_KEY_PASS, "");

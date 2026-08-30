@@ -677,7 +677,8 @@ static const char* TELEGRAM_STATE_KEY_LAST_UPDATE_ID = "lastUpdateId";
 
 static long loadLastUpdateId() {
   Preferences prefs;
-  prefs.begin(TELEGRAM_STATE_NAMESPACE, true); // read-only
+  // Read-write, not read-only - see auth_store.cpp's loadDashboardAuth for why.
+  prefs.begin(TELEGRAM_STATE_NAMESPACE, false);
   long id = prefs.getLong(TELEGRAM_STATE_KEY_LAST_UPDATE_ID, 0);
   prefs.end();
   return id;
@@ -695,7 +696,8 @@ static const char* ALERT_PREF_NAMESPACE = "camctl";
 
 bool loadAlertEnabledPref(size_t index) {
   Preferences prefs;
-  prefs.begin(ALERT_PREF_NAMESPACE, true); // read-only
+  // Read-write, not read-only - see auth_store.cpp's loadDashboardAuth for why.
+  prefs.begin(ALERT_PREF_NAMESPACE, false);
   char key[8];
   snprintf(key, sizeof(key), "c%u", (unsigned)index);
   bool enabled = prefs.getBool(key, true); // default ON if never set

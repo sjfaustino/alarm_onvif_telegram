@@ -38,7 +38,8 @@ static String chunkKey(uint16_t index) {
 
 std::vector<TelegramUser> loadTelegramUsers() {
   Preferences prefs;
-  prefs.begin(NVS_NAMESPACE, true); // read-only
+  // Read-write, not read-only - see auth_store.cpp's loadDashboardAuth for why.
+  prefs.begin(NVS_NAMESPACE, false);
   bool hasChunkedList = prefs.isKey(NVS_KEY_LIST_CHUNKS);
   bool hasLegacyList  = prefs.isKey(NVS_KEY_LIST_LEGACY);
   bool alreadyInitialized = hasChunkedList || hasLegacyList;

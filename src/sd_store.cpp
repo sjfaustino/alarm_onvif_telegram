@@ -26,7 +26,8 @@ static QuickSnapshotCheckResult g_lastBootCheckResult; // see lastBootCheckResul
 
 SdSettings loadSdSettings() {
   Preferences prefs;
-  prefs.begin(NVS_NAMESPACE, true); // read-only
+  // Read-write, not read-only - see auth_store.cpp's loadDashboardAuth for why.
+  prefs.begin(NVS_NAMESPACE, false);
   SdSettings settings;
   settings.enabled = prefs.getBool(NVS_KEY_ENABLED, false);
   settings.checkIntervalHours = prefs.getUInt(NVS_KEY_CHECK_HOURS, 0);

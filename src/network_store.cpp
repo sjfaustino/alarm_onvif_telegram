@@ -21,7 +21,8 @@ static const char* DEFAULT_NTP_SERVER = "pool.ntp.org";
 
 WifiCredentials loadWifiCredentials() {
   Preferences prefs;
-  prefs.begin(NVS_NAMESPACE, true); // read-only
+  // Read-write, not read-only - see auth_store.cpp's loadDashboardAuth for why.
+  prefs.begin(NVS_NAMESPACE, false);
   bool alreadyInitialized = prefs.isKey(NVS_KEY_SSID);
   WifiCredentials creds;
   if (alreadyInitialized) {

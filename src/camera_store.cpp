@@ -75,7 +75,9 @@ static String chunkKey(uint16_t index) {
 
 std::vector<CameraConfig> loadCameras() {
   Preferences prefs;
-  prefs.begin(NVS_NAMESPACE, true); // read-only
+  // Read-write, not read-only - see auth_store.cpp's loadDashboardAuth for
+  // why (avoids a spurious NOT_FOUND error log on a not-yet-written namespace).
+  prefs.begin(NVS_NAMESPACE, false);
   bool hasChunkedList = prefs.isKey(NVS_KEY_LIST_CHUNKS);
   bool hasLegacyList  = prefs.isKey(NVS_KEY_LIST_LEGACY);
   bool alreadyInitialized = hasChunkedList || hasLegacyList;
@@ -262,7 +264,8 @@ bool updateCamera(const String& originalName, const CameraConfig& cam) {
 
 size_t restoreMissingCamerasFromSeed() {
   Preferences prefs;
-  prefs.begin(NVS_NAMESPACE, true); // read-only
+  // Read-write, not read-only - see auth_store.cpp's loadDashboardAuth for why.
+  prefs.begin(NVS_NAMESPACE, false);
   bool alreadyRestored = prefs.getBool(NVS_KEY_SEED_RESTORED, false);
   prefs.end();
   if (alreadyRestored) return 0;
