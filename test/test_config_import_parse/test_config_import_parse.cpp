@@ -59,10 +59,12 @@ void test_full_export_all_sections_found_and_parsed(void) {
   TEST_ASSERT_EQUAL(2, (int)r.cameras.size());
   TEST_ASSERT_EQUAL_STRING("D01-Front", r.cameras[0].name.c_str());
   TEST_ASSERT_EQUAL_STRING("D02-Back", r.cameras[1].name.c_str());
+  TEST_ASSERT_FALSE(r.camerasDuplicateName);
 
   TEST_ASSERT_TRUE(r.usersFound);
   TEST_ASSERT_EQUAL(1, (int)r.users.size());
   TEST_ASSERT_EQUAL_STRING("Admin", r.users[0].name.c_str());
+  TEST_ASSERT_FALSE(r.usersDuplicateIdentity);
 
   TEST_ASSERT_TRUE(r.networkFound);
   TEST_ASSERT_EQUAL_STRING("HomeWiFi", r.network.primary.ssid.c_str());
@@ -160,6 +162,49 @@ void test_older_schema_version_still_parses(void) {
   TEST_ASSERT_EQUAL_STRING("D09", r.cameras[0].name.c_str());
 }
 
+// Two cameras sharing a name (case-insensitively) would otherwise silently
+// orphan one behind the other in every by-name lookup in the dashboard -
+// see ConfigImportResult::camerasDuplicateName's own comment. The whole
+// section is rejected, not just the second entry, so nothing ambiguous
+// ever reaches replaceAllCameras.
+void test_cameras_with_duplicate_name_are_rejected(void) {
+  String text = "### CAMERAS v" + String(CAMERA_SCHEMA_VERSION) + "\n" +
+                serializeCamera(sampleCamera("Front")) + "\n" +
+                serializeCamera(sampleCamera("FRONT")) + "\n";
+  ConfigImportResult r = parseConfigImport(text);
+  TEST_ASSERT_TRUE(r.camerasFound);
+  TEST_ASSERT_TRUE(r.camerasDuplicateName);
+  TEST_ASSERT_EQUAL(0, (int)r.cameras.size());
+}
+
+// Same idea for Telegram users sharing a name - the identity check also
+// covers a shared chat ID (below), the other collision addTelegramUser
+// already guards against one at a time.
+void test_users_with_duplicate_name_are_rejected(void) {
+  String text = "### TELEGRAM_USERS v" + String(TELEGRAM_USER_SCHEMA_VERSION) + "\n" +
+                serializeUser(sampleUser("Admin")) + "\n" +
+                serializeUser(sampleUser("admin")) + "\n";
+  ConfigImportResult r = parseConfigImport(text);
+  TEST_ASSERT_TRUE(r.usersFound);
+  TEST_ASSERT_TRUE(r.usersDuplicateIdentity);
+  TEST_ASSERT_EQUAL(0, (int)r.users.size());
+}
+
+// Two users with DIFFERENT names but the same chat ID - the dangerous case
+// telegram_users.cpp's addTelegramUser comment describes (double-sent
+// alerts, non-deterministic command permission resolution).
+void test_users_with_duplicate_chat_id_are_rejected(void) {
+  TelegramUser a = sampleUser("Alice");
+  TelegramUser b = sampleUser("Bob");
+  b.chatId = a.chatId; // same chat ID, different name
+  String text = "### TELEGRAM_USERS v" + String(TELEGRAM_USER_SCHEMA_VERSION) + "\n" +
+                serializeUser(a) + "\n" + serializeUser(b) + "\n";
+  ConfigImportResult r = parseConfigImport(text);
+  TEST_ASSERT_TRUE(r.usersFound);
+  TEST_ASSERT_TRUE(r.usersDuplicateIdentity);
+  TEST_ASSERT_EQUAL(0, (int)r.users.size());
+}
+
 // CRLF line endings (a file re-saved by a Windows text editor) must not
 // break marker detection or record parsing.
 void test_crlf_line_endings_tolerated(void) {
@@ -179,6 +224,9 @@ int main(int argc, char** argv) {
   RUN_TEST(test_empty_input_finds_nothing);
   RUN_TEST(test_cameras_marker_with_no_rows_is_found_but_empty);
   RUN_TEST(test_one_malformed_camera_row_is_skipped_others_still_parsed);
+  RUN_TEST(test_cameras_with_duplicate_name_are_rejected);
+  RUN_TEST(test_users_with_duplicate_name_are_rejected);
+  RUN_TEST(test_users_with_duplicate_chat_id_are_rejected);
   RUN_TEST(test_malformed_network_line_is_not_found);
   RUN_TEST(test_malformed_sdsettings_line_is_not_found);
   RUN_TEST(test_older_schema_version_still_parses);

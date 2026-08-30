@@ -32,6 +32,14 @@ struct ConfigImportApplyResult {
   bool networkImported = false;
   bool sdSettingsImported = false;
   bool anyDomainFound = false; // false means the file had no recognizable machine block at all
+  // True if the Cameras/Telegram Users section was present but REJECTED
+  // outright (config_import_parse.h's ConfigImportResult::
+  // camerasDuplicateName/usersDuplicateIdentity - two entries in the file
+  // shared a name, or for users a chat ID) rather than merely absent -
+  // distinct from the generic "not found in this file" case so the banner
+  // can say specifically why nothing was imported for that domain.
+  bool camerasRejectedDuplicate = false;
+  bool usersRejectedDuplicate = false;
   // Whether the pre-import snapshot (see applyConfigImport's own comment)
   // was actually persisted - false means an NVS write error, not "nothing
   // to back up"; the banner needs to warn there's nothing to undo with if

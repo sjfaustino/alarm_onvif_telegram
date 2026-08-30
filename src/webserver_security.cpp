@@ -175,13 +175,20 @@ ConfigImportApplyResult applyConfigImport(const String& text) {
   }
 
   if (parsed.camerasFound) {
-    if (replaceAllCameras(parsed.cameras)) {
+    if (parsed.camerasDuplicateName) {
+      // See ConfigImportResult::camerasDuplicateName's own comment
+      // (config_import_parse.h) - parsed.cameras is already empty here,
+      // nothing safe to hand to replaceAllCameras.
+      result.camerasRejectedDuplicate = true;
+    } else if (replaceAllCameras(parsed.cameras)) {
       result.camerasImported = true;
       result.cameraCount = parsed.cameras.size();
     }
   }
   if (parsed.usersFound) {
-    if (replaceAllTelegramUsers(parsed.users)) {
+    if (parsed.usersDuplicateIdentity) {
+      result.usersRejectedDuplicate = true;
+    } else if (replaceAllTelegramUsers(parsed.users)) {
       result.usersImported = true;
       result.userCount = parsed.users.size();
     }
@@ -210,14 +217,24 @@ String renderImportResultBanner(const ConfigImportApplyResult& r) {
   if (r.sdSettingsImported) addImported("SD settings");
 
   auto addSkipped = [&](const String& s) { if (skipped.length() > 0) skipped += ", "; skipped += s; };
-  if (!r.camerasImported) addSkipped("Cameras");
-  if (!r.usersImported) addSkipped("Telegram Users");
+  if (!r.camerasImported && !r.camerasRejectedDuplicate) addSkipped("Cameras");
+  if (!r.usersImported && !r.usersRejectedDuplicate) addSkipped("Telegram Users");
   if (!r.networkImported) addSkipped("Network");
   if (!r.sdSettingsImported) addSkipped("SD Settings");
 
   String banner = imported.length() > 0 ? ("Imported " + imported + ".") : "Nothing was imported.";
   if (skipped.length() > 0) {
     banner += " " + skipped + " not found in this file (or failed to save) - left unchanged.";
+  }
+  if (r.camerasRejectedDuplicate) {
+    banner += " Cameras section REJECTED - two or more cameras in the file share the same name, "
+              "which isn't allowed (every camera name must be unique). Fix the file and re-import; "
+              "existing cameras were left unchanged.";
+  }
+  if (r.usersRejectedDuplicate) {
+    banner += " Telegram Users section REJECTED - two or more users in the file share a name or a "
+              "chat ID, which isn't allowed. Fix the file and re-import; existing Telegram users "
+              "were left unchanged.";
   }
   if (r.networkImported) {
     // Stronger wording than the plain camera-password note below -

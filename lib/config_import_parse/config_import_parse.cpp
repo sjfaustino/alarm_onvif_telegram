@@ -1,6 +1,36 @@
 #include "config_import_parse.h"
+#include "telegram_parse.h" // chatIdMatches - see usersHaveDuplicateIdentity below
 #include <cctype>
 #include <cstring>
+
+// See ConfigImportResult::camerasDuplicateName's own comment (config_import_parse.h)
+// for why this check exists at all - O(n^2) is fine here, a config import's
+// camera count is nowhere near large enough for that to matter.
+static bool camerasHaveDuplicateName(const std::vector<CameraConfig>& cameras) {
+  for (size_t i = 0; i < cameras.size(); i++) {
+    for (size_t j = i + 1; j < cameras.size(); j++) {
+      if (cameras[i].name.equalsIgnoreCase(cameras[j].name)) return true;
+    }
+  }
+  return false;
+}
+
+// See ConfigImportResult::usersDuplicateIdentity's own comment. Chat ID
+// comparison reuses chatIdMatches (telegram_parse.h) - the same numeric
+// comparison telegram_users.cpp's addTelegramUser/updateTelegramUser use -
+// so this can't be fooled by two chat IDs that are textually different but
+// numerically identical (e.g. a stray leading zero) the way a raw String
+// == compare could be.
+static bool usersHaveDuplicateIdentity(const std::vector<TelegramUser>& users) {
+  for (size_t i = 0; i < users.size(); i++) {
+    int64_t chatIdI = strtoll(users[i].chatId.c_str(), nullptr, 10);
+    for (size_t j = i + 1; j < users.size(); j++) {
+      if (users[i].name.equalsIgnoreCase(users[j].name)) return true;
+      if (chatIdMatches(users[j].chatId, chatIdI)) return true;
+    }
+  }
+  return false;
+}
 
 // Same separator config_export's SDSETTINGS line uses (webserver_security.cpp) -
 // only 2 fields, no realistic future reordering risk, so this stays a tiny
@@ -87,12 +117,20 @@ ConfigImportResult parseConfigImport(const String& text) {
         CameraConfig c = deserializeCamera(l, currentVersion);
         if (c.name.length() > 0) result.cameras.push_back(c);
       }
+      if (camerasHaveDuplicateName(result.cameras)) {
+        result.camerasDuplicateName = true;
+        result.cameras.clear();
+      }
     } else if (currentSection == "TELEGRAM_USERS") {
       result.usersFound = true;
       for (auto& l : sectionLines) {
         if (l.length() == 0) continue;
         TelegramUser u = deserializeUser(l, currentVersion);
         if (u.name.length() > 0) result.users.push_back(u);
+      }
+      if (usersHaveDuplicateIdentity(result.users)) {
+        result.usersDuplicateIdentity = true;
+        result.users.clear();
       }
     } else if (currentSection == "NETWORK") {
       for (auto& l : sectionLines) {
