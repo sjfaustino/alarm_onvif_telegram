@@ -10,11 +10,18 @@
 
 String renderNetworkPanel(const String& prefillSsid) {
   WifiCredentials creds = loadWifiCredentials();
-  if (prefillSsid.length() > 0) creds.primary.ssid = prefillSsid;
 
+  // Status below reflects the ACTUAL stored/connected primary, never the
+  // prefill - a scanned-network "Add" click used to overwrite
+  // creds.primary.ssid before this check ran, so the Primary status box
+  // would silently show "Not currently connected" for a network you were
+  // only considering adding, while your real primary's status vanished
+  // from the page. formPrimarySsid is prefill-aware and used ONLY to
+  // populate the edit form below.
   bool primaryConnected = WiFi.status() == WL_CONNECTED && WiFi.SSID() == creds.primary.ssid;
   bool backupConnected = WiFi.status() == WL_CONNECTED && creds.backup.ssid.length() > 0 &&
                           WiFi.SSID() == creds.backup.ssid;
+  String formPrimarySsid = prefillSsid.length() > 0 ? prefillSsid : creds.primary.ssid;
 
   String html = "<h1>Network</h1>";
 
@@ -51,7 +58,7 @@ String renderNetworkPanel(const String& prefillSsid) {
   html += renderWifiScanStatus();
 
   html += "<fieldset><legend>Primary WiFi</legend><form method=\"POST\" action=\"/network/save\">";
-  html += "<label>SSID<input type=\"text\" name=\"ssid\" value=\"" + htmlEscape(creds.primary.ssid) + "\" required></label>";
+  html += "<label>SSID<input type=\"text\" name=\"ssid\" value=\"" + htmlEscape(formPrimarySsid) + "\" required></label>";
   html += "<label>Password (leave blank to keep the current password)"
           "<input type=\"password\" name=\"password\" placeholder=\"(unchanged)\"></label>";
 
@@ -141,9 +148,18 @@ void handleSaveNetwork(PsychicRequest* request, String& banner) {
 
   String ssid = request->getParam("ssid", "");
   ssid.trim();
-  if (ssid.length() > 0) creds.primary.ssid = ssid;
-
   String password = request->getParam("password", "");
+  // A changed SSID with a blank password would otherwise silently keep the
+  // OLD network's password and pair it with the NEW network - guaranteed
+  // to fail to connect, and for the board's own WiFi that means it never
+  // comes back without a USB cable. Require the password whenever the SSID
+  // itself actually changes; unchanged SSID still keeps "blank = unchanged".
+  if (ssid.length() > 0 && ssid != creds.primary.ssid && password.length() == 0) {
+    banner = "Primary SSID changed - its password is required too (an old password would otherwise be "
+             "paired with the new network). Not saved.";
+    return;
+  }
+  if (ssid.length() > 0) creds.primary.ssid = ssid;
   if (password.length() > 0) creds.primary.password = password;
 
   // Backup SSID isn't "blank keeps current" like the passwords - it's the
@@ -154,8 +170,14 @@ void handleSaveNetwork(PsychicRequest* request, String& banner) {
     creds.backup.ssid = "";
     creds.backup.password = "";
   } else {
-    creds.backup.ssid = backupSsid;
     String backupPassword = request->getParam("backupPassword", "");
+    // Same trap as primary above, same fix.
+    if (backupSsid != creds.backup.ssid && backupPassword.length() == 0) {
+      banner = "Backup SSID changed - its password is required too (an old password would otherwise be "
+               "paired with the new network). Not saved.";
+      return;
+    }
+    creds.backup.ssid = backupSsid;
     if (backupPassword.length() > 0) creds.backup.password = backupPassword;
   }
 

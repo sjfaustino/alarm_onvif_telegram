@@ -192,6 +192,7 @@ static String renderShell(Tab active, const String& banner, const String& conten
   html += ".banner{background:#fffae0;border:1px solid #e0d080;padding:8px 12px;margin-bottom:16px;}";
   html += ".banner-warn{background:#fde2e1;border:1px solid #e08080;padding:8px 12px;margin-bottom:16px;}";
   html += ".hint{color:#666;font-size:13px;}";
+  html += ".flipbook-img{display:none;max-width:160px;max-height:120px;vertical-align:middle;}";
   html += ".sidebar-parent{cursor:pointer;}";
   html += ".sidebar-submenu a{padding-left:36px;font-size:13px;}";
   html += "</style></head><body>";

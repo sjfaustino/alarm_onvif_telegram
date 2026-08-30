@@ -206,11 +206,14 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
       // store is active (SD or the PSRAM ring) - see snapshot_history.h.
       size_t historyCount = cameraSnapshotCount(c, st);
       if (historyCount > 0) {
-        // Newest first (age 0). One shared render-time value cache-busts
-        // every thumbnail on this page load - simpler than a per-entry
-        // key, and just as effective: a full page reload always gets a
-        // fresh renderMs, so the browser never shows a stale image across
-        // page loads, which is all this needs to guarantee.
+        // Newest first (age 0). One value shared by this camera's own
+        // thumbnails cache-busts them - simpler than a per-entry key, and
+        // just as effective: a full page reload always gets a fresh
+        // renderMs, so the browser never shows a stale image across page
+        // loads, which is all this needs to guarantee. (Different cameras
+        // on the same page get different renderMs values too, since this
+        // is recomputed per row - harmless, just more cache-busting than
+        // strictly required.)
         unsigned long renderMs = millis();
         previewCell = "";
         // Oldest-to-newest, for playFlipbook below - age counts backward
@@ -235,8 +238,7 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
         if (historyCount > 1) {
           previewCell += "<br><button type=\"button\" class=\"hint\" "
                          "onclick=\"playFlipbook(this,'" + flipbookUrls + "')\">\xE2\x96\xB6 Play</button> "
-                         "<img class=\"flipbook-img\" style=\"display:none;max-width:160px;max-height:120px;"
-                         "vertical-align:middle;\">";
+                         "<img class=\"flipbook-img\">"; // sized/hidden via the shell's .flipbook-img rule
         }
       }
     } else if (!c.enabled) {
@@ -726,9 +728,13 @@ void startCameraDiscoveryAsync() {
   if (!g_discoveryJob.tryStart()) return; // one search at a time - a second click while one's in flight is a no-op
 
   // No TLS/HTTPClient work here (unlike the per-camera and test-all
-  // tasks), just UDP send/receive and light string parsing - a smaller
-  // stack than their 10240 is enough.
-  xTaskCreate(cameraDiscoveryTask, "camDiscover", 4096, nullptr, tskIDLE_PRIORITY + 1, nullptr);
+  // tasks), so a smaller stack than their 10240 is enough - but
+  // runCameraDiscovery's own on-stack `char buf[2048]` alone is half of a
+  // 4096 stack, leaving too little headroom for the String churn in
+  // buildProbeMessage/parseProbeMatch plus WiFiUDP's own call frames.
+  // 6144 keeps the "lighter than the TLS tasks" sizing while actually
+  // covering that buffer.
+  xTaskCreate(cameraDiscoveryTask, "camDiscover", 6144, nullptr, tskIDLE_PRIORITY + 1, nullptr);
 }
 
 String renderCameraDiscoveryStatus() {
