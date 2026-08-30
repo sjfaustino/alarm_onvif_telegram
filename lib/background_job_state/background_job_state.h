@@ -39,3 +39,17 @@ BackgroundJobState markBackgroundJobStarted(BackgroundJobState state);
 
 // Transitions state after the background task completes.
 BackgroundJobState markBackgroundJobFinished(BackgroundJobState state);
+
+// Transitions state back after a start request markBackgroundJobStarted
+// already committed to, but the caller then failed to actually launch the
+// task (e.g. xTaskCreate returned pdFAIL, out of memory) - without this,
+// inProgress would stay true forever, since nothing will ever call
+// markBackgroundJobFinished for a task that never started, permanently
+// wedging every future start request as a no-op until reboot. Real
+// incident class this guards against: the one moment memory is tight
+// enough for task creation to fail is often the same moment someone's
+// trying to use a diagnostic feature (Test Connection, a storage check)
+// to find out why. Deliberately does NOT touch hasResult - a failed START
+// isn't a completed run, so any earlier real result stays visible until
+// the next run actually finishes.
+BackgroundJobState markBackgroundJobStartFailed(BackgroundJobState state);

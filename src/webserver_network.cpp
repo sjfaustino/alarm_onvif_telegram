@@ -303,7 +303,15 @@ static void wifiScanTask(void*) {
 
 void startWifiScanAsync() {
   if (!g_wifiScanJob.tryStart()) return; // one scan at a time - a second click while one's in flight is a no-op
-  xTaskCreate(wifiScanTask, "wifiScan", 4096, nullptr, tskIDLE_PRIORITY + 1, nullptr);
+  BaseType_t created = xTaskCreate(wifiScanTask, "wifiScan", 4096, nullptr, tskIDLE_PRIORITY + 1, nullptr);
+  if (created != pdPASS) {
+    // Without this, a task creation failure (out of memory) would leave
+    // g_wifiScanJob permanently stuck "in progress" - see
+    // BackgroundJob<T>::cancelStart's own comment (background_job.h).
+    g_wifiScanJob.cancelStart();
+    Serial.println("[webserver_network] ERROR: failed to start the WiFi scan task (out of memory?) - "
+                    "try again once memory frees up.");
+  }
 }
 
 String renderWifiScanStatus() {

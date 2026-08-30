@@ -699,7 +699,18 @@ void startTestConnectionAsync(const CameraConfig& cfg) {
   // Same stack size as a real per-camera monitoring task (camera_tasks.h) -
   // this does the identical TLS/HTTPClient/SOAP-string-building work,
   // just for one camera's Test Connection sequence instead of forever.
-  xTaskCreate(testConnectionTask, "testConn", 10240, cfgCopy, tskIDLE_PRIORITY + 1, nullptr);
+  BaseType_t created = xTaskCreate(testConnectionTask, "testConn", 10240, cfgCopy, tskIDLE_PRIORITY + 1, nullptr);
+  if (created != pdPASS) {
+    // tryStart() already committed to inProgress=true above - without
+    // this, a task creation failure (out of memory) would leave it stuck
+    // that way forever, since nothing will ever call g_testConnectionJob's
+    // finish() for a task that never launched. See BackgroundJob<T>::
+    // cancelStart's own comment (background_job.h).
+    delete cfgCopy; // never handed to a task, so nothing else will free it
+    g_testConnectionJob.cancelStart();
+    Serial.println("[webserver_cameras] ERROR: failed to start the Test Connection task (out of memory?) "
+                    "- try again once memory frees up.");
+  }
 }
 
 String renderTestConnectionStatus() {
@@ -791,7 +802,15 @@ void startTestAllCamerasAsync() {
   // Same stack size as a real per-camera monitoring task (camera_tasks.h) -
   // this does the identical TLS/HTTPClient/SOAP-string-building work per
   // camera, just for several cameras in a row instead of one forever.
-  xTaskCreate(testAllCamerasTask, "testAllCams", 10240, nullptr, tskIDLE_PRIORITY + 1, nullptr);
+  BaseType_t created = xTaskCreate(testAllCamerasTask, "testAllCams", 10240, nullptr, tskIDLE_PRIORITY + 1, nullptr);
+  if (created != pdPASS) {
+    // See startTestConnectionAsync's own comment above - without this, a
+    // task creation failure here would leave g_testAllJob permanently
+    // stuck "in progress".
+    g_testAllJob.cancelStart();
+    Serial.println("[webserver_cameras] ERROR: failed to start the Test All Cameras task (out of memory?) "
+                    "- try again once memory frees up.");
+  }
 }
 
 String renderTestAllStatus() {
@@ -913,7 +932,15 @@ void startCameraDiscoveryAsync() {
   // buildProbeMessage/parseProbeMatch plus WiFiUDP's own call frames.
   // 6144 keeps the "lighter than the TLS tasks" sizing while actually
   // covering that buffer.
-  xTaskCreate(cameraDiscoveryTask, "camDiscover", 6144, nullptr, tskIDLE_PRIORITY + 1, nullptr);
+  BaseType_t created = xTaskCreate(cameraDiscoveryTask, "camDiscover", 6144, nullptr, tskIDLE_PRIORITY + 1, nullptr);
+  if (created != pdPASS) {
+    // See startTestConnectionAsync's own comment above - without this, a
+    // task creation failure here would leave g_discoveryJob permanently
+    // stuck "in progress".
+    g_discoveryJob.cancelStart();
+    Serial.println("[webserver_cameras] ERROR: failed to start the camera discovery task (out of memory?) "
+                    "- try again once memory frees up.");
+  }
 }
 
 String renderCameraDiscoveryStatus() {

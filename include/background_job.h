@@ -31,6 +31,18 @@ class BackgroundJob {
     return started;
   }
 
+  // Call this if tryStart() returned true but the caller then failed to
+  // actually launch the task (e.g. xTaskCreate returned pdFAIL) - rolls
+  // inProgress back to false via markBackgroundJobStartFailed
+  // (background_job_state.h) so the NEXT tryStart() isn't permanently
+  // wedged waiting for a finish() that will never come. Does not touch
+  // hasResult/result - see that function's own comment.
+  void cancelStart() {
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    state_ = markBackgroundJobStartFailed(state_);
+    xSemaphoreGive(mutex_);
+  }
+
   // Called once, by the background task itself, when the work is done.
   void finish(T result) {
     xSemaphoreTake(mutex_, portMAX_DELAY);

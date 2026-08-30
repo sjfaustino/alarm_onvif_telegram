@@ -14,3 +14,8 @@ BackgroundJobState markBackgroundJobFinished(BackgroundJobState state) {
   state.hasResult = true;
   return state;
 }
+
+BackgroundJobState markBackgroundJobStartFailed(BackgroundJobState state) {
+  state.inProgress = false;
+  return state;
+}

@@ -96,7 +96,15 @@ void startStorageCheckAsync() {
   // building - a smaller stack than the TLS-heavy tasks (camera_tasks.h's
   // 10240) is enough, same reasoning as wifiScanTask/cameraDiscoveryTask
   // (webserver_network.cpp/webserver_cameras.cpp).
-  xTaskCreate(storageCheckTask, "sdCheck", 4096, nullptr, tskIDLE_PRIORITY + 1, nullptr);
+  BaseType_t created = xTaskCreate(storageCheckTask, "sdCheck", 4096, nullptr, tskIDLE_PRIORITY + 1, nullptr);
+  if (created != pdPASS) {
+    // Without this, a task creation failure (out of memory) would leave
+    // g_storageCheckJob permanently stuck "in progress" - see
+    // BackgroundJob<T>::cancelStart's own comment (background_job.h).
+    g_storageCheckJob.cancelStart();
+    Serial.println("[webserver_storage] ERROR: failed to start the storage check task (out of memory?) "
+                    "- try again once memory frees up.");
+  }
 }
 
 String renderStorageCheckStatus() {
@@ -131,7 +139,15 @@ void startEraseAllAsync() {
 
   // Same sizing reasoning as startStorageCheckAsync above - SD file I/O
   // only, no TLS/HTTPClient work.
-  xTaskCreate(eraseAllTask, "sdErase", 4096, nullptr, tskIDLE_PRIORITY + 1, nullptr);
+  BaseType_t created = xTaskCreate(eraseAllTask, "sdErase", 4096, nullptr, tskIDLE_PRIORITY + 1, nullptr);
+  if (created != pdPASS) {
+    // Without this, a task creation failure (out of memory) would leave
+    // g_eraseAllJob permanently stuck "in progress" - see
+    // BackgroundJob<T>::cancelStart's own comment (background_job.h).
+    g_eraseAllJob.cancelStart();
+    Serial.println("[webserver_storage] ERROR: failed to start the erase-all task (out of memory?) "
+                    "- try again once memory frees up.");
+  }
 }
 
 String renderEraseAllStatus() {

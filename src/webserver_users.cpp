@@ -150,7 +150,15 @@ void startTestMessageAsync() {
   // Same stack size as a real per-camera monitoring task (camera_tasks.h) -
   // this does the same WiFiClientSecure/HTTPClient TLS work a single SOAP
   // call would, just to api.telegram.org instead of a camera.
-  xTaskCreate(sendTestMessageTask, "testMsg", 10240, nullptr, tskIDLE_PRIORITY + 1, nullptr);
+  BaseType_t created = xTaskCreate(sendTestMessageTask, "testMsg", 10240, nullptr, tskIDLE_PRIORITY + 1, nullptr);
+  if (created != pdPASS) {
+    // Without this, a task creation failure (out of memory) would leave
+    // g_testMessageJob permanently stuck "in progress" - see
+    // BackgroundJob<T>::cancelStart's own comment (background_job.h).
+    g_testMessageJob.cancelStart();
+    Serial.println("[webserver_users] ERROR: failed to start the test message task (out of memory?) - "
+                    "try again once memory frees up.");
+  }
 }
 
 String renderTestMessageStatus() {
