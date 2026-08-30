@@ -16,10 +16,13 @@ String formatUptime(unsigned long ms);
 // millis() at the call site.
 String formatElapsedSince(unsigned long eventMs, unsigned long nowMs);
 
-// Escapes &, <, >, " for safe inclusion in HTML text/attribute content.
-// Does not escape ' - every attribute this project emits is double-quoted,
-// so that's intentionally left alone; start escaping it too if that ever
-// changes.
+// Escapes &, <, >, ", and ' (as &#39;) for safe inclusion in HTML text/
+// attribute content AND inside a single-quoted JS string embedded in an
+// attribute (e.g. onsubmit="return confirm('...')") - see the .cpp's own
+// comment on the ' case for the real reflected-XSS hole an unescaped
+// single quote opened there. Every attribute this project emits is
+// double-quoted, so ' isn't load-bearing for THAT alone - it's escaped
+// because of the nested single-quoted-JS-string case, not in spite of it.
 String htmlEscape(const String& s);
 
 // Percent-encodes anything outside the URL-safe unreserved set (RFC 3986:

@@ -3,13 +3,13 @@
 #include <vector>
 
 // Pure fixed-capacity ring buffer of "what happened recently" - split out
-// of the thread-safe global wrapper (include/event_log.h, src/event_log.cpp)
-// so the actual eviction logic is unit-testable without FreeRTOS. Not a
-// persistent log: NVS wear/size would make writing one entry per motion
-// alert/on-off/reboot impractical, so this is purely in-RAM and resets on
-// reboot - "what's happened since the board last came up," not a permanent
-// history. See src/event_log.cpp for the global logEvent()/recentEvents()
-// every other file actually calls.
+// of the thread-safe global wrapper (include/event_log_store.h,
+// src/event_log_store.cpp) so the actual eviction logic is unit-testable
+// without FreeRTOS. Not a persistent log: NVS wear/size would make writing
+// one entry per motion alert/on-off/reboot impractical, so this is purely
+// in-RAM and resets on reboot - "what's happened since the board last came
+// up," not a permanent history. See src/event_log_store.cpp for the global
+// logEvent()/recentEvents() every other file actually calls.
 
 struct EventLogEntry {
   unsigned long ms; // millis() timestamp when logged
