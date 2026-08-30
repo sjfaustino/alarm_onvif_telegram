@@ -35,6 +35,10 @@ static unsigned long lastNvsCheckMs = 0;
 // check" pattern as CameraState::isOffline (telegram.cpp's
 // checkCameraOnlineStatus).
 static bool g_nvsUsageAlerted = false;
+static unsigned long lastWifiRssiCheckMs = 0;
+// Same alert-once-per-transition/re-arm shape as g_nvsUsageAlerted above,
+// for checkWifiSignal() instead of checkNvsUsage().
+static bool g_wifiRssiWeakAlerted = false;
 
 // True once startMonitoring() has actually run - see its comment for why
 // this can happen later than setup() if WiFi wasn't up yet at boot.
@@ -268,6 +272,10 @@ static void sendHeartbeat() {
     unsigned pct = (unsigned)((uint64_t)nvsStats.used_entries * 100 / nvsStats.total_entries);
     msg += "NVS usage: " + String(pct) + "%\n";
   }
+  // Same reasoning as NVS usage above - visible here too, not just
+  // checkWifiSignal()'s own proactive alert, so a slow drift toward
+  // WIFI_RSSI_WARN_DBM is visible before it's actually crossed.
+  msg += "WiFi signal: " + String(WiFi.RSSI()) + " dBm\n";
   // subscriptionActive/isOffline are written by each camera's own task;
   // this runs on loop()'s task, so reading them needs CameraStateLock -
   // see CameraState::stateMutex.
@@ -314,6 +322,29 @@ static void checkNvsUsage() {
   } else {
     Serial.printf("NVS usage back under %u%% (%u%%).\n", NVS_USAGE_WARN_PERCENT, pct);
     logEvent("NVS usage back under " + String((unsigned)NVS_USAGE_WARN_PERCENT) + "% (" + String(pct) + "%)");
+  }
+}
+
+// Same shape as checkNvsUsage above (alert once on crossing the threshold,
+// re-arm on recovery) - see WIFI_RSSI_WARN_DBM's own comment (config.h)
+// for why this is worth watching. Only meaningful while actually
+// connected - called from loop() gated on WiFi.status()==WL_CONNECTED,
+// same as every other WiFi-dependent periodic check there.
+static void checkWifiSignal() {
+  int32_t rssi = WiFi.RSSI();
+  bool weakNow = rssi <= WIFI_RSSI_WARN_DBM;
+  if (weakNow == g_wifiRssiWeakAlerted) return; // no state change since the last check
+
+  g_wifiRssiWeakAlerted = weakNow;
+  if (weakNow) {
+    Serial.printf("WARNING: WiFi signal weak (%d dBm, warn threshold %d dBm).\n", (int)rssi, WIFI_RSSI_WARN_DBM);
+    logEvent("WiFi signal weak (" + String(rssi) + " dBm)");
+    sendTelegramMessage("\xE2\x9A\xA0\xEF\xB8\x8F WiFi signal is weak (" + String(rssi) +
+                         " dBm) - still connected, but consider the board/AP's placement or channel "
+                         "before it gets bad enough to actually drop.");
+  } else {
+    Serial.printf("WiFi signal back above %d dBm (%d dBm).\n", WIFI_RSSI_WARN_DBM, (int)rssi);
+    logEvent("WiFi signal back above " + String(WIFI_RSSI_WARN_DBM) + " dBm (" + String(rssi) + " dBm)");
   }
 }
 
@@ -565,6 +596,11 @@ void loop() {
   if (WiFi.status() == WL_CONNECTED && millis() - lastNvsCheckMs >= NVS_USAGE_CHECK_INTERVAL_MS) {
     lastNvsCheckMs = millis();
     checkNvsUsage();
+  }
+
+  if (WiFi.status() == WL_CONNECTED && millis() - lastWifiRssiCheckMs >= WIFI_RSSI_CHECK_INTERVAL_MS) {
+    lastWifiRssiCheckMs = millis();
+    checkWifiSignal();
   }
 
   if (WiFi.status() == WL_CONNECTED && millis() - lastCommandPollMs >= TELEGRAM_COMMAND_POLL_MS) {

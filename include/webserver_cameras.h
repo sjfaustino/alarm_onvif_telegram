@@ -53,6 +53,16 @@ bool saveCameraSubmission(CameraConfig cam, const String& originalName, String& 
 bool stopLiveCameraIfRunning(const String& name, std::vector<CameraConfig>* liveCameras,
                               std::vector<CameraState>* liveStates);
 
+// Reads the same quietHoursEnabled/quietStart/quietEnd fields the
+// per-camera Add/Edit form uses and overwrites EVERY camera's quiet hours
+// with them at once (wholesale, via replaceAllCameras - see the .cpp for
+// why this doesn't skip disabled cameras). Live-reloads every already-
+// running enabled camera the same way a single-camera edit would; returns
+// a result string for the caller to show as a banner. Call this from the
+// /cameras/quiet-hours-all route handler.
+String applyQuietHoursToAllCameras(PsychicRequest* request, std::vector<CameraConfig>* liveCameras,
+                                    std::vector<CameraState>* liveStates);
+
 // Runs a live GetCapabilities -> GetServiceCapabilities/GetEventProperties
 // -> GetProfiles/GetSnapshotUri -> CreatePullPointSubscription sequence
 // against cfg without touching NVS - see the .cpp for the full rationale.

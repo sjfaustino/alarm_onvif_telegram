@@ -1,5 +1,6 @@
 #pragma once
 #include <Arduino.h>
+#include <vector> // explicit, not chained - see camera_serialize.h's comment; recentUnknownChats' return type
 #include "config.h"
 #include "camera.h"
 
@@ -62,6 +63,25 @@ bool telegramCAConfigured();
 // Reads camera `index`'s persisted alerts-enabled flag from NVS (default
 // true). Call once per camera at boot, before spawning its task.
 bool loadAlertEnabledPref(size_t index);
+
+// One chat ID that recently messaged the bot without matching any
+// configured TelegramUser - see recentUnknownChats' own comment.
+struct UnknownChatSighting {
+  int64_t chatId = 0;
+  unsigned long lastSeenMs = 0;
+};
+
+// How many distinct chat IDs recentUnknownChats() tracks - shared with the
+// Users page's own hint text, so both agree on the number.
+static const size_t UNKNOWN_CHAT_TRACK_MAX = 5;
+
+// Up to UNKNOWN_CHAT_TRACK_MAX most recently seen chat IDs that messaged
+// the bot without matching any configured TelegramUser,
+// newest first - a convenience for the Users page so adding a new user is
+// copy-paste from here instead of a side trip to @userinfobot or the raw
+// getUpdates URL. RAM-only, doesn't grow, and isn't a security log - see
+// telegram.cpp's own comment on the tracking table itself.
+std::vector<UnknownChatSighting> recentUnknownChats();
 
 // Turns every currently-enabled camera's alerts on/off at once, with an
 // optional timer - the shared implementation behind /on all, /off all

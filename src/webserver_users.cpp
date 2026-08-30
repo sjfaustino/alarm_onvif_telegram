@@ -2,6 +2,7 @@
 #include "camera_store.h"
 #include "format_utils.h"
 #include "webserver_html.h"
+#include "telegram.h" // recentUnknownChats
 
 // Shared by "Add Telegram user" (v = a fresh TelegramUser with allCameras
 // forced true, a friendlier default than the struct's own false), "Edit
@@ -85,6 +86,21 @@ String renderUsersPanel(const TelegramUser* prefill, bool isEdit) {
           "\"Receive heartbeat and boot-online messages\" checked - the same audience a real boot "
           "notice/heartbeat/offline alert would reach. Confirms the bot token and TELEGRAM_ROOT_CA "
           "actually work before finding out the hard way when a real alert silently fails.</p>";
+
+  std::vector<UnknownChatSighting> unknownChats = recentUnknownChats();
+  if (!unknownChats.empty()) {
+    html += "<p>Recently messaged this bot, but not yet a configured user:</p>";
+    std::vector<DiscoveryResultRow> rows;
+    for (auto& sighting : unknownChats) {
+      String chatIdStr = String((long long)sighting.chatId);
+      rows.push_back({{chatIdStr, formatElapsedSince(sighting.lastSeenMs, millis())},
+                       {{"prefillChatId", chatIdStr}}});
+    }
+    html += renderDiscoveryResultsTable({"Chat ID", "Last seen"}, "/users", rows);
+    html += "<p class=\"hint\">Not a security log - just the last " + String((unsigned)UNKNOWN_CHAT_TRACK_MAX) +
+            " distinct chat IDs that messaged the bot without matching a user below, for copy-paste "
+            "convenience instead of a side trip to @userinfobot. Cleared on reboot.</p>";
+  }
 
   TelegramUser blankAdd;
   blankAdd.allCameras = true; // friendlier default for a brand-new user than the struct's own false

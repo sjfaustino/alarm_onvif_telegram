@@ -330,6 +330,22 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
             "keeps its own subscription and detection running either way, only the Telegram send is "
             "muted. A per-camera edit or timer below still overrides whatever this last set.</p>";
     html += "</fieldset>";
+
+    html += "<fieldset><legend>Set quiet hours for all cameras</legend>";
+    html += "<form method=\"POST\" action=\"/cameras/quiet-hours-all\" "
+            "onsubmit=\"return confirm('Overwrite every camera\\'s individual quiet hours setting "
+            "with this one? There is no way to see what each camera currently has before this "
+            "replaces it.');\">";
+    html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"quietHoursEnabled\"> Quiet hours "
+            "(mutes motion alerts only - tamper/offline still alert)</label>";
+    html += "<label>Start<input type=\"time\" name=\"quietStart\" value=\"00:00\"></label>";
+    html += "<label>End<input type=\"time\" name=\"quietEnd\" value=\"00:00\"></label>";
+    html += "<p><button type=\"submit\">Apply to all cameras</button></p></form>";
+    html += "<p class=\"hint\">Overwrites every camera's quiet hours (both enabled and disabled ones) "
+            "with this one setting, all at once - there's no per-camera preview here, so check each "
+            "camera's own Edit form afterward if you need to confirm what landed. Leaving start and "
+            "end the same (e.g. both 00:00) means no active window, same as the per-camera form.</p>";
+    html += "</fieldset>";
   }
 
   html += "<form method=\"POST\" action=\"/cameras/discover\">"
@@ -530,6 +546,58 @@ bool stopLiveCameraIfRunning(const String& name, std::vector<CameraConfig>* live
   bool running = (idx >= 0) && liveStates && idx < (int)liveStates->size() && (*liveCameras)[idx].enabled;
   if (running) requestCameraStop((*liveStates)[idx]);
   return running;
+}
+
+String applyQuietHoursToAllCameras(PsychicRequest* request, std::vector<CameraConfig>* liveCameras,
+                                    std::vector<CameraState>* liveStates) {
+  bool quietHoursEnabled = request->hasParam("quietHoursEnabled");
+  uint16_t quietStartMinute = parseHHMMToMinutes(request->getParam("quietStart", "00:00"));
+  uint16_t quietEndMinute = parseHHMMToMinutes(request->getParam("quietEnd", "00:00"));
+
+  // Wholesale replace, same as config import's own applyConfigImport -
+  // every camera gets this, not just enabled ones, so a currently-disabled
+  // camera's stored config stays consistent if it's enabled later.
+  // replaceAllCameras() (camera_store.h) takes the same g_camerasMutex
+  // addCamera/updateCamera/deleteCamera do, so this can't lose a
+  // concurrent single-camera edit to a lost update.
+  std::vector<CameraConfig> cams = loadCameras();
+  if (cams.empty()) return "No cameras configured - nothing to apply this to.";
+
+  for (auto& c : cams) {
+    c.quietHoursEnabled = quietHoursEnabled;
+    c.quietStartMinute = quietStartMinute;
+    c.quietEndMinute = quietEndMinute;
+  }
+  if (!replaceAllCameras(cams)) {
+    return "Failed to save - NVS write error (see Serial log). Quiet hours were NOT changed for any camera.";
+  }
+
+  // Live-reloads every already-running enabled camera, same as a single-
+  // camera edit already does (saveCameraSubmission's wasRunning&&cam.enabled
+  // branch) - full rediscovery per camera, the same cost editing each one
+  // individually would have, just triggered by one click instead of N.
+  size_t liveReloaded = 0;
+  if (liveCameras && liveStates) {
+    for (auto& c : cams) {
+      int idx = findLiveCameraIndex(liveCameras, c.name);
+      bool wasRunning = idx >= 0 && idx < (int)liveStates->size() && (*liveCameras)[idx].enabled;
+      if (wasRunning) {
+        requestLiveConfigReload((*liveStates)[idx], c);
+        liveReloaded++;
+      }
+    }
+  }
+
+  String result = "Quiet hours " +
+      (quietHoursEnabled ? ("enabled, " + minutesToHHMM(quietStartMinute) + "-" + minutesToHHMM(quietEndMinute))
+                          : String("disabled")) +
+      " - applied to all " + String(cams.size()) + " camera(s).";
+  if (liveReloaded > 0) {
+    result += " " + String(liveReloaded) + " already-running camera(s) are reconnecting now with it.";
+  }
+  result += " Any camera not currently running (disabled, or added after this board's last boot) "
+            "needs a reboot to pick this up.";
+  return result;
 }
 
 // Does create one real, temporary subscription on the camera (same as the

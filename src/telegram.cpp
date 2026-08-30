@@ -23,6 +23,7 @@
 #include <time.h>
 #include <cstring>
 #include <vector>
+#include <algorithm>
 
 bool telegramCAConfigured() {
   // Sanity check that this actually looks like a PEM certificate, not a
@@ -809,6 +810,61 @@ static void saveLastUpdateId(long id) {
   }
 }
 
+// ============================================================
+// Recent unrecognized chat IDs - RAM-only, small fixed table (not NVS/a
+// growable log): purely a convenience so adding a new Telegram user can be
+// copy-paste from the Users page instead of a side trip to @userinfobot or
+// the raw getUpdates URL, for whoever most recently actually messaged this
+// bot. Not a security log - deliberately doesn't grow, persist, or record
+// anything about WHO/WHAT was sent, just "this chat ID messaged the bot
+// recently" for the one specific case (!sender in pollTelegramCommands)
+// where the sender isn't a configured user at all.
+// ============================================================
+
+// Internal-only add-on to the header's own UnknownChatSighting - `used`
+// marks a still-empty slot, never exposed outside this file.
+struct UnknownChatSlot {
+  int64_t chatId = 0;
+  unsigned long lastSeenMs = 0;
+  bool used = false;
+};
+static UnknownChatSlot g_unknownChats[UNKNOWN_CHAT_TRACK_MAX];
+static SemaphoreHandle_t g_unknownChatsMutex = xSemaphoreCreateMutex();
+
+// Same exact-match-or-least-recently-seen-eviction shape as webserver.cpp's
+// RateLimitMiddleware::findOrCreate - unrelated tables, same small-fixed-
+// size-tracking problem.
+static void recordUnknownChat(int64_t chatId) {
+  xSemaphoreTake(g_unknownChatsMutex, portMAX_DELAY);
+  UnknownChatSlot* slot = nullptr;
+  for (auto& e : g_unknownChats) {
+    if (e.used && e.chatId == chatId) { slot = &e; break; }
+  }
+  if (!slot) {
+    slot = &g_unknownChats[0];
+    for (auto& e : g_unknownChats) {
+      if (!e.used) { slot = &e; break; }
+      if (e.lastSeenMs < slot->lastSeenMs) slot = &e;
+    }
+  }
+  slot->chatId = chatId;
+  slot->lastSeenMs = millis();
+  slot->used = true;
+  xSemaphoreGive(g_unknownChatsMutex);
+}
+
+std::vector<UnknownChatSighting> recentUnknownChats() {
+  std::vector<UnknownChatSighting> result;
+  xSemaphoreTake(g_unknownChatsMutex, portMAX_DELAY);
+  for (auto& e : g_unknownChats) {
+    if (e.used) result.push_back({e.chatId, e.lastSeenMs});
+  }
+  xSemaphoreGive(g_unknownChatsMutex);
+  std::sort(result.begin(), result.end(),
+            [](const UnknownChatSighting& a, const UnknownChatSighting& b) { return a.lastSeenMs > b.lastSeenMs; });
+  return result;
+}
+
 static const char* ALERT_PREF_NAMESPACE = "camctl";
 
 bool loadAlertEnabledPref(size_t index) {
@@ -1484,6 +1540,7 @@ void pollTelegramCommands(const CameraConfig cameras[], CameraState states[], si
                       sender->name.c_str());
       } else {
         Serial.printf("[Telegram] Ignored command from unknown chat ID %lld\n", (long long)upd.chatId);
+        recordUnknownChat(upd.chatId);
       }
       continue;
     }

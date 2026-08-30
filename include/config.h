@@ -63,6 +63,20 @@ static const unsigned long NVS_USAGE_CHECK_INTERVAL_MS = 60UL * 60UL * 1000UL; /
 // (webserver_firmware.cpp) and checkNvsUsage's proactive Telegram alert
 // (main.cpp) so both agree on what "getting full" means.
 static const unsigned NVS_USAGE_WARN_PERCENT = 80;
+// How often main.cpp's loop() re-checks WiFi.RSSI() (checkWifiSignal) -
+// shorter than NVS_USAGE_CHECK_INTERVAL_MS since signal strength can
+// genuinely drift within minutes (something moved, a neighbor's channel
+// got busier), unlike NVS usage which only ever changes from a deliberate
+// dashboard edit.
+static const unsigned long WIFI_RSSI_CHECK_INTERVAL_MS = 15UL * 60UL * 1000UL; // 15 minutes
+// RSSI (dBm, always negative - closer to 0 is stronger) at or below which
+// checkWifiSignal() proactively alerts. -75dBm is a common "reliable but
+// starting to struggle" line for 2.4GHz WiFi - well before typical
+// disconnect territory (usually past -85 to -90dBm), so this is meant to
+// catch a board drifting toward real connectivity trouble while there's
+// still time to do something about it (move the board/AP, reconsider
+// channel/placement), not just note that it already happened.
+static const int WIFI_RSSI_WARN_DBM = -75;
 static const size_t        SNAPSHOT_MAX_BYTES       = 100000;        // internal-RAM fallback cap - see note below
 static const size_t        SNAPSHOT_MAX_BYTES_PSRAM = 2000000UL;     // PSRAM buffer cap - generous; real snapshots are far smaller
 static const bool          VERBOSE_SOAP_LOG         = false;         // flip true to debug one camera at a time

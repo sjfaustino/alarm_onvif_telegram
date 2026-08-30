@@ -480,6 +480,14 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
             .c_str());
   });
 
+  server.on("/cameras/quiet-hours-all", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
+    String result = applyQuietHoursToAllCameras(request, g_liveCameras, g_liveStates);
+    return response->send(
+        200, "text/html",
+        renderShell(Tab::Cameras, result, renderCamerasPanel(nullptr, false, g_liveCameras, g_liveStates))
+            .c_str());
+  });
+
   // Serves one entry from the camera's snapshot history - SD-backed if
   // sdActive() (sd_store.h), else the PSRAM ring fallback; see
   // snapshot_history.h, the single place that decides which. age=0
@@ -524,7 +532,20 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
   });
 
   server.on("/users", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
-    return response->send(200, "text/html", renderShell(Tab::Users, "", renderUsersPanel(nullptr, false)).c_str());
+    // prefillChatId arrives from an unrecognized-chat-ID "Add" link
+    // (webserver_users.cpp's renderUsersPanel) - PsychicRequest url-decodes
+    // query params automatically, and renderTelegramUserForm's own
+    // htmlEscape() covers it before it ever reaches the page, same as
+    // every other prefill path here.
+    String prefillChatId = request->getParam("prefillChatId", "");
+    TelegramUser prefill;
+    TelegramUser* prefillPtr = nullptr;
+    if (prefillChatId.length() > 0) {
+      prefill.chatId = prefillChatId;
+      prefill.allCameras = true; // friendlier default for a brand-new user, same as the blank Add form
+      prefillPtr = &prefill;
+    }
+    return response->send(200, "text/html", renderShell(Tab::Users, "", renderUsersPanel(prefillPtr, false)).c_str());
   });
 
   server.on("/users/edit", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
