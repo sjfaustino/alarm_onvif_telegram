@@ -64,7 +64,10 @@ String renderStoragePanel() {
     html += "<p class=\"hint\">Deletes every snapshot this project has written, for every camera - "
             "not a low-level format of the card itself (this project's SD support can't do that "
             "through the library it uses), just this project's own files. Anything else on the "
-            "card, if you're reusing one that already had other data, is left untouched.</p>";
+            "card, if you're reusing one that already had other data, is left untouched. Runs in "
+            "the background, so the dashboard stays responsive to everyone else while it works - "
+            "reload this page after clicking to see the result once ready.</p>";
+    html += renderEraseAllStatus();
 
     html += "</fieldset>";
   }
@@ -114,4 +117,31 @@ String renderStorageCheckStatus() {
   }
   return "<p class=\"hint\">Checked " + String((unsigned)result.filesChecked) + " file(s) - " +
          String((unsigned)result.unreadableFiles) + " unreadable. See Serial log for which.</p>";
+}
+
+static BackgroundJob<bool> g_eraseAllJob;
+
+static void eraseAllTask(void*) {
+  g_eraseAllJob.finish(eraseAllSnapshots()); // the actual (slow, unbounded) work
+  vTaskDelete(nullptr);
+}
+
+void startEraseAllAsync() {
+  if (!g_eraseAllJob.tryStart()) return; // one erase at a time - a second click while one's in flight is a no-op
+
+  // Same sizing reasoning as startStorageCheckAsync above - SD file I/O
+  // only, no TLS/HTTPClient work.
+  xTaskCreate(eraseAllTask, "sdErase", 4096, nullptr, tskIDLE_PRIORITY + 1, nullptr);
+}
+
+String renderEraseAllStatus() {
+  auto st = g_eraseAllJob.status();
+  if (st.inProgress) {
+    return "<p class=\"hint\">Erasing all snapshot history in the background - reload this page in a "
+           "moment to see the result. The rest of the dashboard stays responsive to everyone else in "
+           "the meantime.</p>";
+  }
+  if (!st.hasResult) return "";
+  return st.result ? "<p class=\"hint\">All snapshot history erased.</p>"
+                    : "<p class=\"hint\">Erase completed with errors - see Serial log.</p>";
 }

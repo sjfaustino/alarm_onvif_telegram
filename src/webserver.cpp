@@ -741,9 +741,14 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
 
   server.on("/storage/erase", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
     Serial.println("[Storage] Erase all snapshot history requested via dashboard.");
-    bool ok = eraseAllSnapshots();
-    String banner = ok ? "All snapshot history erased." : "Erase completed with errors - see Serial log.";
-    return response->send(200, "text/html", renderShell(Tab::Storage, banner, renderStoragePanel()).c_str());
+    // Kicks off a background task and returns immediately - see
+    // startEraseAllAsync's own comment (webserver_storage.h) for why this
+    // must never run synchronously on this request-handling task.
+    startEraseAllAsync();
+    return response->send(
+        200, "text/html",
+        renderShell(Tab::Storage, "Erasing all snapshot history in the background.", renderStoragePanel())
+            .c_str());
   });
 
   server.on("/security", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
