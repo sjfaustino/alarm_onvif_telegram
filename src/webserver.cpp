@@ -730,18 +730,13 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
   });
 
   server.on("/storage/check", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
-    SnapshotStorageCheckResult result = checkSnapshotStorage();
-    String banner;
-    if (!result.ranAtAll) {
-      banner = "SD storage isn't active - nothing to check.";
-    } else if (result.ok) {
-      banner = "Checked " + String((unsigned)result.filesChecked) + " file(s) across " +
-               String((unsigned)result.directoriesChecked) + " camera(s) - all readable.";
-    } else {
-      banner = "Checked " + String((unsigned)result.filesChecked) + " file(s) - " +
-               String((unsigned)result.unreadableFiles) + " unreadable. See Serial log for which.";
-    }
-    return response->send(200, "text/html", renderShell(Tab::Storage, banner, renderStoragePanel()).c_str());
+    // Kicks off a background task and returns immediately - see
+    // startStorageCheckAsync's own comment (webserver_storage.h) for why
+    // this must never run synchronously on this request-handling task.
+    startStorageCheckAsync();
+    return response->send(
+        200, "text/html",
+        renderShell(Tab::Storage, "Checking storage in the background.", renderStoragePanel()).c_str());
   });
 
   server.on("/storage/erase", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {

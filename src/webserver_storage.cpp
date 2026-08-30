@@ -2,6 +2,8 @@
 #include "sd_store.h"
 #include "camera.h" // SNAPSHOT_HISTORY_SIZE
 #include "format_utils.h"
+#include "background_job.h" // BackgroundJob<T> - startStorageCheckAsync
+#include <freertos/FreeRTOS.h>
 
 String renderStoragePanel() {
   SdStatus status = getSdStatus();
@@ -50,7 +52,10 @@ String renderStoragePanel() {
     html += "<p><button type=\"submit\">Check storage</button></p></form>";
     html += "<p class=\"hint\">Confirms every stored snapshot file is still readable - not a full "
             "filesystem consistency check (this project's SD support has no fsck/chkdsk equivalent), "
-            "just a walk verifying nothing this project wrote is corrupted or missing.</p>";
+            "just a walk verifying nothing this project wrote is corrupted or missing. Runs in the "
+            "background, so the dashboard stays responsive to everyone else while it works - reload "
+            "this page after clicking to see the result once ready.</p>";
+    html += renderStorageCheckStatus();
 
     html += "<form method=\"POST\" action=\"/storage/erase\" "
             "onsubmit=\"return confirm('Erase ALL stored snapshot history for every camera? "
@@ -65,4 +70,48 @@ String renderStoragePanel() {
   }
 
   return html;
+}
+
+// ============================================================
+// Background wrapper - see webserver_storage.h's own comment for why this
+// can't run synchronously on the calling (PsychicHttp) task. BackgroundJob<T>
+// (background_job.h) owns the mutex/state-machine part, same as
+// webserver_cameras.cpp's identically-shaped background jobs.
+// ============================================================
+
+static BackgroundJob<SnapshotStorageCheckResult> g_storageCheckJob;
+
+static void storageCheckTask(void*) {
+  g_storageCheckJob.finish(checkSnapshotStorage()); // the actual (slow, unbounded) work
+  vTaskDelete(nullptr);
+}
+
+void startStorageCheckAsync() {
+  if (!g_storageCheckJob.tryStart()) return; // one check at a time - a second click while one's in flight is a no-op
+
+  // No TLS/HTTPClient work here, just SD file I/O and light path-string
+  // building - a smaller stack than the TLS-heavy tasks (camera_tasks.h's
+  // 10240) is enough, same reasoning as wifiScanTask/cameraDiscoveryTask
+  // (webserver_network.cpp/webserver_cameras.cpp).
+  xTaskCreate(storageCheckTask, "sdCheck", 4096, nullptr, tskIDLE_PRIORITY + 1, nullptr);
+}
+
+String renderStorageCheckStatus() {
+  auto st = g_storageCheckJob.status();
+  if (st.inProgress) {
+    return "<p class=\"hint\">Checking storage in the background - reload this page in a moment to "
+           "see the result. The rest of the dashboard stays responsive to everyone else in the "
+           "meantime.</p>";
+  }
+  if (!st.hasResult) return "";
+  const SnapshotStorageCheckResult& result = st.result;
+  if (!result.ranAtAll) {
+    return "<p class=\"hint\">SD storage isn't active - nothing to check.</p>";
+  }
+  if (result.ok) {
+    return "<p class=\"hint\">Checked " + String((unsigned)result.filesChecked) + " file(s) across " +
+           String((unsigned)result.directoriesChecked) + " camera(s) - all readable.</p>";
+  }
+  return "<p class=\"hint\">Checked " + String((unsigned)result.filesChecked) + " file(s) - " +
+         String((unsigned)result.unreadableFiles) + " unreadable. See Serial log for which.</p>";
 }
