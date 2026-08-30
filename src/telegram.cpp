@@ -1540,6 +1540,21 @@ void pollTelegramCommands(const CameraConfig cameras[], CameraState states[], si
 
   std::vector<TelegramUser> users = loadTelegramUsers();
   for (auto& upd : updates) {
+    // Unlike sendHeartbeat/checkNvsUsage/checkWifiSignal/
+    // checkScheduledAlertReverts (main.cpp/telegram.cpp - each fires at
+    // most once per loop() tick), `updates` can genuinely hold more than
+    // one entry - several commands sent in a burst, several users
+    // messaging around the same time, or the bot catching up after being
+    // briefly offline. handleTelegramCommand/handleTelegramCallbackQuery
+    // below can each independently block on g_telegramNetMutex for up to
+    // 45s sending a reply, so this is the one loop in the file where
+    // several such waits stacking up in a single call is the ordinary
+    // case, not a rare timing coincidence. Reset unconditionally at the
+    // top of every iteration (not just after a branch that sends
+    // something) so it can't be skipped by one of this loop's several
+    // `continue`s.
+    esp_task_wdt_reset();
+
     // Advanced in RAM for every update (so the same batch isn't refetched
     // next poll), but NOT persisted to NVS here - Telegram delivers every
     // inbound message regardless of sender, so persisting per-update would
