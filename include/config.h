@@ -38,6 +38,16 @@ static const unsigned long SNAPSHOT_URI_RETRY_INTERVAL_MS = 5UL * 60UL * 1000UL;
 static const uint16_t      HTTP_TIMEOUT_MS          = 10000;
 static const unsigned long HEARTBEAT_INTERVAL_MS    = 6UL * 60UL * 60UL * 1000UL; // liveness ping cadence
 static const unsigned long TELEGRAM_COMMAND_POLL_MS = 5000UL;        // /on, /off, /status polling cadence
+// How long a task waits to acquire telegram.cpp's g_telegramNetMutex
+// before treating a Telegram send/poll as failed rather than blocking
+// indefinitely - see that mutex's own comment for the real incident this
+// fixes (concurrent TLS sessions across cameras exhausting internal RAM
+// during a multi-camera motion burst). Sized to comfortably outlast one
+// queued-behind predecessor's worst-case single send (~35-40s - see
+// TelegramNetLock's own comment) while staying well under RENEW_MARGIN_MS
+// below: a camera task blocked here is also blocked from servicing its
+// own ONVIF subscription renewal.
+static const unsigned long TELEGRAM_NET_MUTEX_TIMEOUT_MS = 45000UL;
 static const size_t        SNAPSHOT_MAX_BYTES       = 100000;        // internal-RAM fallback cap - see note below
 static const size_t        SNAPSHOT_MAX_BYTES_PSRAM = 2000000UL;     // PSRAM buffer cap - generous; real snapshots are far smaller
 static const bool          VERBOSE_SOAP_LOG         = false;         // flip true to debug one camera at a time

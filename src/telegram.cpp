@@ -18,6 +18,8 @@
 #include <nvs_flash.h>
 #include <nvs.h>
 #include <Preferences.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 #include <time.h>
 #include <cstring>
 #include <vector>
@@ -28,6 +30,43 @@ bool telegramCAConfigured() {
   return strstr(TELEGRAM_ROOT_CA, "-----BEGIN CERTIFICATE-----") != nullptr &&
          strstr(TELEGRAM_ROOT_CA, "-----END CERTIFICATE-----") != nullptr;
 }
+
+// Serializes every outbound TLS session this file opens to api.telegram.org
+// (photo sends, JSON API calls, getUpdates polling) across every task that
+// calls into this file. Each camera runs its own independent FreeRTOS task
+// (camera_tasks.h's cameraTaskFn) with nothing otherwise stopping two or
+// more from being mid-send at once; WiFiClientSecure's mbedTLS session
+// state is allocated from internal RAM, not PSRAM, and platformio.ini does
+// no MBEDTLS buffer tuning. A real multi-camera motion burst has been
+// observed in the field driving free heap down to ~70KB and failing
+// outright with "writeAllBytes: stalled, no progress for 5s" followed by
+// "SSL - Memory allocation failed" - this bounds concurrent TLS sessions to
+// Telegram to exactly one at a time, project-wide. Deliberately does NOT
+// cover fetchOneSnapshot's HTTP GET to the camera itself below - that's a
+// different, uncontended network resource (plain HTTP to a LAN device),
+// not part of this budget.
+static SemaphoreHandle_t g_telegramNetMutex = xSemaphoreCreateMutex();
+
+// RAII wrapper for g_telegramNetMutex - bounded xSemaphoreTake
+// (TELEGRAM_NET_MUTEX_TIMEOUT_MS, config.h) with guaranteed release on
+// every return path. Unlike CameraStateLock (camera.h), the wait here is
+// intentionally bounded, not portMAX_DELAY: a camera task stuck waiting
+// forever for Telegram send capacity would also stop servicing its own
+// ONVIF PullMessages/subscription-renewal loop. A held()==false timeout is
+// treated exactly like any other failed send by every caller below -
+// logged, non-fatal, never an indefinite block.
+class TelegramNetLock {
+ public:
+  TelegramNetLock()
+      : held_(xSemaphoreTake(g_telegramNetMutex, pdMS_TO_TICKS(TELEGRAM_NET_MUTEX_TIMEOUT_MS)) == pdTRUE) {}
+  ~TelegramNetLock() { if (held_) xSemaphoreGive(g_telegramNetMutex); }
+  bool held() const { return held_; }
+  TelegramNetLock(const TelegramNetLock&) = delete;
+  TelegramNetLock& operator=(const TelegramNetLock&) = delete;
+
+ private:
+  bool held_;
+};
 
 // Camera -> Telegram. PSRAM is a hard requirement (main.cpp's setup()
 // refuses to boot without it): a motion alert can go to more than one
@@ -177,12 +216,23 @@ static bool sendTelegramPhotoBuffered(const uint8_t* jpg, size_t jpgLen, const S
                                        const String& chatId) {
   if (!jpg || jpgLen == 0) return false;
 
+  // See g_telegramNetMutex's own comment - a real incident, not
+  // theoretical: a multi-camera motion burst has driven free heap to
+  // ~70KB and failed outright with SSL alloc errors when more than one
+  // camera's TLS session to Telegram was open at once.
+  TelegramNetLock netLock;
+  if (!netLock.held()) {
+    Serial.println("Telegram sendPhoto: timed out waiting for Telegram send capacity - skipping.");
+    return false;
+  }
+
   Serial.printf("Free heap before Telegram send: %u bytes (max alloc: %u, jpg: %u bytes)\n",
                 (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap(), (unsigned)jpgLen);
 
   WiFiClientSecure client;
   client.setCACert(TELEGRAM_ROOT_CA); // see telegram_ca.h if this needs refreshing
-  if (!client.connect("api.telegram.org", 443)) {
+  client.setHandshakeTimeout(HTTP_TIMEOUT_MS / 1000); // seconds, not ms - unlike every other timeout in this file
+  if (!client.connect("api.telegram.org", 443, HTTP_TIMEOUT_MS)) {
     char errBuf[128];
     client.lastError(errBuf, sizeof(errBuf));
     Serial.printf("Could not connect to api.telegram.org - TLS/socket error: %s\n", errBuf);
@@ -271,8 +321,17 @@ static int currentLocalMinuteOfDay() {
 // transfer-encoding on the response, which api.telegram.org has been
 // observed to send and a manual parser wouldn't.
 static bool sendTelegramApiCall(const String& method, JsonDocument& doc) {
+  // See g_telegramNetMutex's own comment.
+  TelegramNetLock netLock;
+  if (!netLock.held()) {
+    Serial.printf("sendTelegramApiCall(%s): timed out waiting for Telegram send capacity - skipping.\n",
+                  method.c_str());
+    return false;
+  }
+
   WiFiClientSecure client;
   client.setCACert(TELEGRAM_ROOT_CA); // see telegram_ca.h if this needs refreshing
+  client.setHandshakeTimeout(HTTP_TIMEOUT_MS / 1000); // seconds, not ms - see sendTelegramPhotoBuffered's comment
 
   HTTPClient http;
   String url = "https://api.telegram.org/bot" + String(TELEGRAM_BOT_TOKEN) + "/" + method;
@@ -1278,27 +1337,46 @@ void pollTelegramCommands(const CameraConfig cameras[], CameraState states[], si
   // (see sendTelegramMessageTo's comment) - that split silently mis-parses
   // if Telegram ever sends a chunked response, since it doesn't decode
   // chunk-size markers before handing the body to parseTelegramUpdates.
-  WiFiClientSecure client;
-  client.setCACert(TELEGRAM_ROOT_CA);
+  String body;
+  {
+    // Scoped tightly to the network fetch only, released BEFORE the
+    // update-dispatch loop below - that loop calls handleTelegramCommand/
+    // handleTelegramCallbackQuery, which can themselves call back into
+    // sendTelegramMessageTo/sendOnDemandSnapshot and so re-acquire
+    // g_telegramNetMutex. xSemaphoreCreateMutex() is non-recursive -
+    // holding the lock across that loop would have this same task block
+    // trying to re-take a mutex it already owns. See g_telegramNetMutex's
+    // own comment for the mutex's overall purpose.
+    TelegramNetLock netLock;
+    if (!netLock.held()) {
+      Serial.println("[Telegram] pollTelegramCommands: timed out waiting for Telegram send capacity - "
+                      "skipping this poll.");
+      return; // transient - next poll (TELEGRAM_COMMAND_POLL_MS) retries
+    }
 
-  HTTPClient http;
-  String url = "https://api.telegram.org/bot" + String(TELEGRAM_BOT_TOKEN) +
-               "/getUpdates?offset=" + String(lastUpdateId + 1) + "&timeout=0";
-  if (!http.begin(client, url)) {
-    Serial.println("[Telegram] pollTelegramCommands: http.begin() failed.");
-    return;
-  }
-  http.setTimeout(HTTP_TIMEOUT_MS);
+    WiFiClientSecure client;
+    client.setCACert(TELEGRAM_ROOT_CA);
+    client.setHandshakeTimeout(HTTP_TIMEOUT_MS / 1000); // seconds, not ms - see sendTelegramPhotoBuffered's comment
 
-  int code = http.GET();
-  if (code != 200) {
-    String detail = (code > 0) ? String("") : (" - " + HTTPClient::errorToString(code));
-    Serial.printf("[Telegram] pollTelegramCommands: HTTP %d%s\n", code, detail.c_str());
+    HTTPClient http;
+    String url = "https://api.telegram.org/bot" + String(TELEGRAM_BOT_TOKEN) +
+                 "/getUpdates?offset=" + String(lastUpdateId + 1) + "&timeout=0";
+    if (!http.begin(client, url)) {
+      Serial.println("[Telegram] pollTelegramCommands: http.begin() failed.");
+      return;
+    }
+    http.setTimeout(HTTP_TIMEOUT_MS);
+
+    int code = http.GET();
+    if (code != 200) {
+      String detail = (code > 0) ? String("") : (" - " + HTTPClient::errorToString(code));
+      Serial.printf("[Telegram] pollTelegramCommands: HTTP %d%s\n", code, detail.c_str());
+      http.end();
+      return; // transient - next poll retries
+    }
+    body = http.getString();
     http.end();
-    return; // transient - next poll retries
-  }
-  String body = http.getString();
-  http.end();
+  } // netLock released here - everything below runs unlocked, on purpose
 
   String parseError;
   std::vector<TelegramUpdate> updates = parseTelegramUpdates(body, &parseError);
