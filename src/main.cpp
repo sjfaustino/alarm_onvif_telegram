@@ -6,6 +6,8 @@
 #include <esp_task_wdt.h>
 #include <esp_system.h>   // esp_reset_reason()
 #include <esp_ota_ops.h>  // esp_ota_mark_app_valid_cancel_rollback()
+#include <nvs_flash.h>    // nvs_get_stats() - checkNvsUsage()
+#include <nvs.h>
 #include <cstdlib>
 #include "config.h"
 #include "build_version.h"
@@ -26,6 +28,13 @@ static WifiCredentials g_wifiCredentials;
 static unsigned long lastHeartbeatMs = 0;
 static unsigned long lastCommandPollMs = 0;
 static unsigned long lastSdCheckMs = 0;
+static unsigned long lastNvsCheckMs = 0;
+// True once checkNvsUsage() has already alerted for the current high-usage
+// stretch - re-armed (set back false) once usage drops back under
+// NVS_USAGE_WARN_PERCENT, same "alert once per state transition, not every
+// check" pattern as CameraState::isOffline (telegram.cpp's
+// checkCameraOnlineStatus).
+static bool g_nvsUsageAlerted = false;
 
 // True once startMonitoring() has actually run - see its comment for why
 // this can happen later than setup() if WiFi wasn't up yet at boot.
@@ -249,6 +258,16 @@ static void sendHeartbeat() {
   // it's just normal steady-state overhead (WiFi/mbedTLS/PsychicHttp/tasks).
   msg += "Free heap: " + String(ESP.getFreeHeap()) + " bytes (min ever: " +
          String(ESP.getMinFreeHeap()) + ")\n";
+  // Same nvs_get_stats call webserver_firmware.cpp's Firmware page and
+  // checkNvsUsage() below both use - see NVS_USAGE_WARN_PERCENT's own
+  // comment (config.h) for why this is worth watching at all. Folded into
+  // every heartbeat too, not just the proactive alert below, so a slow
+  // climb toward the threshold is visible before it's actually crossed.
+  nvs_stats_t nvsStats;
+  if (nvs_get_stats(NULL, &nvsStats) == ESP_OK && nvsStats.total_entries > 0) {
+    unsigned pct = (unsigned)((uint64_t)nvsStats.used_entries * 100 / nvsStats.total_entries);
+    msg += "NVS usage: " + String(pct) + "%\n";
+  }
   // subscriptionActive/isOffline are written by each camera's own task;
   // this runs on loop()'s task, so reading them needs CameraStateLock -
   // see CameraState::stateMutex.
@@ -266,6 +285,35 @@ static void sendHeartbeat() {
   }
   if (!sendTelegramMessage(msg)) {
     Serial.println("Heartbeat: Telegram send failed.");
+  }
+}
+
+// Proactive counterpart to the Firmware page's own NVS-usage hint
+// (webserver_firmware.cpp) - see NVS_USAGE_WARN_PERCENT's comment
+// (config.h) for why this is worth alerting on at all. Alerts once on
+// crossing the threshold, not every call - see g_nvsUsageAlerted's own
+// comment for the re-arm rule.
+static void checkNvsUsage() {
+  nvs_stats_t nvsStats;
+  if (nvs_get_stats(NULL, &nvsStats) != ESP_OK || nvsStats.total_entries == 0) return;
+
+  unsigned pct = (unsigned)((uint64_t)nvsStats.used_entries * 100 / nvsStats.total_entries);
+  bool highNow = pct >= NVS_USAGE_WARN_PERCENT;
+  if (highNow == g_nvsUsageAlerted) return; // no state change since the last check
+
+  g_nvsUsageAlerted = highNow;
+  if (highNow) {
+    Serial.printf("WARNING: NVS usage at %u%% (%u/%u entries) - this project has silently dropped "
+                  "writes here before once it filled up.\n",
+                  pct, (unsigned)nvsStats.used_entries, (unsigned)nvsStats.total_entries);
+    logEvent("NVS usage at " + String(pct) + "% - approaching the point writes can start silently failing");
+    sendTelegramMessage("\xE2\x9A\xA0\xEF\xB8\x8F NVS storage is " + String(pct) +
+                         "% full - this board has silently dropped writes here before once it filled "
+                         "up. Check the Firmware page, and consider trimming unused cameras/Telegram "
+                         "users.");
+  } else {
+    Serial.printf("NVS usage back under %u%% (%u%%).\n", NVS_USAGE_WARN_PERCENT, pct);
+    logEvent("NVS usage back under " + String((unsigned)NVS_USAGE_WARN_PERCENT) + "% (" + String(pct) + "%)");
   }
 }
 
@@ -508,6 +556,15 @@ void loop() {
   if (WiFi.status() == WL_CONNECTED && millis() - lastHeartbeatMs >= HEARTBEAT_INTERVAL_MS) {
     lastHeartbeatMs = millis();
     sendHeartbeat();
+  }
+
+  // NVS usage doesn't need WiFi to check (it's a local flash read), but
+  // does need it to actually send the alert - gated the same way as every
+  // other WiFi-dependent periodic check here, rather than checking without
+  // WiFi and queuing/dropping the send.
+  if (WiFi.status() == WL_CONNECTED && millis() - lastNvsCheckMs >= NVS_USAGE_CHECK_INTERVAL_MS) {
+    lastNvsCheckMs = millis();
+    checkNvsUsage();
   }
 
   if (WiFi.status() == WL_CONNECTED && millis() - lastCommandPollMs >= TELEGRAM_COMMAND_POLL_MS) {

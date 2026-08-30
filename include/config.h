@@ -48,6 +48,21 @@ static const unsigned long TELEGRAM_COMMAND_POLL_MS = 5000UL;        // /on, /of
 // below: a camera task blocked here is also blocked from servicing its
 // own ONVIF subscription renewal.
 static const unsigned long TELEGRAM_NET_MUTEX_TIMEOUT_MS = 45000UL;
+// How often main.cpp's loop() re-checks NVS usage (checkNvsUsage) - see
+// NVS_USAGE_WARN_PERCENT's own comment for why this exists at all.
+// Independent of HEARTBEAT_INTERVAL_MS's much longer cadence: NVS usage
+// only grows from deliberate dashboard edits (adding cameras/users), never
+// silently on its own between checks, so there's no harm in checking more
+// often than the heartbeat - this just gets the warning out sooner than
+// waiting for the next 6-hourly heartbeat to happen to mention it.
+static const unsigned long NVS_USAGE_CHECK_INTERVAL_MS = 60UL * 60UL * 1000UL; // 1 hour
+// NVS is entry-based (fixed ~32-byte slots), not a raw byte pool - this
+// project has hit a real incident before where camera records silently
+// failed to persist once NVS filled up (see camera_store.cpp's
+// NVS_KEY_LIST_LEGACY comment). Shared by the Firmware page's own hint
+// (webserver_firmware.cpp) and checkNvsUsage's proactive Telegram alert
+// (main.cpp) so both agree on what "getting full" means.
+static const unsigned NVS_USAGE_WARN_PERCENT = 80;
 static const size_t        SNAPSHOT_MAX_BYTES       = 100000;        // internal-RAM fallback cap - see note below
 static const size_t        SNAPSHOT_MAX_BYTES_PSRAM = 2000000UL;     // PSRAM buffer cap - generous; real snapshots are far smaller
 static const bool          VERBOSE_SOAP_LOG         = false;         // flip true to debug one camera at a time

@@ -47,7 +47,14 @@ static String renderCameraPicker(std::vector<CameraConfig>* liveCameras, std::ve
 // operations are lower priority than camera SD ops" stance elsewhere; the
 // GALLERY_PAGE_SIZE cap below bounds how many times that happens per page
 // load.
-static String renderCameraGrid(const String& cameraName, std::vector<CameraConfig>* liveCameras,
+//
+// page is 0-indexed, 0 = the newest GALLERY_PAGE_SIZE snapshots - out-of-
+// range values (a hand-edited URL past the last real page) just render an
+// empty grid with "Newer" still offered, rather than erroring; there's
+// nothing meaningfully wrong about asking for a page that doesn't exist
+// yet (or no longer does, if snapshots were pruned since the link was
+// generated).
+static String renderCameraGrid(const String& cameraName, size_t page, std::vector<CameraConfig>* liveCameras,
                                 std::vector<CameraState>* liveStates) {
   String html = "<h1>Gallery: " + htmlEscape(cameraName) + "</h1>";
   html += "<p><a href=\"/gallery\">&laquo; All cameras</a></p>";
@@ -59,15 +66,23 @@ static String renderCameraGrid(const String& cameraName, std::vector<CameraConfi
   }
 
   size_t count = cameraSnapshotCount((*liveCameras)[idx], (*liveStates)[idx]);
-  size_t shown = count < GALLERY_PAGE_SIZE ? count : GALLERY_PAGE_SIZE;
-  if (count > GALLERY_PAGE_SIZE) {
-    html += "<p class=\"hint\">Showing the newest " + String((unsigned)GALLERY_PAGE_SIZE) + " of " +
-            String((unsigned)count) + " stored snapshots.</p>";
+  size_t startAge = page * GALLERY_PAGE_SIZE;
+  size_t endAge = startAge + GALLERY_PAGE_SIZE; // exclusive; clamped against count below
+  if (endAge > count) endAge = count;
+  bool hasOlder = endAge < count;   // more snapshots exist past this page
+  bool hasNewer = page > 0;         // a more-recent page exists
+
+  if (startAge >= count && count > 0) {
+    html += "<p class=\"hint\">No snapshots on this page - only " + String((unsigned)count) +
+            " stored in total.</p>";
+  } else if (count > GALLERY_PAGE_SIZE) {
+    html += "<p class=\"hint\">Showing " + String((unsigned)(startAge + 1)) + "-" + String((unsigned)endAge) +
+            " of " + String((unsigned)count) + " stored snapshots.</p>";
   }
 
   unsigned long renderMs = millis(); // one shared cache-busting value for this page load
   html += "<div>";
-  for (size_t age = 0; age < shown; age++) {
+  for (size_t age = startAge; age < endAge; age++) {
     String url = "/cameras/snapshot?name=" + urlEncode(cameraName) + "&age=" + String((unsigned)age) +
                  "&t=" + String(renderMs);
     html += "<a href=\"" + url + "\" target=\"_blank\">"
@@ -75,11 +90,19 @@ static String renderCameraGrid(const String& cameraName, std::vector<CameraConfi
             "alt=\"snapshot\"></a>";
   }
   html += "</div>";
+
+  if (hasNewer || hasOlder) {
+    String base = "/gallery?camera=" + urlEncode(cameraName) + "&page=";
+    html += "<p>";
+    if (hasNewer) html += "<a href=\"" + base + String((unsigned)(page - 1)) + "\">&laquo; Newer</a> ";
+    if (hasOlder) html += "<a href=\"" + base + String((unsigned)(page + 1)) + "\">Older &raquo;</a>";
+    html += "</p>";
+  }
   return html;
 }
 
-String renderGalleryPanel(const String& cameraFilter, std::vector<CameraConfig>* liveCameras,
+String renderGalleryPanel(const String& cameraFilter, size_t page, std::vector<CameraConfig>* liveCameras,
                            std::vector<CameraState>* liveStates) {
   if (cameraFilter.length() == 0) return renderCameraPicker(liveCameras, liveStates);
-  return renderCameraGrid(cameraFilter, liveCameras, liveStates);
+  return renderCameraGrid(cameraFilter, page, liveCameras, liveStates);
 }

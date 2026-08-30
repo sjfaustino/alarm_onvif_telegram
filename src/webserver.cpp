@@ -550,9 +550,12 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
 
   server.on("/gallery", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
     String camera = request->getParam("camera", "");
+    long page = request->getParam("page", "0").toInt();
+    if (page < 0) page = 0; // a negative/garbage param falls back to the newest page, not undefined behavior
     return response->send(
         200, "text/html",
-        renderShell(Tab::Gallery, "", renderGalleryPanel(camera, g_liveCameras, g_liveStates)).c_str());
+        renderShell(Tab::Gallery, "", renderGalleryPanel(camera, (size_t)page, g_liveCameras, g_liveStates))
+            .c_str());
   });
 
   server.on("/firmware", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {

@@ -1,5 +1,6 @@
 #include "webserver_firmware.h"
 #include "build_version.h" // FIRMWARE_VERSION
+#include "config.h" // NVS_USAGE_WARN_PERCENT
 #include <esp_ota_ops.h>
 #include <nvs_flash.h>
 #include <nvs.h>
@@ -20,7 +21,10 @@ String renderFirmwarePanel() {
   // this project has hit a real incident before where camera records
   // silently failed to persist once NVS filled up (see camera_store.cpp's
   // NVS_KEY_LIST_LEGACY comment) - a visible warning here before that
-  // happens again beats discovering it via a dropped write.
+  // happens again beats discovering it via a dropped write. main.cpp's
+  // checkNvsUsage() also proactively alerts via Telegram at the same
+  // NVS_USAGE_WARN_PERCENT threshold, so this doesn't only get noticed by
+  // someone happening to load this page.
   nvs_stats_t nvsStats;
   if (nvs_get_stats(NULL, &nvsStats) == ESP_OK && nvsStats.total_entries > 0) {
     unsigned pct = (unsigned)((uint64_t)nvsStats.used_entries * 100 / nvsStats.total_entries);
@@ -28,7 +32,7 @@ String renderFirmwarePanel() {
             " / " + String((unsigned)nvsStats.total_entries) + " entries, " +
             String((unsigned)nvsStats.free_entries) + " free)</td></tr>";
     html += "</table>";
-    if (pct >= 80) {
+    if (pct >= NVS_USAGE_WARN_PERCENT) {
       html += "<p class=\"hint\">NVS is getting full - this project has silently dropped writes here "
               "before once it filled up. Consider trimming unused cameras/Telegram users, or investigate "
               "what's using space before it happens again.</p>";
