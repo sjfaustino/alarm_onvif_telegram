@@ -19,3 +19,27 @@ TelegramUser parseUserForm(PsychicRequest* request);
 // name the user had before this submission - user.name may differ, which
 // is a rename).
 bool saveUserSubmission(const TelegramUser& user, const String& originalName, String& banner);
+
+// ============================================================
+// Test message - see webserver_cameras.h's startTestAllCamerasAsync for
+// why this can't run synchronously on the calling (PsychicHttp) task:
+// sendTelegramMessage fans out to every systemMessages recipient, each
+// capable of a 45s g_telegramNetMutex wait (telegram.cpp) - with more than
+// one recipient configured, that's long enough to make the whole dashboard
+// unreachable for everyone, not just whoever clicked the button, the same
+// class of risk the Cameras page's "Test all"/"Search network" buttons
+// already run as background tasks to avoid.
+// ============================================================
+
+// Starts sendTestMessage() on a background FreeRTOS task instead of the
+// calling task. A no-op (doesn't start a second overlapping run) if one is
+// already in progress. Call this from the /users/test route handler.
+void startTestMessageAsync();
+
+// Renders the current test-message status: "sending in the background"
+// while one is in progress, the last completed run's result once one
+// exists, or "" if no test has ever run this boot. Safe to call from any
+// task (internally locked) - renderUsersPanel calls this itself, so it
+// shows up on a normal page load too, not just right after clicking the
+// button.
+String renderTestMessageStatus();

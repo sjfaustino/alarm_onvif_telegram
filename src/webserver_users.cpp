@@ -2,7 +2,9 @@
 #include "camera_store.h"
 #include "format_utils.h"
 #include "webserver_html.h"
-#include "telegram.h" // recentUnknownChats
+#include "telegram.h" // recentUnknownChats, sendTelegramMessage
+#include "background_job.h" // BackgroundJob<T> - startTestMessageAsync
+#include <freertos/FreeRTOS.h>
 
 // Shared by "Add Telegram user" (v = a fresh TelegramUser with allCameras
 // forced true, a friendlier default than the struct's own false), "Edit
@@ -82,10 +84,12 @@ String renderUsersPanel(const TelegramUser* prefill, bool isEdit) {
 
   html += "<form method=\"POST\" action=\"/users/test\">"
           "<p><button type=\"submit\">Send test message</button></p></form>";
-  html += "<p class=\"hint\">Sends a real Telegram message right now, to every user above with "
+  html += "<p class=\"hint\">Sends a real Telegram message, to every user above with "
           "\"Receive heartbeat and boot-online messages\" checked - the same audience a real boot "
           "notice/heartbeat/offline alert would reach. Confirms the bot token and TELEGRAM_ROOT_CA "
-          "actually work before finding out the hard way when a real alert silently fails.</p>";
+          "actually work before finding out the hard way when a real alert silently fails. Runs in "
+          "the background; reload this page after clicking to see the result.</p>";
+  html += renderTestMessageStatus();
 
   std::vector<UnknownChatSighting> unknownChats = recentUnknownChats();
   if (!unknownChats.empty()) {
@@ -109,6 +113,64 @@ String renderUsersPanel(const TelegramUser* prefill, bool isEdit) {
   html += "<p class=\"hint\">Adding, editing, or deleting a Telegram user takes effect on the next "
           "Telegram poll/alert - no reboot needed (unlike camera changes).</p>";
   return html;
+}
+
+// ============================================================
+// Test message background wrapper - see webserver_users.h's own comment
+// for why this can't run synchronously on the calling (PsychicHttp) task.
+// BackgroundJob<T> (background_job.h) owns the mutex/state-machine part,
+// same as webserver_cameras.cpp's identically-shaped "Test all cameras"/
+// "Search network for cameras" wrappers.
+// ============================================================
+
+struct TestMessageResult {
+  bool sent = false;         // sendTelegramMessage's own return - false can mean either case below
+  size_t recipientCount = 0; // 0 means "false" above is "nobody has system messages on", not a send failure
+};
+
+static BackgroundJob<TestMessageResult> g_testMessageJob;
+
+static void sendTestMessageTask(void*) {
+  TestMessageResult r;
+  for (auto& u : loadTelegramUsers()) {
+    if (u.systemMessages) r.recipientCount++;
+  }
+  if (r.recipientCount > 0) {
+    r.sent = sendTelegramMessage(
+        "\xF0\x9F\xA7\xAA Test message from the Camera Monitor dashboard - if you're reading this, "
+        "your Telegram setup is working.");
+  }
+  g_testMessageJob.finish(r);
+  vTaskDelete(nullptr);
+}
+
+void startTestMessageAsync() {
+  if (!g_testMessageJob.tryStart()) return; // one send at a time - a second click while one's in flight is a no-op
+
+  // Same stack size as a real per-camera monitoring task (camera_tasks.h) -
+  // this does the same WiFiClientSecure/HTTPClient TLS work a single SOAP
+  // call would, just to api.telegram.org instead of a camera.
+  xTaskCreate(sendTestMessageTask, "testMsg", 10240, nullptr, tskIDLE_PRIORITY + 1, nullptr);
+}
+
+String renderTestMessageStatus() {
+  auto st = g_testMessageJob.status();
+  if (st.inProgress) {
+    return "<p class=\"hint\">Sending a test message in the background - reload this page in a "
+           "moment to see the result. The rest of the dashboard stays responsive to everyone else "
+           "in the meantime.</p>";
+  }
+  if (!st.hasResult) return "";
+  if (st.result.recipientCount == 0) {
+    return "<p class=\"hint\">No Telegram user has \"Receive heartbeat and boot-online messages\" "
+           "enabled above - there was nobody to send a test to. Enable it for at least one user "
+           "first.</p>";
+  }
+  return st.result.sent
+      ? ("<p class=\"hint\">Test message sent to " + String((unsigned)st.result.recipientCount) +
+         " user(s) with system messages enabled - check Telegram.</p>")
+      : "<p class=\"hint\">Test message FAILED to send - see the Serial log (a bad bot token, or "
+        "TELEGRAM_ROOT_CA in telegram_ca.h still being the placeholder, are the usual causes).</p>";
 }
 
 TelegramUser parseUserForm(PsychicRequest* request) {
