@@ -66,7 +66,37 @@ String applyQuietHoursToAllCameras(PsychicRequest* request, std::vector<CameraCo
 // Runs a live GetCapabilities -> GetServiceCapabilities/GetEventProperties
 // -> GetProfiles/GetSnapshotUri -> CreatePullPointSubscription sequence
 // against cfg without touching NVS - see the .cpp for the full rationale.
+// The actual (slow, up to ~60s against an unresponsive camera - 6
+// sequential SOAP calls each bounded by HTTP_TIMEOUT_MS) work - see
+// startTestConnectionAsync below for why nothing calls this directly from
+// a request handler.
 String testCameraConnection(CameraConfig cfg);
+
+// ============================================================
+// Test Connection background wrapper - same reasoning as
+// startTestAllCamerasAsync below (PsychicHttp here services one request
+// at a time), but this one needs the just-submitted, not-yet-saved form
+// data carried into the task, unlike testAllCameraConnections/
+// startCameraDiscoveryAsync which read everything they need from NVS
+// themselves. cfg is heap-copied by startTestConnectionAsync and freed by
+// the task, the same ownership pattern camera_tasks.h's CameraTaskContext
+// already uses for the same reason.
+// ============================================================
+
+// Starts testCameraConnection(cfg) on a background FreeRTOS task instead
+// of the calling task. A no-op (doesn't start a second overlapping run,
+// same "one at a time" rule test-all/discovery already follow) if a test
+// is already in progress. Call this from the /cameras/test route handler.
+void startTestConnectionAsync(const CameraConfig& cfg);
+
+// Renders the current Test Connection status: "testing in the background"
+// while one is in progress, the last completed run's result (already
+// htmlEscape()d internally by testCameraConnection - see its own comment)
+// once one exists, or "" if no test has ever run this boot. Safe to call
+// from any task (internally locked) - renderCamerasPanel calls this
+// itself, so it shows up on a normal page load too, not just right after
+// clicking the button.
+String renderTestConnectionStatus();
 
 // One camera's result from testAllCameraConnections below - a condensed
 // version of what testCameraConnection's own prose paragraph says, sized

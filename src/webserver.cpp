@@ -423,12 +423,20 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
         if (existing.name.equalsIgnoreCase(originalName)) { testCfg.pass = existing.pass; break; }
       }
     }
-    String banner = testCameraConnection(testCfg);
+    // Kicks off a background task and returns immediately - see
+    // startTestConnectionAsync's own comment (webserver_cameras.h) for why
+    // this must never run synchronously on this request-handling task.
+    // testCfg (not submitted - this one has the resolved password) is
+    // heap-copied by startTestConnectionAsync, so it's safe to let it go
+    // out of scope here.
+    startTestConnectionAsync(testCfg);
 
     submitted.pass = "";
     return response->send(
         200, "text/html",
-        renderShell(Tab::Cameras, banner, renderCamerasPanel(&submitted, isEdit, g_liveCameras, g_liveStates))
+        renderShell(Tab::Cameras, "Testing camera connection in the background - reload this page in "
+                    "a moment to see the result.",
+                    renderCamerasPanel(&submitted, isEdit, g_liveCameras, g_liveStates))
             .c_str());
   });
 

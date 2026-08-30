@@ -377,12 +377,14 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
     html += renderTestAllStatus();
   }
 
+  html += renderTestConnectionStatus();
   html += renderCameraForm(prefill ? *prefill : CameraConfig(), isEdit);
 
   html += "<p class=\"hint\">Adding, editing, or deleting a camera updates storage immediately, "
           "but only takes effect after the board reboots. Test Connection doesn't save anything - "
           "it just runs GetCapabilities/GetEventProperties/GetSnapshotUri against whatever is "
-          "currently typed in, so you can catch a wrong URL or credential before rebooting.</p>";
+          "currently typed in, so you can catch a wrong URL or credential before rebooting. Runs "
+          "in the background; reload this page after clicking to see the result.</p>";
   return html;
 }
 
@@ -668,6 +670,47 @@ String testCameraConnection(CameraConfig cfg) {
   }
 
   return result;
+}
+
+// ============================================================
+// Background wrapper - see testCameraConnection's own comment above and
+// webserver_cameras.h's startTestConnectionAsync comment for why this
+// can't run synchronously on the calling (PsychicHttp) task, and why cfg
+// has to be heap-copied into the task rather than read from NVS the way
+// testAllCameraConnections/cameraDiscoveryTask read their own inputs.
+// ============================================================
+
+static BackgroundJob<String> g_testConnectionJob;
+
+static void testConnectionTask(void* param) {
+  CameraConfig* cfg = static_cast<CameraConfig*>(param);
+  String result = testCameraConnection(*cfg); // the actual (slow) work
+  delete cfg;
+  g_testConnectionJob.finish(result);
+  vTaskDelete(nullptr);
+}
+
+void startTestConnectionAsync(const CameraConfig& cfg) {
+  if (!g_testConnectionJob.tryStart()) return; // one test at a time - a second click while one's in flight is a no-op
+
+  // Freed by testConnectionTask itself once it's done with it - same
+  // ownership pattern as camera_tasks.h's CameraTaskContext.
+  CameraConfig* cfgCopy = new CameraConfig(cfg);
+  // Same stack size as a real per-camera monitoring task (camera_tasks.h) -
+  // this does the identical TLS/HTTPClient/SOAP-string-building work,
+  // just for one camera's Test Connection sequence instead of forever.
+  xTaskCreate(testConnectionTask, "testConn", 10240, cfgCopy, tskIDLE_PRIORITY + 1, nullptr);
+}
+
+String renderTestConnectionStatus() {
+  auto st = g_testConnectionJob.status();
+  if (st.inProgress) {
+    return "<p class=\"hint\">Testing camera connection in the background - reload this page in a "
+           "moment to see the result. The rest of the dashboard stays responsive to everyone else "
+           "in the meantime.</p>";
+  }
+  if (st.hasResult) return "<p>" + st.result + "</p>";
+  return "";
 }
 
 // Runs a read-only subset of testCameraConnection's ONVIF call sequence,
