@@ -1,6 +1,7 @@
 #pragma once
 
-// The running firmware's build-time version stamp, "DDMMYYYY.HHMM" - see
+// The running firmware's build-time version stamp, "YYYYMMDD.HHMM" (year-
+// first so two versions sort correctly) - see
 // scripts/generate_build_version.py for how it's computed.
 //
 // Its own translation unit (build_version.cpp), not a config.h constant:

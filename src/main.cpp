@@ -229,7 +229,9 @@ static void setupTime() {
   struct tm timeinfo;
   for (int i = 0; i < 20; i++) {
     if (getLocalTime(&timeinfo, 1000)) {
-      Serial.println("NTP time synchronized.");
+      char buf[25];
+      strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &timeinfo);
+      Serial.printf("NTP time synchronized: %s\n", buf);
       return;
     }
     Serial.print(".");
@@ -332,8 +334,7 @@ static void startMonitoring() {
                     "the IP address still works.");
   }
 
-  startWebServer(&g_cameras, &g_cameraStates);
-  Serial.printf("Web UI: http://%s/\n", WiFi.localIP().toString().c_str());
+  startWebServer(&g_cameras, &g_cameraStates); // logs its own "listening on http://<ip>:80/" line
 
   // One FreeRTOS task per enabled camera, pinned to core 1 - see
   // spawnCameraTask below. The delay() after each spawn staggers initial

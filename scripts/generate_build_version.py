@@ -2,9 +2,12 @@ from datetime import datetime
 
 # Runs on every `pio run`/upload (a PlatformIO "pre:" extra_script, invoked
 # before any compilation starts, not just once ever) - computes the current
-# local wall-clock time as "DDMMYYYY.HHMM" and (re)writes
+# local wall-clock time as "YYYYMMDD.HHMM" and (re)writes
 # include/generated_build_version.h with it, defining FIRMWARE_BUILD_VERSION
 # (see include/build_version.h/build_version.cpp for how that's consumed).
+# Year-first so two versions sort correctly as plain strings/numbers - the
+# original DDMMYYYY order didn't (e.g. "29082026" > "01092026" even though
+# September 1st is the later build).
 #
 # Written as its OWN tiny generated header - deliberately NOT injected as a
 # CPPDEFINES build flag applied to the whole build. An earlier version of
@@ -20,7 +23,7 @@ from datetime import datetime
 # ever needs to recompile that one file (plus relink) when the timestamp
 # changes - everything else stays cached, same as a normal incremental
 # build.
-build_version = datetime.now().strftime("%d%m%Y.%H%M")
+build_version = datetime.now().strftime("%Y%m%d.%H%M")
 with open("include/generated_build_version.h", "w") as f:
     f.write("#pragma once\n")
     f.write("// GENERATED FILE - see scripts/generate_build_version.py. Do not edit by hand.\n")

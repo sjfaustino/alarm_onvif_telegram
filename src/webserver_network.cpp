@@ -12,13 +12,28 @@ String renderNetworkPanel(const String& prefillSsid) {
   WifiCredentials creds = loadWifiCredentials();
   if (prefillSsid.length() > 0) creds.primary.ssid = prefillSsid;
 
-  String connectedRole;
-  if (WiFi.SSID() == creds.primary.ssid) connectedRole = " (primary)";
-  else if (creds.backup.ssid.length() > 0 && WiFi.SSID() == creds.backup.ssid) connectedRole = " (backup)";
+  bool primaryConnected = WiFi.status() == WL_CONNECTED && WiFi.SSID() == creds.primary.ssid;
+  bool backupConnected = WiFi.status() == WL_CONNECTED && creds.backup.ssid.length() > 0 &&
+                          WiFi.SSID() == creds.backup.ssid;
 
   String html = "<h1>Network</h1>";
+
+  html += "<fieldset><legend>Primary</legend><table>";
+  html += "<tr><th>SSID</th><td>" + htmlEscape(creds.primary.ssid) + "</td></tr>";
+  html += "<tr><th>Status</th><td>" + String(primaryConnected ? "Connected" : "Not currently connected") +
+          "</td></tr></table></fieldset>";
+
+  html += "<fieldset><legend>Backup</legend>";
+  if (creds.backup.ssid.length() == 0) {
+    html += "<p class=\"hint\">No backup network configured.</p>";
+  } else {
+    html += "<table><tr><th>SSID</th><td>" + htmlEscape(creds.backup.ssid) + "</td></tr>";
+    html += "<tr><th>Status</th><td>" + String(backupConnected ? "Connected" : "Not currently connected") +
+            "</td></tr></table>";
+  }
+  html += "</fieldset>";
+
   html += "<table>";
-  html += "<tr><th>Connected SSID</th><td>" + htmlEscape(WiFi.SSID()) + connectedRole + "</td></tr>";
   html += "<tr><th>IP address</th><td>" + WiFi.localIP().toString() + "</td></tr>";
   html += "<tr><th>MAC address</th><td>" + WiFi.macAddress() + "</td></tr>";
   html += "<tr><th>Signal (RSSI)</th><td>" + String(WiFi.RSSI()) + " dBm</td></tr>";

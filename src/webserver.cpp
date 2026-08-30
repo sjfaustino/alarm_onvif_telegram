@@ -19,6 +19,7 @@
 #include "format_utils.h"
 #include <PsychicHttp.h>
 #include <Update.h>
+#include <WiFi.h> // WiFi.localIP() - the startup "listening on" log line
 
 // Routing table, the dashboard shell (sidebar + banner), and OTA
 // upload-in-progress state - the parts that are either genuinely about
@@ -706,5 +707,6 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
   });
 
   server.begin();
-  Serial.println("[WebServer] Camera management UI listening on port 80.");
+  Serial.printf("[WebServer] Camera management UI listening on http://%s:80/\n",
+                WiFi.localIP().toString().c_str());
 }

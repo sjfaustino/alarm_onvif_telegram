@@ -213,12 +213,30 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
         // page loads, which is all this needs to guarantee.
         unsigned long renderMs = millis();
         previewCell = "";
+        // Oldest-to-newest, for playFlipbook below - age counts backward
+        // from 0 (newest), so chronological playback order is the reverse
+        // of this loop's natural age=0..historyCount-1 iteration.
+        String flipbookUrls;
         for (size_t age = 0; age < historyCount; age++) {
           String url = "/cameras/snapshot?name=" + urlEncode(c.name) + "&age=" + String((unsigned)age) +
                         "&t=" + String(renderMs);
           previewCell += "<a href=\"" + url + "\" target=\"_blank\">"
                          "<img src=\"" + url + "\" style=\"max-width:48px;max-height:36px;margin:1px;\" "
                          "alt=\"preview\"></a>";
+          String oldestFirstUrl = "/cameras/snapshot?name=" + urlEncode(c.name) +
+                                   "&age=" + String((unsigned)(historyCount - 1 - age)) + "&t=" + String(renderMs);
+          flipbookUrls += (age > 0 ? "|" : "") + oldestFirstUrl;
+        }
+        // Flipbook only makes sense with more than one frame - already
+        // loaded as the thumbnails above, so playback costs no extra
+        // requests (same URLs, browser cache). See playFlipbook's own
+        // comment (this panel's shared <script>, below the table) for the
+        // play/pause toggle itself.
+        if (historyCount > 1) {
+          previewCell += "<br><button type=\"button\" class=\"hint\" "
+                         "onclick=\"playFlipbook(this,'" + flipbookUrls + "')\">\xE2\x96\xB6 Play</button> "
+                         "<img class=\"flipbook-img\" style=\"display:none;max-width:160px;max-height:120px;"
+                         "vertical-align:middle;\">";
         }
       }
     } else if (!c.enabled) {
@@ -241,6 +259,26 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
     html += renderEditDeleteActions("/cameras/edit?name=", "/delete", c.name) + "</td></tr>";
   }
   html += "</table>";
+
+  // Shared by every row's Play button (onclick="playFlipbook(this, '...')")
+  // - cycles a camera's own Preview thumbnails (already loaded as <img>s
+  // above, so this costs no extra network requests, just browser-cached
+  // reads) into one larger image next to the button, oldest-to-newest, so
+  // motion across the history is actually visible instead of five static
+  // frames you have to open one at a time. Click again to stop; the last
+  // frame shown just stays put rather than reverting to the button.
+  html += "<script>"
+          "function playFlipbook(btn,urlList){"
+          "var urls=urlList.split('|');"
+          "var img=btn.nextElementSibling;"
+          "if(btn.dataset.timer){clearInterval(Number(btn.dataset.timer));delete btn.dataset.timer;"
+          "btn.textContent='\xE2\x96\xB6 Play';return;}"
+          "btn.textContent='\xE2\x8F\xB8 Stop';img.style.display='inline';"
+          "var i=0;img.src=urls[0];"
+          "var timer=setInterval(function(){i=(i+1)%urls.length;img.src=urls[i];},400);"
+          "btn.dataset.timer=String(timer);"
+          "}"
+          "</script>";
 
   html += "<form method=\"POST\" action=\"/cameras/discover\">"
           "<p><button type=\"submit\">Search network for cameras</button></p></form>";

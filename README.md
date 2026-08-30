@@ -162,9 +162,10 @@ Arduino-ESP32/IDF releases.
   Cameras page's 5-entry Preview strip - most useful with SD storage active
   (far more history than the PSRAM ring holds), showing up to 30 thumbnails per
   camera per page load.
-- The running build's exact version - "DDMMYYYY.HHMM", the real wall-clock time
-  it was built, computed fresh by `scripts/generate_build_version.py` on every
-  `pio run`/upload, not something anyone has to remember to bump by hand -
+- The running build's exact version - "YYYYMMDD.HHMM" (year-first so two
+  versions sort correctly), the real wall-clock time it was built, computed
+  fresh by `scripts/generate_build_version.py` on every `pio run`/upload,
+  not something anyone has to remember to bump by hand -
   is shown alongside every "Camera Monitor" label: the dashboard title/
   sidebar/login prompt, the Telegram heartbeat and boot-online messages, the
   Firmware page (its own "Version" row, next to the existing build date/time),
