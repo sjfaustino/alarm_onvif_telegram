@@ -180,6 +180,8 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
       uint32_t lastAlert;
       unsigned long revertDueMs, totalReconnects;
       bool revertToOn;
+      size_t recentReconnects = 0; // how many of reconnectHistory's entries fall in the last 24h
+      unsigned long nowMs = millis();
       {
         CameraStateLock lock(st);
         subscribed = st.subscriptionActive;
@@ -190,6 +192,9 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
         revertDueMs = st.scheduledRevertDueMs;
         revertToOn = st.scheduledRevertToOn;
         totalReconnects = st.totalReconnects;
+        for (size_t i = 0; i < st.reconnectHistoryCount; i++) {
+          if (nowMs - st.reconnectHistory[i] < 24UL * 3600UL * 1000UL) recentReconnects++;
+        }
       }
       liveStatus = subscribed ? "subscribed" : "not subscribed";
       if (offline) liveStatus += " - OFFLINE";
@@ -206,6 +211,15 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
       // surfacing separately from "subscribed"/"OFFLINE" above.
       if (totalReconnects > 0) {
         liveStatus += " - " + String(totalReconnects) + " reconnect(s) since boot";
+        // Distinguishes "flaky once, ages ago" from "flapping right now" -
+        // see CameraState::reconnectHistory's own comment. The "+" signals
+        // a floor, not an exact count: every ring slot being within 24h
+        // means older reconnects may have been evicted before they could
+        // be counted.
+        if (recentReconnects > 0) {
+          liveStatus += " (" + String((unsigned)recentReconnects) +
+                        (recentReconnects == RECONNECT_HISTORY_SIZE ? "+" : "") + " in the last 24h)";
+        }
       }
       if (hasAlerted) lastAlertStr = formatElapsedSince(lastAlert, millis());
 

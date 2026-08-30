@@ -32,6 +32,11 @@ struct ConfigImportApplyResult {
   bool networkImported = false;
   bool sdSettingsImported = false;
   bool anyDomainFound = false; // false means the file had no recognizable machine block at all
+  // Whether the pre-import snapshot (see applyConfigImport's own comment)
+  // was actually persisted - false means an NVS write error, not "nothing
+  // to back up"; the banner needs to warn there's nothing to undo with if
+  // this is false, distinct from the ordinary case where it's true.
+  bool backupSaved = false;
 };
 
 // Parses `text` (an uploaded export file's content) via parseConfigImport
@@ -42,4 +47,20 @@ struct ConfigImportApplyResult {
 // cameras/network always have blank passwords (never in an export) -
 // callers must say so in the banner. Takes effect after a reboot, same as
 // any other bulk camera/network change - this never live-applies.
+//
+// Before touching anything, snapshots the CURRENT config (buildConfigExport())
+// into a one-slot NVS backup (overwriting any previous one) - saveCameras()/
+// saveTelegramUsers()/saveWifiCredentials()/saveSdSettings() all write NVS
+// immediately, not staged for a reboot, so by the time this function
+// returns the OLD config is already gone from NVS even though the board
+// keeps running on it live until an actual reboot. Without this, importing
+// the wrong file and then rebooting (ignoring every warning above) would
+// be permanently unrecoverable rather than "download the backup and
+// re-import it." See loadConfigBackup() below for retrieving it.
 ConfigImportApplyResult applyConfigImport(const String& text);
+
+// The most recent pre-import backup applyConfigImport() saved, in the
+// exact same format buildConfigExport() produces (so it can be fed
+// straight back into Import to undo) - "" if none has ever been saved
+// this way. Served as a download by webserver.cpp's /import/backup route.
+String loadConfigBackup();

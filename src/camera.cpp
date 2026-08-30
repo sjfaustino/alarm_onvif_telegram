@@ -561,9 +561,15 @@ void cameraTaskFn(void* pvParameters) {
           st.retryStreak = 0;
           st.retryDelayMs = 0;
           // Lock-guarded write, unlike retryStreak/retryDelayMs above -
-          // totalReconnects is read cross-task by the dashboard (see its
-          // own comment, camera.h).
-          { CameraStateLock lock(st); st.totalReconnects++; }
+          // totalReconnects/reconnectHistory are read cross-task by the
+          // dashboard (see their own comments, camera.h).
+          {
+            CameraStateLock lock(st);
+            st.totalReconnects++;
+            st.reconnectHistory[st.reconnectHistoryNext] = millis();
+            st.reconnectHistoryNext = (st.reconnectHistoryNext + 1) % RECONNECT_HISTORY_SIZE;
+            if (st.reconnectHistoryCount < RECONNECT_HISTORY_SIZE) st.reconnectHistoryCount++;
+          }
         } else {
           // Never let the retry cadence alone go slower than half this
           // camera's offline threshold - see RETRY_BACKOFF_MAX_MS's and

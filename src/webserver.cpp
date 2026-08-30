@@ -722,9 +722,32 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
         banner += " Imported camera(s) also have blank passwords - re-enter them on the Cameras "
                   "page before rebooting.";
       }
-      if (imported.length() > 0) banner += " Reboot the board (Maintenance page) to apply.";
+      if (imported.length() > 0) {
+        banner += r.backupSaved
+            ? " A backup of what was stored just before this import was saved automatically - "
+              "<a href=\"/import/backup\">download it</a> if you need to undo this."
+            : " \xE2\x9A\xA0\xEF\xB8\x8F The automatic pre-import backup FAILED to save (NVS write "
+              "error) - there is nothing to undo this with if it turns out wrong.";
+        banner += " Reboot the board (Maintenance page) to apply.";
+      }
     }
     return response->send(200, "text/html", renderShell(Tab::Security, banner, renderSecurityPanel()).c_str());
+  });
+
+  // Downloads the snapshot applyConfigImport() (webserver_security.cpp)
+  // automatically saves of whatever was stored just before the most recent
+  // import - in the exact same format buildConfigExport() produces, so
+  // undoing a bad import is just importing this file back. Same
+  // Content-Disposition pattern as /export.
+  server.on("/import/backup", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) -> esp_err_t {
+    String backup = loadConfigBackup();
+    if (backup.length() == 0) {
+      return response->send(200, "text/plain",
+                             "No pre-import backup available yet - one is saved automatically the next "
+                             "time Import is used.");
+    }
+    response->addHeader("Content-Disposition", "attachment; filename=\"camera-monitor-config-backup.txt\"");
+    return response->send(200, "text/plain", backup.c_str());
   });
 
   server.on("/security/save", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {

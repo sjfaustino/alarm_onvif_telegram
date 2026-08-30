@@ -11,6 +11,10 @@
 // 200KB each - SNAPSHOT_MAX_BYTES_PSRAM, config.h).
 static const size_t SNAPSHOT_HISTORY_SIZE = 5;
 
+// How many recent reconnect timestamps each camera keeps - see
+// CameraState::reconnectHistory.
+static const size_t RECONNECT_HISTORY_SIZE = 10;
+
 // One cached snapshot - see CameraState::snapshotHistory.
 struct SnapshotHistoryEntry {
   uint8_t* jpg = nullptr;
@@ -85,6 +89,19 @@ struct CameraState {
   // read cross-task by the dashboard render.
   unsigned long totalReconnects = 0;
 
+  // Ring of the most recent reconnect timestamps (millis()), so the
+  // dashboard can show "how flaky has this camera been RECENTLY" -
+  // totalReconnects alone can't distinguish a camera that reconnected
+  // once, months ago, from one flapping every few minutes right now, both
+  // of which read identically as "totalReconnects: 3". Same ring pattern
+  // as snapshotHistory below; filtered to "within the last 24h" at render
+  // time (webserver_cameras.cpp) rather than tracked as a rotating hourly
+  // bucket - simpler, and a home camera's reconnect rate doesn't need
+  // hour-level resolution. Lock-guarded, same as totalReconnects above.
+  unsigned long reconnectHistory[RECONNECT_HISTORY_SIZE] = {0};
+  size_t reconnectHistoryNext = 0;  // ring index the next reconnect writes to
+  size_t reconnectHistoryCount = 0; // how many slots hold a real timestamp yet
+
   // Real motion detection timestamp (independent of mute/cooldown/quiet
   // hours) - the signal checkMotionWatchdog (camera.cpp) uses. Same-task-
   // only, no lock needed. Baselined to task-start time, not 0, so a camera
@@ -152,8 +169,8 @@ struct CameraState {
   // Guards subscriptionActive, isOffline, alertsEnabled, hasAlerted,
   // lastAlert, snapshotUri, user, pass, scheduledRevertDueMs,
   // scheduledRevertToOn, pendingConfig, stopRequested, snapshotHistory
-  // (+Next/Count), lastContactMs, and totalReconnects - the fields both
-  // written by this
+  // (+Next/Count), lastContactMs, totalReconnects, and reconnectHistory
+  // (+Next/Count) - the fields both written by this
   // camera's own task and read/written from another task (webserver.cpp's
   // dashboard render and /cameras/snapshot route, main.cpp's heartbeat,
   // telegram.cpp's /on /off /snap handling, checkScheduledAlertReverts,

@@ -9,7 +9,9 @@
 #include "network_serialize.h"
 #include "sd_store.h"
 #include "config_import_parse.h"
+#include "nvs_chunk.h" // splitIntoChunks/joinChunks - see saveConfigBackup/loadConfigBackup
 #include "build_version.h" // FIRMWARE_VERSION
+#include <Preferences.h>
 
 // snapshotUriOverride (buildConfigExport, below) is free text, not
 // necessarily using the intended {USER}/{PASS} placeholder pattern - a
@@ -75,7 +77,10 @@ String renderSecurityPanel() {
           "too: rebooting before fixing it strands the board off the network entirely, reachable "
           "only via physical/serial access. Takes effect after a reboot, same as any other "
           "camera/network change. Only files exported by this Import feature (this build or "
-          "later) can be restored - older exports have nothing for it to read.</p>";
+          "later) can be restored - older exports have nothing for it to read. Every import "
+          "automatically saves a backup of what was stored just before it - if the wrong file "
+          "gets imported, <a href=\"/import/backup\">download that backup</a> and import it "
+          "again to undo.</p>";
   html += "<form method=\"POST\" action=\"/import\" onsubmit=\"return confirm('Import this "
           "configuration? This REPLACES cameras/Telegram users/network/SD settings currently "
           "stored with whatever the file contains (a section missing from the file is left "
@@ -93,30 +98,93 @@ String renderSecurityPanel() {
   return html;
 }
 
+// One-slot pre-import backup - see applyConfigImport's own comment for why
+// this needs to exist at all. Chunked the same way camera_store.cpp/
+// telegram_users.cpp chunk their own record lists (nvs_chunk.h) - a full
+// export with several cameras/users can exceed NVS's practical per-entry
+// size ceiling, same reasoning as their own NVS_KEY_LIST_LEGACY comments.
+// Only ever one backup slot (each new import overwrites the last) - this
+// is a "just before this last mistake" safety net, not a version history.
+static const char* BACKUP_NVS_NAMESPACE = "cfgbackup";
+static const char* BACKUP_KEY_CHUNK_COUNT = "count";
+static const size_t BACKUP_CHUNK_MAX_BYTES = 1500;
+
+static String backupChunkKey(uint16_t index) {
+  char key[16];
+  snprintf(key, sizeof(key), "c%u", (unsigned)index);
+  return String(key);
+}
+
+static bool saveConfigBackup(const String& text) {
+  std::vector<String> chunks = splitIntoChunks(text, BACKUP_CHUNK_MAX_BYTES);
+
+  Preferences prefs;
+  if (!prefs.begin(BACKUP_NVS_NAMESPACE, false)) return false;
+
+  bool chunksOk = true;
+  for (size_t i = 0; i < chunks.size(); i++) {
+    if (prefs.putString(backupChunkKey((uint16_t)i).c_str(), chunks[i]) == 0) chunksOk = false;
+  }
+  // Drop leftover chunk keys from a previous, larger backup - same reasoning
+  // as camera_store.cpp's saveCameras().
+  uint16_t oldChunkCount = prefs.getUShort(BACKUP_KEY_CHUNK_COUNT, 0);
+  for (uint16_t i = (uint16_t)chunks.size(); i < oldChunkCount; i++) prefs.remove(backupChunkKey(i).c_str());
+
+  bool countOk = prefs.putUShort(BACKUP_KEY_CHUNK_COUNT, (uint16_t)chunks.size()) > 0;
+  prefs.end();
+  return chunksOk && countOk;
+}
+
+String loadConfigBackup() {
+  Preferences prefs;
+  // Read-write, not read-only - see auth_store.cpp's loadDashboardAuth for
+  // why (this namespace is never written until the first import, so a
+  // read-only open would spam a NOT_FOUND error on every /import/backup
+  // request - or every render, if this is ever surfaced there too - until
+  // that first import happens).
+  prefs.begin(BACKUP_NVS_NAMESPACE, false);
+  uint16_t chunkCount = prefs.getUShort(BACKUP_KEY_CHUNK_COUNT, 0);
+  std::vector<String> chunks;
+  chunks.reserve(chunkCount);
+  for (uint16_t i = 0; i < chunkCount; i++) chunks.push_back(prefs.getString(backupChunkKey(i).c_str(), ""));
+  prefs.end();
+  return joinChunks(chunks);
+}
+
 ConfigImportApplyResult applyConfigImport(const String& text) {
   ConfigImportResult parsed = parseConfigImport(text);
   ConfigImportApplyResult result;
 
+  result.anyDomainFound =
+      parsed.camerasFound || parsed.usersFound || parsed.networkFound || parsed.sdSettingsFound;
+  if (result.anyDomainFound) {
+    // Captures whatever is CURRENTLY in NVS before any of the replaceAll*/
+    // save* calls below touch it - see this function's own header comment
+    // (webserver_security.h) for why this has to happen first, not after.
+    result.backupSaved = saveConfigBackup(buildConfigExport());
+    if (!result.backupSaved) {
+      Serial.println("[webserver_security] WARNING: failed to save the pre-import backup (NVS write "
+                      "error) - proceeding with the import anyway, but there will be nothing to "
+                      "restore from if this goes wrong.");
+    }
+  }
+
   if (parsed.camerasFound) {
-    result.anyDomainFound = true;
     if (replaceAllCameras(parsed.cameras)) {
       result.camerasImported = true;
       result.cameraCount = parsed.cameras.size();
     }
   }
   if (parsed.usersFound) {
-    result.anyDomainFound = true;
     if (replaceAllTelegramUsers(parsed.users)) {
       result.usersImported = true;
       result.userCount = parsed.users.size();
     }
   }
   if (parsed.networkFound) {
-    result.anyDomainFound = true;
     result.networkImported = saveWifiCredentials(parsed.network);
   }
   if (parsed.sdSettingsFound) {
-    result.anyDomainFound = true;
     result.sdSettingsImported = saveSdSettings(parsed.sdSettings);
   }
   return result;
