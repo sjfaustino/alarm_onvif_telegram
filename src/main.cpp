@@ -226,7 +226,23 @@ static void setupTime() {
   configTime(0, 0, g_wifiCredentials.ntpServer.c_str());
   // Must follow configTime() (does the actual esp_sntp_init()). No port
   // setting - ESP32's SNTP client hardcodes UDP port 123.
-  esp_sntp_set_sync_interval(g_wifiCredentials.ntpSyncIntervalMs);
+  //
+  // Clamped here, at the point of use, not just at the dashboard save
+  // (webserver_network.cpp's handleSaveNetwork clamps user input to
+  // [1, NTP_SYNC_MAX_MINUTES] minutes) - same "hand-edited/imported NVS
+  // blob bypasses the form entirely" reasoning already applied to
+  // motionWatchdogHours (telegram.cpp's checkMotionWatchdog) and the SD
+  // storage check interval below. Unlike those two, 0 isn't a legitimate
+  // "disabled" sentinel here - esp_sntp_set_sync_interval(0) means resync
+  // continuously, exactly the "hammer the NTP server" outcome
+  // handleSaveNetwork's own comment says a blank/zero/negative field must
+  // never produce; Import (webserver_security.cpp's applyConfigImport)
+  // writes this field with no clamp of its own at all.
+  unsigned long safeSyncIntervalMs = g_wifiCredentials.ntpSyncIntervalMs;
+  if (safeSyncIntervalMs == 0) safeSyncIntervalMs = 3600000UL; // 1h - same fallback network_store.cpp's own load-time default uses
+  unsigned long maxSyncIntervalMs = NTP_SYNC_MAX_MINUTES * 60000UL;
+  if (safeSyncIntervalMs > maxSyncIntervalMs) safeSyncIntervalMs = maxSyncIntervalMs;
+  esp_sntp_set_sync_interval(safeSyncIntervalMs);
 
   // configTime() above set TZ to a no-op UTC form (gmtOffset=0/daylightOffset=0
   // - the system clock stays true UTC, see WifiCredentials::posixTz). This

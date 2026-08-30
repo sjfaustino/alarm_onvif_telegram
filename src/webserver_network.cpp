@@ -1,5 +1,6 @@
 #include "webserver_network.h"
 #include "network_store.h"
+#include "config.h" // NTP_SYNC_MAX_MINUTES
 #include "format_utils.h"
 #include "wifi_scan.h"
 #include "webserver_html.h" // DiscoveryResultRow, renderDiscoveryResultsTable
@@ -111,7 +112,8 @@ String renderNetworkPanel(const String& prefillSsid) {
   html += "<label style=\"margin-top:20px;\">NTP server (always uses UDP port 123 - not configurable "
           "on this platform)<input type=\"text\" name=\"ntpServer\" value=\"" +
           htmlEscape(creds.ntpServer) + "\" required></label>";
-  html += "<label>Resync interval, minutes, max 43200<input type=\"text\" name=\"ntpSyncMinutes\" value=\"" +
+  html += "<label>Resync interval, minutes, max " + String(NTP_SYNC_MAX_MINUTES) +
+          "<input type=\"text\" name=\"ntpSyncMinutes\" value=\"" +
           String(creds.ntpSyncIntervalMs / 60000UL) + "\"></label>";
 
   html += "<label style=\"margin-top:20px;\">POSIX TZ string for local time in Telegram alert photo "
@@ -218,11 +220,14 @@ void handleSaveNetwork(PsychicRequest* request, String& banner) {
   if (ntpServer.length() > 0) creds.ntpServer = ntpServer;
 
   long ntpMinutes = request->getParam("ntpSyncMinutes", "60").toInt();
-  // Upper-capped at 30 days (43200min): unsigned long is 32-bit on this
-  // platform, and *60000UL wraps above ~71583 minutes - a fat-fingered
-  // huge resync interval would otherwise silently wrap into a tiny one,
-  // turning "resync rarely" into a resync storm against the NTP server.
-  if (ntpMinutes > 43200) ntpMinutes = 43200;
+  // Upper-capped at 30 days (NTP_SYNC_MAX_MINUTES): unsigned long is 32-bit
+  // on this platform, and *60000UL wraps above ~71583 minutes - a
+  // fat-fingered huge resync interval would otherwise silently wrap into a
+  // tiny one, turning "resync rarely" into a resync storm against the NTP
+  // server. This is a form-input sanity bound, not the only guard - see
+  // main.cpp's setupTime for the point-of-use clamp that also covers a
+  // value that bypassed this form entirely (a hand-edited/imported NVS blob).
+  if (ntpMinutes > (long)NTP_SYNC_MAX_MINUTES) ntpMinutes = (long)NTP_SYNC_MAX_MINUTES;
   if (ntpMinutes > 0) creds.ntpSyncIntervalMs = (unsigned long)ntpMinutes * 60000UL;
   // else keep whatever was already stored - a blank/zero/negative field
   // shouldn't produce a 0ms (hammer-the-server) resync interval.

@@ -155,6 +155,16 @@ static const unsigned long SD_IDLE_WAIT_TIMEOUT_MS = 10000UL;
 // 720h = 30 days.
 static const uint32_t SD_CHECK_INTERVAL_MAX_HOURS = 720;
 
+// Clamp for the dashboard's NTP resync interval (WifiCredentials::
+// ntpSyncIntervalMs, Network page) - webserver_network.cpp's
+// handleSaveNetwork clamps user input to this, and main.cpp's setupTime
+// re-clamps at the actual esp_sntp_set_sync_interval() call (see its own
+// comment for why a form-only clamp isn't enough - same "hand-edited/
+// imported NVS blob bypasses the form entirely" reasoning as
+// SD_CHECK_INTERVAL_MAX_HOURS/telegram.cpp's motionWatchdogHours clamp).
+// 43200min = 30 days.
+static const unsigned long NTP_SYNC_MAX_MINUTES = 43200UL;
+
 // Cap on /activity.log (sd_store.cpp's appendActivityLogLine) - the SD-
 // persisted mirror of the in-memory Activity log (event_log_store.h).
 // Once a line's append would push the file past this, it's deleted and
