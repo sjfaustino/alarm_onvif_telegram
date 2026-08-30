@@ -4,12 +4,14 @@
 // Spawns cameras[index]'s FreeRTOS monitoring task - same as
 // startMonitoring() (main.cpp) at boot, exposed for webserver_cameras.cpp
 // to spawn one live when an edit enables a previously-disabled camera.
-// index must be a slot that's never had a task before - no live teardown
-// path exists yet (see the TODO below), so this must never be called for
-// an already-running slot.
+// index must be a slot with no task CURRENTLY running - either never
+// spawned before, or one requestCameraStop() (camera.h) has since torn
+// down; calling this while a task still owns the slot would create two
+// tasks racing over the same CameraConfig/CameraState.
 //
-// TODO: no live teardown path exists for a brand-new camera or a
-// disabled/deleted running one - both still require a reboot. Would need
-// a way to signal a running cameraTaskFn to unsubscribe/vTaskDelete
-// itself, plus growable g_cameras/g_cameraStates for the brand-new case.
+// TODO: a brand-new camera (added after this board's current boot, not
+// yet occupying any slot at all) still needs a reboot - g_cameras/
+// g_cameraStates are sized once at boot and never grow, since CameraState
+// ::user/pass and every CameraTaskContext hold raw pointers into their
+// elements that a resize would invalidate.
 void spawnCameraTask(size_t index);

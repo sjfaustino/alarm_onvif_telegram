@@ -23,6 +23,11 @@ void requestLiveConfigReload(CameraState& st, const CameraConfig& newConfig) {
   delete old; // safe outside the lock - no longer reachable via st.pendingConfig once swapped above
 }
 
+void requestCameraStop(CameraState& st) {
+  CameraStateLock lock(st);
+  st.stopRequested = true;
+}
+
 // Applies a staged pendingConfig, if any, to cfg/st - shared by
 // cameraTaskFn's startup (for a task spawned straight into an already-
 // enabled camera - see webserver_cameras.cpp's live-spawn path, which
@@ -466,6 +471,22 @@ void cameraTaskFn(void* pvParameters) {
   st.lastTimelapseMs = millis();
 
   for (;;) {
+    // Live teardown (webserver_cameras.cpp, disable/delete of an already-
+    // running camera via requestCameraStop) - checked before the pending-
+    // config reload below, so a stop wins even if an edit was staged in
+    // the same brief window (e.g. edit-then-immediately-delete).
+    bool stopNow;
+    { CameraStateLock lock(st); stopNow = st.stopRequested; st.stopRequested = false; }
+    if (stopNow) {
+      cfg.enabled = false; // only this task may write its own cfg - see requestLiveConfigReload's comment
+      { CameraStateLock lock(st); st.subscriptionActive = false; }
+      Serial.printf("[%s] Stopped via dashboard (disabled/deleted) - task exiting, no reboot needed.\n",
+                    cfg.name.c_str());
+      logEvent(cfg.name + ": monitoring stopped live (disabled/deleted via dashboard)");
+      vTaskDelete(nullptr);
+      return;
+    }
+
     // Live-reload from a dashboard edit (webserver_cameras.cpp's save
     // handler, via requestLiveConfigReload) - checked first, every pass,
     // so it takes effect within one ~10ms loop tick of being staged.

@@ -490,6 +490,10 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
 
   server.on("/delete", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
     String name = request->getParam("name", "");
+    // Stop a running task BEFORE removing the NVS record - otherwise the
+    // still-running task's own retry/pull loop would keep monitoring
+    // (and alerting on) a camera the dashboard no longer even lists.
+    stopLiveCameraIfRunning(name, g_liveCameras, g_liveStates);
     deleteCamera(name);
     return response->redirect("/cameras");
   });

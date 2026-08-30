@@ -32,16 +32,26 @@ CameraConfig parseCameraForm(PsychicRequest* request);
 //     ~10ms, no reboot needed.
 //   - flipping a previously-disabled camera to enabled spawns its task
 //     live (camera_tasks.h) - same as it would get at the next boot.
+//   - disabling a camera whose task is already running stops it live too
+//     (requestCameraStop, camera.h) - the task exits on its own next loop
+//     pass, no reboot needed.
 //   - a brand new camera (not yet in liveCameras - added after this
-//     board's current boot) and disabling/deleting a camera whose task is
-//     already running both still need a reboot: liveCameras/liveStates
-//     are sized once at boot and never grow, and there's no live task-
-//     teardown path yet. applyNote explains which case just happened, in
+//     board's current boot) still needs a reboot: liveCameras/liveStates
+//     are sized once at boot and never grow, so there's no slot to spawn
+//     a task into yet. applyNote explains which case just happened, in
 //     plain English, for the caller to show as a banner after redirecting
 //     back to /cameras - "" if nothing live happened (the ordinary
 //     reboot-required case, unchanged from before this).
 bool saveCameraSubmission(CameraConfig cam, const String& originalName, String& banner, String& applyNote,
                            std::vector<CameraConfig>* liveCameras, std::vector<CameraState>* liveStates);
+
+// Stops name's live task (requestCameraStop) if it's currently running,
+// returning whether it was. Call this from the /delete route BEFORE (or
+// after - order doesn't matter, they touch different stores) removing the
+// camera from NVS, so a deleted camera's task doesn't keep monitoring and
+// alerting on a camera the dashboard no longer lists.
+bool stopLiveCameraIfRunning(const String& name, std::vector<CameraConfig>* liveCameras,
+                              std::vector<CameraState>* liveStates);
 
 // Runs a live GetCapabilities -> GetServiceCapabilities/GetEventProperties
 // -> GetProfiles/GetSnapshotUri -> CreatePullPointSubscription sequence

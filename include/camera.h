@@ -114,6 +114,14 @@ struct CameraState {
   // owning task may ever write this camera's CameraConfig fields.
   CameraConfig* pendingConfig = nullptr;
 
+  // Set by requestCameraStop() (webserver_cameras.cpp, on disable/delete of
+  // an already-running camera) - the owning task claims and clears it at
+  // the top of its own loop (cameraTaskFn), same polling shape as
+  // pendingConfig above, and exits (vTaskDelete) instead of reconnecting.
+  // See requestCameraStop's own comment for why a live task can be torn
+  // down at all now (it couldn't before this).
+  bool stopRequested = false;
+
   // A ring of the most recently sent snapshots' raw JPEG bytes (motion,
   // tamper, on-demand /snap), so the dashboard can show a timeline without
   // a fresh fetch. Owned by this struct - pushSnapshotHistory
@@ -130,8 +138,9 @@ struct CameraState {
 
   // Guards subscriptionActive, isOffline, alertsEnabled, hasAlerted,
   // lastAlert, snapshotUri, user, pass, scheduledRevertDueMs,
-  // scheduledRevertToOn, pendingConfig, snapshotHistory (+Next/Count),
-  // lastContactMs, and totalReconnects - the fields both written by this
+  // scheduledRevertToOn, pendingConfig, stopRequested, snapshotHistory
+  // (+Next/Count), lastContactMs, and totalReconnects - the fields both
+  // written by this
   // camera's own task and read/written from another task (webserver.cpp's
   // dashboard render and /cameras/snapshot route, main.cpp's heartbeat,
   // telegram.cpp's /on /off /snap handling, checkScheduledAlertReverts,
@@ -164,6 +173,20 @@ struct CameraState {
 // safe sequence (reassign cfg, then immediately re-point st.user/st.pass
 // at the new buffers, before anything else can read the old ones).
 void requestLiveConfigReload(CameraState& st, const CameraConfig& newConfig);
+
+// Signals st's owning task to stop and exit (vTaskDelete) at the top of its
+// next loop pass, instead of reconnecting - the live-teardown counterpart
+// to requestLiveConfigReload above, for a camera that's been disabled or
+// deleted via the dashboard while its task is already running. The task
+// itself flips its own cfg.enabled to false right before exiting (same
+// single-writer rule as requestLiveConfigReload's cfg reassignment) so
+// findLiveCameraIndex-based "is this slot's task alive" checks elsewhere
+// (webserver_cameras.cpp) stay accurate afterward, and so a later re-enable
+// correctly spawns a fresh task rather than staging a pendingConfig nothing
+// will ever read again. No SOAP Unsubscribe call - same as every other
+// short-lived subscription this project creates, it's simply left to
+// expire on its own (see testCameraConnection's own comment).
+void requestCameraStop(CameraState& st);
 
 // Creates st.stateMutex. Call once per camera before spawning its task or
 // starting the web server - see main.cpp's startMonitoring().

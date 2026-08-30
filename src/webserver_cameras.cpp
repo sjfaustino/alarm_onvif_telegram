@@ -164,7 +164,14 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
     String liveStatus;
     String lastAlertStr = "never";
     String previewCell = "<span class=\"hint\">(none yet)</span>";
-    if (idx >= 0 && liveStates && idx < (int)liveStates->size()) {
+    // c.enabled (fresh from NVS, not the live cfg) is required here, not
+    // just idx>=0 - a torn-down camera (requestCameraStop, disabled/deleted
+    // live) keeps its liveCameras/liveStates slot forever (never shrinks),
+    // so idx alone can't tell "task exists" from "task existed once, has
+    // since exited". c.enabled flips to false the moment the save/delete
+    // that triggered the teardown lands in NVS, well before this render
+    // could see anything else.
+    if (idx >= 0 && liveStates && idx < (int)liveStates->size() && c.enabled) {
       // Read under lock - these fields are written by the camera's own
       // task, this render runs on PsychicHttp's task. See
       // CameraState::stateMutex.
@@ -457,11 +464,12 @@ bool saveCameraSubmission(CameraConfig cam, const String& originalName, String& 
       logEvent(cam.name + ": enabled via dashboard, monitoring started live");
       applyNote = "\"" + cam.name + "\" enabled - monitoring started live (no reboot needed).";
     } else if (wasRunning && !cam.enabled) {
-      // Every other field change here (if any) still needs a reboot to
-      // take effect too - there's no live task-teardown path yet (TODO in
-      // camera_tasks.h), so rather than apply a half-edit, this whole save
-      // waits for a reboot, exactly like it always has for a disable.
-      applyNote = "\"" + cam.name + "\" disabled, but its task is still running - reboot to fully stop it.";
+      // Every other field change here (if any) is discarded along with the
+      // task itself - a disable takes priority over any other edit in the
+      // same save, same as requestCameraStop winning over a pending config
+      // reload if both were somehow staged at once (see cameraTaskFn).
+      requestCameraStop((*liveStates)[idx]);
+      applyNote = "\"" + cam.name + "\" disabled - monitoring stopped live (no reboot needed).";
     }
     // else: wasn't running, still not enabled - nothing live to do.
   }
@@ -471,6 +479,14 @@ bool saveCameraSubmission(CameraConfig cam, const String& originalName, String& 
 
   xSemaphoreGive(g_saveMutex);
   return true;
+}
+
+bool stopLiveCameraIfRunning(const String& name, std::vector<CameraConfig>* liveCameras,
+                              std::vector<CameraState>* liveStates) {
+  int idx = findLiveCameraIndex(liveCameras, name);
+  bool running = (idx >= 0) && liveStates && idx < (int)liveStates->size() && (*liveCameras)[idx].enabled;
+  if (running) requestCameraStop((*liveStates)[idx]);
+  return running;
 }
 
 // Does create one real, temporary subscription on the camera (same as the
