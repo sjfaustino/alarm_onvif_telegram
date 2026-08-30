@@ -35,6 +35,15 @@ void checkCameraOnlineStatus(const CameraConfig& cfg, CameraState& st);
 // to call every cameraTaskFn loop iteration, same as checkCameraOnlineStatus.
 void checkMotionWatchdog(const CameraConfig& cfg, CameraState& st);
 
+// Once triggerMotionAlert's cooldown (started by a real, non-quiet-hours
+// snapshot send) ends, sends one summary text of how many further motion
+// events landed during it, if any - "did motion continue after the photo,
+// or was it a one-off" without a photo per event. No-op most calls (no
+// digest pending, or cooldown still running). Cheap enough to call every
+// cameraTaskFn loop iteration, same as checkCameraOnlineStatus/
+// checkMotionWatchdog above.
+void checkPendingMotionDigest(const CameraConfig& cfg, CameraState& st);
+
 // Captures exactly one snapshot and stores it via pushCameraSnapshot (SD
 // if active, RAM ring otherwise) - never sent to Telegram, no recipients,
 // no cooldown interaction. No-op if st.snapshotUri hasn't resolved yet.

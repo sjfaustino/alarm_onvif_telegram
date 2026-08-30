@@ -612,6 +612,7 @@ void cameraTaskFn(void* pvParameters) {
 
     checkCameraOnlineStatus(cfg, st);
     checkMotionWatchdog(cfg, st);
+    checkPendingMotionDigest(cfg, st);
 
     vTaskDelay(pdMS_TO_TICKS(10));
   }

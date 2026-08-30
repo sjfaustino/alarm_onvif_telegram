@@ -504,7 +504,15 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st) {
   // task, so this self-read needs no lock - only cross-task readers
   // (webserver.cpp) do.
   uint32_t nowMs = millis();
-  if (st.hasAlerted && nowMs - st.lastAlert < cfg.alertCooldownMs) return; // cooling down
+  if (st.hasAlerted && nowMs - st.lastAlert < cfg.alertCooldownMs) {
+    // Only counted while a real snapshot send (below) is what started this
+    // cooldown - digestArmed stays false through a quiet-hours cycle (see
+    // that branch below), so motion suppressed during a quiet stretch
+    // doesn't get reported as "since the snapshot" when no snapshot was
+    // actually sent to anyone. See checkPendingMotionDigest for the flush.
+    if (st.digestArmed) st.suppressedMotionCount++;
+    return; // cooling down
+  }
 
   // Quiet hours suppresses the Telegram send only - motion is still
   // detected/cooldown-gated/recorded (Activity log + snapshot history),
@@ -548,6 +556,12 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st) {
   // doing nothing. A failure past this point still spends it, on purpose,
   // to stop sustained motion from retry-storming a misbehaving camera.
   { CameraStateLock lock(st); st.lastAlert = nowMs; st.hasAlerted = true; }
+  // Starts a fresh digest cycle for checkPendingMotionDigest - see
+  // suppressedMotionCount's own comment (camera.h). Reset here, not just
+  // left to accumulate, so a digest never double-counts events already
+  // reported by a previous cycle's flush.
+  st.digestArmed = true;
+  st.suppressedMotionCount = 0;
 
   unsigned int shots = (cfg.snapshotBurstCount > 0) ? cfg.snapshotBurstCount : 1;
   logEvent(cfg.name + ": motion alert, " + String(shots) + " shot(s) to " +
@@ -705,6 +719,40 @@ void checkMotionWatchdog(const CameraConfig& cfg, CameraState& st) {
   logEvent(cfg.name + ": no motion detected in over " + String((unsigned)cfg.motionWatchdogHours) + "h");
   sendTelegramMessage("\xE2\x9A\xA0\xEF\xB8\x8F " + cfg.name + ": no motion detected in over " +
                        String((unsigned)cfg.motionWatchdogHours) + " hour(s) - check the camera/PIR.");
+}
+
+// Flushes triggerMotionAlert's suppressedMotionCount as one summary text
+// once the cooldown it accumulated during ends - so "5 more motion events
+// since the snapshot" (motion kept happening) and silence (it was a
+// one-off) are both visible, instead of every event after the first
+// simply vanishing until the next real send. digestArmed/
+// suppressedMotionCount are same-task-only (see their own comments,
+// camera.h), same reasoning as checkMotionWatchdog above - no lock needed.
+void checkPendingMotionDigest(const CameraConfig& cfg, CameraState& st) {
+  if (!st.digestArmed) return; // no real send is currently being tracked
+  if (millis() - st.lastAlert < cfg.alertCooldownMs) return; // cooldown still running - not due yet
+
+  st.digestArmed = false; // one flush per cooldown cycle, whatever the count
+  uint32_t count = st.suppressedMotionCount;
+  st.suppressedMotionCount = 0;
+  if (count == 0) return; // genuinely a one-off - nothing to report
+
+  // alertsEnabled is written cross-task (pollTelegramCommands' /on//off) -
+  // needs the lock, same as triggerMotionAlert's own read of it.
+  bool alertsEnabled;
+  { CameraStateLock lock(st); alertsEnabled = st.alertsEnabled; }
+  if (!alertsEnabled) return; // muted since the snapshot went out - stay quiet
+
+  std::vector<String> recipients;
+  for (auto& u : loadTelegramUsers()) {
+    if (telegramUserWantsCamera(u, cfg.name)) recipients.push_back(u.chatId);
+  }
+  if (recipients.empty()) return;
+
+  String msg = cfg.name + ": motion continued - " + String(count) +
+               " more event(s) since the last snapshot.";
+  for (auto& chatId : recipients) sendTelegramMessageTo(chatId, msg);
+  logEvent(cfg.name + ": motion digest - " + String(count) + " event(s) since last snapshot");
 }
 
 // ============================================================

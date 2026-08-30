@@ -99,6 +99,19 @@ struct CameraState {
   // the configured interval to come up.
   unsigned long lastTimelapseMs = 0;
 
+  // True once triggerMotionAlert (telegram.cpp) has actually sent a real
+  // (non-quiet-hours) motion snapshot and is now tracking whether more
+  // motion arrives before the cooldown ends - see checkPendingMotionDigest.
+  // Same-task-only, no lock needed, same reasoning as lastMotionMs above.
+  bool digestArmed = false;
+  // How many further motion events landed while still within the cooldown
+  // since that snapshot - each one gets no photo of its own (cfg's
+  // alertCooldownMs is unchanged), just counted here. checkPendingMotionDigest
+  // reports this as one summary text once the cooldown ends, so "did
+  // motion continue after the photo, or was it a one-off" is answerable
+  // without a photo per event.
+  uint32_t suppressedMotionCount = 0;
+
   // Copied once from cfg.user/cfg.pass by resolveCameraCredentials() at
   // startup. Safe as const char*: cfg lives in main.cpp's camera vector,
   // never resized after boot, so these pointers stay valid for the process
