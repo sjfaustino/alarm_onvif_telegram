@@ -461,9 +461,18 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
     duration.trim();
     String result = setAllCamerasAlertState(g_liveCameras->data(), g_liveStates->data(), g_liveCameras->size(),
                                              false, duration, "the dashboard");
+    // htmlEscape()d here, the one point this ever becomes HTML -
+    // setAllCamerasAlertState's failure message (via resolveAlertTimer,
+    // telegram.cpp) echoes the submitted duration text verbatim, which is
+    // exactly right for its OTHER caller (a plain-text Telegram reply) but
+    // was a raw reflected-XSS hole here: renderShell's banner is inserted
+    // unescaped by design, same as every other banner that's pre-built
+    // safe HTML - this is the one that wasn't. The success-path message
+    // has nothing but fixed text/numbers in it either way, so escaping
+    // unconditionally is a no-op there and doesn't need its own branch.
     return response->send(
         200, "text/html",
-        renderShell(Tab::Cameras, result, renderCamerasPanel(nullptr, false, g_liveCameras, g_liveStates))
+        renderShell(Tab::Cameras, htmlEscape(result), renderCamerasPanel(nullptr, false, g_liveCameras, g_liveStates))
             .c_str());
   });
 
@@ -474,9 +483,14 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
     // <duration> via Telegram.
     String result = setAllCamerasAlertState(g_liveCameras->data(), g_liveStates->data(), g_liveCameras->size(),
                                              true, "", "the dashboard");
+    // htmlEscape() for consistency with /cameras/mute-all above, even
+    // though this call site always passes a fixed "" duration today (so
+    // there's no actual user text to escape yet) - matching the same
+    // "escape this result unconditionally" rule protects it if that ever
+    // changes, rather than relying on today's call site staying that way.
     return response->send(
         200, "text/html",
-        renderShell(Tab::Cameras, result, renderCamerasPanel(nullptr, false, g_liveCameras, g_liveStates))
+        renderShell(Tab::Cameras, htmlEscape(result), renderCamerasPanel(nullptr, false, g_liveCameras, g_liveStates))
             .c_str());
   });
 

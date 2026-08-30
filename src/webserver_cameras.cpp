@@ -319,12 +319,15 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
 
   if (!cams.empty()) {
     html += "<fieldset><legend>Mute / Unmute all</legend>";
-    html += "<form method=\"POST\" action=\"/cameras/mute-all\">";
+    html += "<form method=\"POST\" action=\"/cameras/mute-all\" "
+            "onsubmit=\"return confirm('Mute every enabled camera\\'s alerts? Detection/recording keeps "
+            "running either way, only the Telegram send is muted.');\">";
     html += "<label>Mute every enabled camera's alerts for (minutes, or HH:MM, blank = until "
             "manually unmuted)<input type=\"text\" name=\"duration\" placeholder=\"e.g. 30 or 23:00\">"
             "</label>";
     html += "<p><button type=\"submit\">Mute all</button></p></form>";
-    html += "<form method=\"POST\" action=\"/cameras/unmute-all\">"
+    html += "<form method=\"POST\" action=\"/cameras/unmute-all\" "
+            "onsubmit=\"return confirm('Unmute every camera\\'s alerts?');\">"
             "<p><button type=\"submit\">Unmute all</button></p></form>";
     html += "<p class=\"hint\">Same effect as Telegram's /off all and /on all - each enabled camera "
             "keeps its own subscription and detection running either way, only the Telegram send is "
@@ -554,28 +557,34 @@ String applyQuietHoursToAllCameras(PsychicRequest* request, std::vector<CameraCo
   uint16_t quietStartMinute = parseHHMMToMinutes(request->getParam("quietStart", "00:00"));
   uint16_t quietEndMinute = parseHHMMToMinutes(request->getParam("quietEnd", "00:00"));
 
-  // Wholesale replace, same as config import's own applyConfigImport -
-  // every camera gets this, not just enabled ones, so a currently-disabled
+  // Every camera gets this, not just enabled ones, so a currently-disabled
   // camera's stored config stays consistent if it's enabled later.
-  // replaceAllCameras() (camera_store.h) takes the same g_camerasMutex
-  // addCamera/updateCamera/deleteCamera do, so this can't lose a
-  // concurrent single-camera edit to a lost update.
-  std::vector<CameraConfig> cams = loadCameras();
-  if (cams.empty()) return "No cameras configured - nothing to apply this to.";
+  // updateAllCameras() (camera_store.h) loads, mutates, and saves all
+  // under one mutex hold, unlike a separate loadCameras()+replaceAllCameras()
+  // sequence - which would only protect the final write, leaving the read
+  // in between free to race a concurrent single-camera edit and silently
+  // discard it when this write lands second.
+  size_t cameraCount = loadCameras().size();
+  if (cameraCount == 0) return "No cameras configured - nothing to apply this to.";
 
-  for (auto& c : cams) {
+  bool saved = updateAllCameras([&](CameraConfig& c) {
     c.quietHoursEnabled = quietHoursEnabled;
     c.quietStartMinute = quietStartMinute;
     c.quietEndMinute = quietEndMinute;
-  }
-  if (!replaceAllCameras(cams)) {
+  });
+  if (!saved) {
     return "Failed to save - NVS write error (see Serial log). Quiet hours were NOT changed for any camera.";
   }
 
   // Live-reloads every already-running enabled camera, same as a single-
   // camera edit already does (saveCameraSubmission's wasRunning&&cam.enabled
   // branch) - full rediscovery per camera, the same cost editing each one
-  // individually would have, just triggered by one click instead of N.
+  // individually would have, just triggered by one click instead of N. A
+  // fresh read (the write above has already committed by the time we're
+  // here, so this sees it) rather than reusing the mutated copy from
+  // inside updateAllCameras' own critical section - simpler than changing
+  // that function's signature just to hand the list back out.
+  std::vector<CameraConfig> cams = loadCameras();
   size_t liveReloaded = 0;
   if (liveCameras && liveStates) {
     for (auto& c : cams) {

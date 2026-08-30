@@ -1,6 +1,7 @@
 #pragma once
 #include <Arduino.h>
 #include <vector>
+#include <functional>
 
 // A camera's full configuration - persisted in NVS (Preferences, namespace
 // "camstore") so cameras can be added/deleted at runtime via the web UI.
@@ -99,6 +100,18 @@ bool updateCamera(const String& originalName, const CameraConfig& cam);
 // do, so an import landing at the same moment as a concurrent dashboard
 // edit can't lose either change to the other.
 bool replaceAllCameras(const std::vector<CameraConfig>& cameras);
+
+// Atomically loads every camera, applies `mutate` to each one in place
+// (e.g. a bulk field change from the dashboard), and saves the whole list
+// back - all under the same mutex addCamera/updateCamera/deleteCamera/
+// replaceAllCameras use. Unlike calling loadCameras() and then
+// replaceAllCameras() as two separate steps, which only protects the
+// final write, the READ here is inside the same critical section too - a
+// concurrent single-camera edit landing between an unprotected read and a
+// protected write would otherwise get silently discarded when the stale
+// pre-edit list gets written back over it. Returns false (nothing
+// touched) if there are no cameras to begin with, or the save itself fails.
+bool updateAllCameras(const std::function<void(CameraConfig&)>& mutate);
 
 // One-time recovery path: adds any CAMERA_SEED (secrets.h) entry whose
 // name doesn't already exist in the persisted list - unlike the

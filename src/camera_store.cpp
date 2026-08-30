@@ -247,6 +247,19 @@ bool replaceAllCameras(const std::vector<CameraConfig>& cameras) {
   return ok;
 }
 
+bool updateAllCameras(const std::function<void(CameraConfig&)>& mutate) {
+  xSemaphoreTake(g_camerasMutex, portMAX_DELAY);
+  std::vector<CameraConfig> cams = loadCameras(); // safe under the mutex - same as addCamera/updateCamera/deleteCamera do
+  if (cams.empty()) {
+    xSemaphoreGive(g_camerasMutex);
+    return false;
+  }
+  for (auto& c : cams) mutate(c);
+  bool ok = saveCameras(cams);
+  xSemaphoreGive(g_camerasMutex);
+  return ok;
+}
+
 bool updateCamera(const String& originalName, const CameraConfig& cam) {
   xSemaphoreTake(g_camerasMutex, portMAX_DELAY);
   std::vector<CameraConfig> cams = loadCameras();
