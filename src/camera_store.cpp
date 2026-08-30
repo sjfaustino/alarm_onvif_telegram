@@ -240,6 +240,13 @@ bool deleteCamera(const String& name) {
   return ok;
 }
 
+bool replaceAllCameras(const std::vector<CameraConfig>& cameras) {
+  xSemaphoreTake(g_camerasMutex, portMAX_DELAY);
+  bool ok = saveCameras(cameras);
+  xSemaphoreGive(g_camerasMutex);
+  return ok;
+}
+
 bool updateCamera(const String& originalName, const CameraConfig& cam) {
   xSemaphoreTake(g_camerasMutex, portMAX_DELAY);
   std::vector<CameraConfig> cams = loadCameras();

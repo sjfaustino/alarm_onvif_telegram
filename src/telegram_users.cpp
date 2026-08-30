@@ -186,6 +186,13 @@ bool addTelegramUser(const TelegramUser& user) {
   return ok;
 }
 
+bool replaceAllTelegramUsers(const std::vector<TelegramUser>& users) {
+  xSemaphoreTake(g_usersMutex, portMAX_DELAY);
+  bool ok = saveTelegramUsers(users);
+  xSemaphoreGive(g_usersMutex);
+  return ok;
+}
+
 bool deleteTelegramUser(const String& name) {
   xSemaphoreTake(g_usersMutex, portMAX_DELAY);
   std::vector<TelegramUser> users = loadTelegramUsers();

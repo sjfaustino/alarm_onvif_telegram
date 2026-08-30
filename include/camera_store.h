@@ -93,6 +93,13 @@ bool deleteCamera(const String& name);
 // found, or cam.name collides with a different existing camera.
 bool updateCamera(const String& originalName, const CameraConfig& cam);
 
+// Wholesale replace of the entire persisted list (config import - see
+// webserver_security.cpp's applyConfigImport) - unlike calling saveCameras()
+// directly, this takes the same mutex addCamera/updateCamera/deleteCamera
+// do, so an import landing at the same moment as a concurrent dashboard
+// edit can't lose either change to the other.
+bool replaceAllCameras(const std::vector<CameraConfig>& cameras);
+
 // One-time recovery path: adds any CAMERA_SEED (secrets.h) entry whose
 // name doesn't already exist in the persisted list - unlike the
 // first-boot seed in loadCameras(), this runs even when the store is

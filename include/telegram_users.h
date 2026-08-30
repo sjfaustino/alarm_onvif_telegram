@@ -56,3 +56,11 @@ bool deleteTelegramUser(const String& name);
 // match, so this also handles renames). Fails if originalName isn't
 // found, or user.name collides with a different existing user.
 bool updateTelegramUser(const String& originalName, const TelegramUser& user);
+
+// Wholesale replace of the entire persisted list (config import - see
+// webserver_security.cpp's applyConfigImport) - unlike calling
+// saveTelegramUsers() directly, this takes the same mutex
+// addTelegramUser/updateTelegramUser/deleteTelegramUser do, so an import
+// landing at the same moment as a concurrent dashboard edit can't lose
+// either change to the other.
+bool replaceAllTelegramUsers(const std::vector<TelegramUser>& users);

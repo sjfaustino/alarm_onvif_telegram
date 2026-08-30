@@ -71,13 +71,17 @@ String renderSecurityPanel() {
           "from a previously exported configuration file - REPLACES whichever of those sections "
           "the file actually contains (a section missing from the file is left untouched). "
           "Passwords are never in an export, so imported cameras/network will need theirs "
-          "re-entered before they'll work. Takes effect after a reboot, same as any other "
+          "re-entered before they'll work - if Network is included, that means the WiFi password "
+          "too: rebooting before fixing it strands the board off the network entirely, reachable "
+          "only via physical/serial access. Takes effect after a reboot, same as any other "
           "camera/network change. Only files exported by this Import feature (this build or "
           "later) can be restored - older exports have nothing for it to read.</p>";
   html += "<form method=\"POST\" action=\"/import\" onsubmit=\"return confirm('Import this "
           "configuration? This REPLACES cameras/Telegram users/network/SD settings currently "
           "stored with whatever the file contains (a section missing from the file is left "
-          "alone). Passwords will need to be re-entered, and a reboot is required afterward.');\">";
+          "alone). Passwords will need to be re-entered - if the file includes Network, do NOT "
+          "reboot until you have re-entered the WiFi password, or the board will be unable to "
+          "reconnect.');\">";
   html += "<label>Configuration file (.txt from Export above)"
           "<input type=\"file\" accept=\".txt\" onchange=\""
           "var f=this.files[0];if(!f)return;"
@@ -95,14 +99,14 @@ ConfigImportApplyResult applyConfigImport(const String& text) {
 
   if (parsed.camerasFound) {
     result.anyDomainFound = true;
-    if (saveCameras(parsed.cameras)) {
+    if (replaceAllCameras(parsed.cameras)) {
       result.camerasImported = true;
       result.cameraCount = parsed.cameras.size();
     }
   }
   if (parsed.usersFound) {
     result.anyDomainFound = true;
-    if (saveTelegramUsers(parsed.users)) {
+    if (replaceAllTelegramUsers(parsed.users)) {
       result.usersImported = true;
       result.userCount = parsed.users.size();
     }
