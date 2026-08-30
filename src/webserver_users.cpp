@@ -79,6 +79,13 @@ String renderUsersPanel(const TelegramUser* prefill, bool isEdit) {
   }
   html += "</table>";
 
+  html += "<form method=\"POST\" action=\"/users/test\">"
+          "<p><button type=\"submit\">Send test message</button></p></form>";
+  html += "<p class=\"hint\">Sends a real Telegram message right now, to every user above with "
+          "\"Receive heartbeat and boot-online messages\" checked - the same audience a real boot "
+          "notice/heartbeat/offline alert would reach. Confirms the bot token and TELEGRAM_ROOT_CA "
+          "actually work before finding out the hard way when a real alert silently fails.</p>";
+
   TelegramUser blankAdd;
   blankAdd.allCameras = true; // friendlier default for a brand-new user than the struct's own false
   html += renderTelegramUserForm(prefill ? *prefill : blankAdd, cams, isEdit);

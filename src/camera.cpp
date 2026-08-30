@@ -567,8 +567,8 @@ void cameraTaskFn(void* pvParameters) {
             CameraStateLock lock(st);
             st.totalReconnects++;
             st.reconnectHistory[st.reconnectHistoryNext] = millis();
-            st.reconnectHistoryNext = (st.reconnectHistoryNext + 1) % RECONNECT_HISTORY_SIZE;
-            if (st.reconnectHistoryCount < RECONNECT_HISTORY_SIZE) st.reconnectHistoryCount++;
+            st.reconnectHistoryNext = (st.reconnectHistoryNext + 1) % EVENT_HISTORY_RING_SIZE;
+            if (st.reconnectHistoryCount < EVENT_HISTORY_RING_SIZE) st.reconnectHistoryCount++;
           }
         } else {
           // Never let the retry cadence alone go slower than half this

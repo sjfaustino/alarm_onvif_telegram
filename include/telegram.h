@@ -63,6 +63,19 @@ bool telegramCAConfigured();
 // true). Call once per camera at boot, before spawning its task.
 bool loadAlertEnabledPref(size_t index);
 
+// Turns every currently-enabled camera's alerts on/off at once, with an
+// optional timer - the shared implementation behind /on all, /off all
+// (pollTelegramCommands, below) and the Cameras page's own "Mute all"/
+// "Unmute all" buttons (webserver.cpp). durationText follows /on|/off's
+// own duration-token syntax ("" = permanent, minutes, or "HH:MM" - see
+// parseDurationToken, telegram_parse.h); viaWho is a short label for the
+// Serial/Activity log ("Telegram (name)", "the dashboard"). Returns a
+// plain-text result for the caller to show however it likes - success, or
+// the specific reason nothing happened (no enabled cameras, or an
+// unparseable duration).
+String setAllCamerasAlertState(const CameraConfig cameras[], CameraState states[], size_t numCameras,
+                                bool turnOn, const String& durationText, const String& viaWho);
+
 // Polls getUpdates and applies commands, matched by case-insensitive
 // camera-name prefix ("/on D01" matches "D01-FDir"; an ambiguous prefix
 // lists the matches instead of applying anything) - or the literal word

@@ -181,6 +181,7 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
       unsigned long revertDueMs, totalReconnects;
       bool revertToOn;
       size_t recentReconnects = 0; // how many of reconnectHistory's entries fall in the last 24h
+      size_t recentOfflineEvents = 0; // same, for offlineHistory
       unsigned long nowMs = millis();
       {
         CameraStateLock lock(st);
@@ -195,9 +196,22 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
         for (size_t i = 0; i < st.reconnectHistoryCount; i++) {
           if (nowMs - st.reconnectHistory[i] < 24UL * 3600UL * 1000UL) recentReconnects++;
         }
+        for (size_t i = 0; i < st.offlineHistoryCount; i++) {
+          if (nowMs - st.offlineHistory[i] < 24UL * 3600UL * 1000UL) recentOfflineEvents++;
+        }
       }
       liveStatus = subscribed ? "subscribed" : "not subscribed";
       if (offline) liveStatus += " - OFFLINE";
+      // Shown regardless of whether it's currently back online - a camera
+      // that's flapped offline/online repeatedly and happens to be online
+      // again right now is exactly the case a live-status snapshot alone
+      // would otherwise hide, same reasoning as recentReconnects below but
+      // for actual OFFLINE transitions (crossed offlineThresholdMs), a
+      // related but distinct signal from reconnect attempts.
+      if (recentOfflineEvents > 0) {
+        liveStatus += " - went offline " + String((unsigned)recentOfflineEvents) +
+                      (recentOfflineEvents == EVENT_HISTORY_RING_SIZE ? "+" : "") + " time(s) in the last 24h";
+      }
       if (!alertsEnabled) liveStatus += " (alerts OFF)";
       // (long) cast for the same overflow-safe "is this due yet" check
       // used everywhere else a millis() due-timestamp is compared - see
@@ -218,7 +232,7 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
         // be counted.
         if (recentReconnects > 0) {
           liveStatus += " (" + String((unsigned)recentReconnects) +
-                        (recentReconnects == RECONNECT_HISTORY_SIZE ? "+" : "") + " in the last 24h)";
+                        (recentReconnects == EVENT_HISTORY_RING_SIZE ? "+" : "") + " in the last 24h)";
         }
       }
       if (hasAlerted) lastAlertStr = formatElapsedSince(lastAlert, millis());
@@ -302,6 +316,21 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
           "btn.dataset.timer=String(timer);"
           "}"
           "</script>";
+
+  if (!cams.empty()) {
+    html += "<fieldset><legend>Mute / Unmute all</legend>";
+    html += "<form method=\"POST\" action=\"/cameras/mute-all\">";
+    html += "<label>Mute every enabled camera's alerts for (minutes, or HH:MM, blank = until "
+            "manually unmuted)<input type=\"text\" name=\"duration\" placeholder=\"e.g. 30 or 23:00\">"
+            "</label>";
+    html += "<p><button type=\"submit\">Mute all</button></p></form>";
+    html += "<form method=\"POST\" action=\"/cameras/unmute-all\">"
+            "<p><button type=\"submit\">Unmute all</button></p></form>";
+    html += "<p class=\"hint\">Same effect as Telegram's /off all and /on all - each enabled camera "
+            "keeps its own subscription and detection running either way, only the Telegram send is "
+            "muted. A per-camera edit or timer below still overrides whatever this last set.</p>";
+    html += "</fieldset>";
+  }
 
   html += "<form method=\"POST\" action=\"/cameras/discover\">"
           "<p><button type=\"submit\">Search network for cameras</button></p></form>";

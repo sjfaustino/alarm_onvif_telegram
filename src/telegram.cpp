@@ -675,7 +675,17 @@ void checkCameraOnlineStatus(const CameraConfig& cfg, CameraState& st) {
   // webserver.cpp/main.cpp read it from other tasks.
   if (offlineNow == st.isOffline) return; // no state change - most calls hit this
 
-  { CameraStateLock lock(st); st.isOffline = offlineNow; }
+  {
+    CameraStateLock lock(st);
+    st.isOffline = offlineNow;
+    if (offlineNow) {
+      // Pushed only on the false->true transition, not every check - see
+      // CameraState::offlineHistory's own comment (camera.h).
+      st.offlineHistory[st.offlineHistoryNext] = millis();
+      st.offlineHistoryNext = (st.offlineHistoryNext + 1) % EVENT_HISTORY_RING_SIZE;
+      if (st.offlineHistoryCount < EVENT_HISTORY_RING_SIZE) st.offlineHistoryCount++;
+    }
+  }
   if (offlineNow) {
     Serial.printf("[%s] OFFLINE - no response for over %lus.\n", cfg.name.c_str(), cfg.offlineThresholdMs / 1000UL);
     logEvent(cfg.name + ": OFFLINE (no response for over " + String(cfg.offlineThresholdMs / 60000UL) + "m)");
@@ -914,6 +924,40 @@ static void applyOnOffToCamera(const CameraConfig& cfg, CameraState& st, size_t 
   sendTelegramMessageTo(replyChatId, cfg.name + " alerts: " + (turnOn ? "ON" : "OFF") + timer.suffix);
 }
 
+// Shared by /on all, /off all [duration] (via handleAllCamerasCommand
+// below) and the Cameras page's own "Mute all"/"Unmute all" buttons
+// (webserver.cpp) - the actual state-mutation logic can't drift between
+// the two front-ends the way applyOnOffToCamera already prevents for the
+// single-camera case. durationText is parsed the same way /on's own timer
+// token is ("" = permanent, a plain number of minutes, or "HH:MM" - see
+// parseDurationToken, telegram_parse.h); viaWho is a short human label for
+// the Serial/Activity log ("Telegram (name)", "the dashboard"). Returns a
+// plain-text result - success or the specific reason nothing happened
+// (no enabled cameras, or an unparseable duration) - for the caller to
+// relay however it likes (a Telegram reply, a web banner).
+String setAllCamerasAlertState(const CameraConfig cameras[], CameraState states[], size_t numCameras,
+                                bool turnOn, const String& durationText, const String& viaWho) {
+  std::vector<size_t> targets;
+  for (size_t i = 0; i < numCameras; i++) {
+    if (cameras[i].enabled) targets.push_back(i);
+  }
+  if (targets.empty()) return "No enabled cameras to apply this to.";
+
+  AlertTimer timer = resolveAlertTimer(durationText, turnOn);
+  if (!timer.ok) return timer.errorMsg;
+
+  for (size_t i : targets) {
+    { CameraStateLock lock(states[i]); states[i].alertsEnabled = turnOn;
+      states[i].scheduledRevertDueMs = timer.hasTimer ? timer.revertDueMs : 0;
+      states[i].scheduledRevertToOn = !turnOn; }
+    saveAlertEnabledPref(i, turnOn);
+  }
+  Serial.printf("Alerts turned %s for all %u camera(s) via %s%s.\n", turnOn ? "ON" : "OFF",
+                (unsigned)targets.size(), viaWho.c_str(), timer.hasTimer ? " (timed)" : "");
+  logEvent("All cameras alerts: " + String(turnOn ? "ON" : "OFF") + " via " + viaWho + timer.suffix);
+  return "All " + String(targets.size()) + " camera(s) alerts: " + (turnOn ? "ON" : "OFF") + timer.suffix;
+}
+
 // Applies /on all, /off all [duration], or /snap all to every currently-
 // enabled camera - see pollTelegramCommands' (telegram.h) comment on the
 // "all" keyword for the (extremely narrow) trade-off it makes against a
@@ -922,16 +966,15 @@ static void applyOnOffToCamera(const CameraConfig& cfg, CameraState& st, size_t 
 // before reaching here.
 static void handleAllCamerasCommand(const TelegramUser& sender, const ParsedTelegramCommand& parsed,
                                      const CameraConfig cameras[], CameraState states[], size_t numCameras) {
-  std::vector<size_t> targets;
-  for (size_t i = 0; i < numCameras; i++) {
-    if (cameras[i].enabled) targets.push_back(i);
-  }
-  if (targets.empty()) {
-    sendTelegramMessageTo(sender.chatId, "No enabled cameras to apply this to.");
-    return;
-  }
-
   if (parsed.command == TelegramCommand::Snap) {
+    std::vector<size_t> targets;
+    for (size_t i = 0; i < numCameras; i++) {
+      if (cameras[i].enabled) targets.push_back(i);
+    }
+    if (targets.empty()) {
+      sendTelegramMessageTo(sender.chatId, "No enabled cameras to apply this to.");
+      return;
+    }
     Serial.printf("[Telegram] On-demand snapshot of all %u camera(s) requested by user \"%s\".\n",
                   (unsigned)targets.size(), sender.name.c_str());
     for (size_t i : targets) {
@@ -948,25 +991,9 @@ static void handleAllCamerasCommand(const TelegramUser& sender, const ParsedTele
   }
 
   bool turnOn = (parsed.command == TelegramCommand::On);
-  AlertTimer timer = resolveAlertTimer(parsed.durationText, turnOn);
-  if (!timer.ok) {
-    Serial.printf("[Telegram] /%s all from user \"%s\" has an unparseable duration \"%s\".\n",
-                  turnOn ? "on" : "off", sender.name.c_str(), parsed.durationText.c_str());
-    sendTelegramMessageTo(sender.chatId, timer.errorMsg);
-    return;
-  }
-
-  for (size_t i : targets) {
-    { CameraStateLock lock(states[i]); states[i].alertsEnabled = turnOn;
-      states[i].scheduledRevertDueMs = timer.hasTimer ? timer.revertDueMs : 0;
-      states[i].scheduledRevertToOn = !turnOn; }
-    saveAlertEnabledPref(i, turnOn);
-  }
-  Serial.printf("[Telegram] Alerts turned %s for all %u camera(s) via Telegram by user \"%s\"%s.\n",
-                turnOn ? "ON" : "OFF", (unsigned)targets.size(), sender.name.c_str(), timer.hasTimer ? " (timed)" : "");
-  logEvent("All cameras alerts: " + String(turnOn ? "ON" : "OFF") + " via " + sender.name + timer.suffix);
-  sendTelegramMessageTo(sender.chatId, "All " + String(targets.size()) + " camera(s) alerts: " +
-                                        (turnOn ? "ON" : "OFF") + timer.suffix);
+  String result = setAllCamerasAlertState(cameras, states, numCameras, turnOn, parsed.durationText,
+                                           "Telegram (" + sender.name + ")");
+  sendTelegramMessageTo(sender.chatId, result);
 }
 
 // Sent when /on, /off, or /snap arrives with no camera name at all (see

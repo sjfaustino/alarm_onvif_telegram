@@ -11,9 +11,11 @@
 // 200KB each - SNAPSHOT_MAX_BYTES_PSRAM, config.h).
 static const size_t SNAPSHOT_HISTORY_SIZE = 5;
 
-// How many recent reconnect timestamps each camera keeps - see
-// CameraState::reconnectHistory.
-static const size_t RECONNECT_HISTORY_SIZE = 10;
+// How many recent timestamps each of CameraState's small event rings keeps
+// (reconnectHistory, offlineHistory) - a handful is enough for "how often
+// has this happened in the last 24h" without needing per-event NVS/RAM
+// growth.
+static const size_t EVENT_HISTORY_RING_SIZE = 10;
 
 // One cached snapshot - see CameraState::snapshotHistory.
 struct SnapshotHistoryEntry {
@@ -98,9 +100,21 @@ struct CameraState {
   // time (webserver_cameras.cpp) rather than tracked as a rotating hourly
   // bucket - simpler, and a home camera's reconnect rate doesn't need
   // hour-level resolution. Lock-guarded, same as totalReconnects above.
-  unsigned long reconnectHistory[RECONNECT_HISTORY_SIZE] = {0};
+  unsigned long reconnectHistory[EVENT_HISTORY_RING_SIZE] = {0};
   size_t reconnectHistoryNext = 0;  // ring index the next reconnect writes to
   size_t reconnectHistoryCount = 0; // how many slots hold a real timestamp yet
+
+  // Ring of the most recent OFFLINE transition timestamps (millis()) - same
+  // pattern and reasoning as reconnectHistory above, but for "how often has
+  // this camera actually gone offline recently" instead of "how often has
+  // it reconnected" - a related but distinct signal (a camera can flap
+  // reconnects without ever crossing offlineThresholdMs, or go offline once
+  // and stay there, which reconnectHistory alone wouldn't show). Pushed by
+  // checkCameraOnlineStatus (telegram.cpp) on the false->true transition
+  // only, not every check. Lock-guarded, same as reconnectHistory.
+  unsigned long offlineHistory[EVENT_HISTORY_RING_SIZE] = {0};
+  size_t offlineHistoryNext = 0;
+  size_t offlineHistoryCount = 0;
 
   // Real motion detection timestamp (independent of mute/cooldown/quiet
   // hours) - the signal checkMotionWatchdog (camera.cpp) uses. Same-task-
@@ -169,8 +183,8 @@ struct CameraState {
   // Guards subscriptionActive, isOffline, alertsEnabled, hasAlerted,
   // lastAlert, snapshotUri, user, pass, scheduledRevertDueMs,
   // scheduledRevertToOn, pendingConfig, stopRequested, snapshotHistory
-  // (+Next/Count), lastContactMs, totalReconnects, and reconnectHistory
-  // (+Next/Count) - the fields both written by this
+  // (+Next/Count), lastContactMs, totalReconnects, reconnectHistory
+  // (+Next/Count), and offlineHistory (+Next/Count) - the fields both written by this
   // camera's own task and read/written from another task (webserver.cpp's
   // dashboard render and /cameras/snapshot route, main.cpp's heartbeat,
   // telegram.cpp's /on /off /snap handling, checkScheduledAlertReverts,

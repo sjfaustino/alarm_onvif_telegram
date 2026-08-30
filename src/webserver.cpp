@@ -14,6 +14,7 @@
 #include "snapshot_history.h"
 #include "sd_store.h"
 #include "telegram_users.h"
+#include "telegram.h" // sendTelegramMessage - /users/test, setAllCamerasAlertState - /cameras/mute-all, /unmute-all
 #include "auth_store.h"
 #include "backoff.h"
 #include "format_utils.h"
@@ -455,6 +456,30 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
             .c_str());
   });
 
+  server.on("/cameras/mute-all", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
+    String duration = request->getParam("duration", "");
+    duration.trim();
+    String result = setAllCamerasAlertState(g_liveCameras->data(), g_liveStates->data(), g_liveCameras->size(),
+                                             false, duration, "the dashboard");
+    return response->send(
+        200, "text/html",
+        renderShell(Tab::Cameras, result, renderCamerasPanel(nullptr, false, g_liveCameras, g_liveStates))
+            .c_str());
+  });
+
+  server.on("/cameras/unmute-all", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
+    // No duration - "Unmute all" is a plain permanent cancel, same as a
+    // bare /on all with no timer. Anyone wanting a timed unmute already has
+    // Mute all's own duration field for the opposite direction, or /on all
+    // <duration> via Telegram.
+    String result = setAllCamerasAlertState(g_liveCameras->data(), g_liveStates->data(), g_liveCameras->size(),
+                                             true, "", "the dashboard");
+    return response->send(
+        200, "text/html",
+        renderShell(Tab::Cameras, result, renderCamerasPanel(nullptr, false, g_liveCameras, g_liveStates))
+            .c_str());
+  });
+
   // Serves one entry from the camera's snapshot history - SD-backed if
   // sdActive() (sd_store.h), else the PSRAM ring fallback; see
   // snapshot_history.h, the single place that decides which. age=0
@@ -532,6 +557,33 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
     String name = request->getParam("name", "");
     deleteTelegramUser(name);
     return response->redirect("/users");
+  });
+
+  server.on("/users/test", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
+    // Counted here rather than relying on sendTelegramMessage's own bool
+    // return, which can't distinguish "no recipient" from "every send
+    // failed" - a test button specifically needs to tell those apart: one
+    // means a config mistake here (nobody has system messages on), the
+    // other means the bot token/TELEGRAM_ROOT_CA itself is broken.
+    size_t recipientCount = 0;
+    for (auto& u : loadTelegramUsers()) {
+      if (u.systemMessages) recipientCount++;
+    }
+
+    String banner;
+    if (recipientCount == 0) {
+      banner = "No Telegram user has \"Receive heartbeat and boot-online messages\" enabled below - "
+                "there's nobody to send a test to. Enable it for at least one user first.";
+    } else {
+      bool ok = sendTelegramMessage(
+          "\xF0\x9F\xA7\xAA Test message from the Camera Monitor dashboard - if you're reading this, "
+          "your Telegram setup is working.");
+      banner = ok ? ("Test message sent to " + String((unsigned)recipientCount) +
+                      " user(s) with system messages enabled - check Telegram.")
+                  : "Test message FAILED to send - see the Serial log (a bad bot token, or "
+                    "TELEGRAM_ROOT_CA in telegram_ca.h still being the placeholder, are the usual causes).";
+    }
+    return response->send(200, "text/html", renderShell(Tab::Users, banner, renderUsersPanel(nullptr, false)).c_str());
   });
 
   server.on("/activity", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
