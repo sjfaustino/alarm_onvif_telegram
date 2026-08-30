@@ -64,3 +64,10 @@ ConfigImportApplyResult applyConfigImport(const String& text);
 // straight back into Import to undo) - "" if none has ever been saved
 // this way. Served as a download by webserver.cpp's /import/backup route.
 String loadConfigBackup();
+
+// Turns an applyConfigImport() result into the /import route's banner -
+// split out of webserver.cpp so the (sizeable) per-domain wording lives
+// next to the struct it describes, same split as this file's other
+// render*/build* functions. Pure string formatting, no NVS/FreeRTOS work,
+// safe to call from the request-handling task.
+String renderImportResultBanner(const ConfigImportApplyResult& r);

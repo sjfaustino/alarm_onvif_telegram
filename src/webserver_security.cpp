@@ -81,19 +81,24 @@ String renderSecurityPanel() {
           "automatically saves a backup of what was stored just before it - if the wrong file "
           "gets imported, <a href=\"/import/backup\">download that backup</a> and import it "
           "again to undo.</p>";
-  html += "<form method=\"POST\" action=\"/import\" onsubmit=\"return confirm('Import this "
+  // multipart/form-data, not a plain form field - a config file grows
+  // roughly linearly with camera/user count, and the URL-encoded plain-
+  // form approach this used to use (the browser percent-encoding every
+  // newline and every \x1F machine-readable-block separator as 3 bytes
+  // each) could blow well past the dashboard's ordinary request-body cap
+  // on exactly the multi-camera setups this feature exists to back up. A
+  // real file upload is bounded by the much larger upload-size limit
+  // (webserver.cpp's importHandler) instead, and streams in rather than
+  // needing to be buffered whole by the browser into a hidden field first.
+  html += "<form method=\"POST\" action=\"/import\" enctype=\"multipart/form-data\" "
+          "onsubmit=\"return confirm('Import this "
           "configuration? This REPLACES cameras/Telegram users/network/SD settings currently "
           "stored with whatever the file contains (a section missing from the file is left "
           "alone). Passwords will need to be re-entered - if the file includes Network, do NOT "
           "reboot until you have re-entered the WiFi password, or the board will be unable to "
           "reconnect.');\">";
   html += "<label>Configuration file (.txt from Export above)"
-          "<input type=\"file\" accept=\".txt\" onchange=\""
-          "var f=this.files[0];if(!f)return;"
-          "var r=new FileReader();"
-          "r.onload=function(){document.getElementById('importText').value=r.result;};"
-          "r.readAsText(f);\"></label>";
-  html += "<textarea id=\"importText\" name=\"configText\" style=\"display:none\"></textarea>";
+          "<input type=\"file\" name=\"configFile\" accept=\".txt\" required></label>";
   html += "<p><button type=\"submit\">Import configuration</button></p></form></fieldset>";
   return html;
 }
@@ -188,6 +193,54 @@ ConfigImportApplyResult applyConfigImport(const String& text) {
     result.sdSettingsImported = saveSdSettings(parsed.sdSettings);
   }
   return result;
+}
+
+String renderImportResultBanner(const ConfigImportApplyResult& r) {
+  if (!r.anyDomainFound) {
+    return "No valid configuration sections found in this file - nothing was changed. "
+           "(Only files exported by this build or later can be restored - an older export "
+           "has nothing for Import to read.)";
+  }
+
+  String imported, skipped;
+  auto addImported = [&](const String& s) { if (imported.length() > 0) imported += ", "; imported += s; };
+  if (r.camerasImported) addImported(String(r.cameraCount) + " camera(s)");
+  if (r.usersImported) addImported(String(r.userCount) + " Telegram user(s)");
+  if (r.networkImported) addImported("network settings");
+  if (r.sdSettingsImported) addImported("SD settings");
+
+  auto addSkipped = [&](const String& s) { if (skipped.length() > 0) skipped += ", "; skipped += s; };
+  if (!r.camerasImported) addSkipped("Cameras");
+  if (!r.usersImported) addSkipped("Telegram Users");
+  if (!r.networkImported) addSkipped("Network");
+  if (!r.sdSettingsImported) addSkipped("SD Settings");
+
+  String banner = imported.length() > 0 ? ("Imported " + imported + ".") : "Nothing was imported.";
+  if (skipped.length() > 0) {
+    banner += " " + skipped + " not found in this file (or failed to save) - left unchanged.";
+  }
+  if (r.networkImported) {
+    // Stronger wording than the plain camera-password note below -
+    // rebooting with a blank WiFi password (not just a broken camera)
+    // strands the board off the network entirely, reachable only via
+    // physical/serial access to fix.
+    banner += " \xE2\x9A\xA0\xEF\xB8\x8F Network was imported WITHOUT a WiFi password (never "
+              "included in an export) - go to the Network page and re-enter it now. Rebooting "
+              "before fixing this will leave the board unable to reconnect to WiFi at all.";
+  }
+  if (r.camerasImported) {
+    banner += " Imported camera(s) also have blank passwords - re-enter them on the Cameras "
+              "page before rebooting.";
+  }
+  if (imported.length() > 0) {
+    banner += r.backupSaved
+        ? " A backup of what was stored just before this import was saved automatically - "
+          "<a href=\"/import/backup\">download it</a> if you need to undo this."
+        : " \xE2\x9A\xA0\xEF\xB8\x8F The automatic pre-import backup FAILED to save (NVS write "
+          "error) - there is nothing to undo this with if it turns out wrong.";
+    banner += " Reboot the board (Maintenance page) to apply.";
+  }
+  return banner;
 }
 
 String buildConfigExport() {

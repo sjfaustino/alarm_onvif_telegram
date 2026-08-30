@@ -788,57 +788,36 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
     return response->send(200, "text/plain", buildConfigExport().c_str());
   });
 
-  server.on("/import", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
-    String text = request->getParam("configText", "");
-    ConfigImportApplyResult r = applyConfigImport(text);
+  // A real multipart file upload, not a form field - see renderSecurityPanel's
+  // own comment (webserver_security.cpp) on the Import fieldset for why: a
+  // plain form field is bounded by PsychicHttp's default 16K
+  // maxRequestBodySize (checked before this project's own route handlers ever
+  // run), and a multi-camera export's newline/\x1F-heavy text can blow past
+  // that once the browser percent-encodes it. importHandler streams in
+  // FILE_CHUNK_SIZE pieces instead, bounded by the much larger maxUploadSize -
+  // same mechanism startWebServer's otaHandler above already uses for the
+  // firmware .bin, just accumulated into a String here (a config export is
+  // KB-sized, not MB, so buffering the whole thing is fine) instead of
+  // streamed straight to flash.
+  static String g_importText;
+  static String g_importBanner;
 
-    String banner;
-    if (!r.anyDomainFound) {
-      banner = "No valid configuration sections found in this file - nothing was changed. "
-                "(Only files exported by this build or later can be restored - an older export "
-                "has nothing for Import to read.)";
-    } else {
-      String imported, skipped;
-      auto addImported = [&](const String& s) { if (imported.length() > 0) imported += ", "; imported += s; };
-      if (r.camerasImported) addImported(String(r.cameraCount) + " camera(s)");
-      if (r.usersImported) addImported(String(r.userCount) + " Telegram user(s)");
-      if (r.networkImported) addImported("network settings");
-      if (r.sdSettingsImported) addImported("SD settings");
-
-      auto addSkipped = [&](const String& s) { if (skipped.length() > 0) skipped += ", "; skipped += s; };
-      if (!r.camerasImported) addSkipped("Cameras");
-      if (!r.usersImported) addSkipped("Telegram Users");
-      if (!r.networkImported) addSkipped("Network");
-      if (!r.sdSettingsImported) addSkipped("SD Settings");
-
-      banner = imported.length() > 0 ? ("Imported " + imported + ".") : "Nothing was imported.";
-      if (skipped.length() > 0) {
-        banner += " " + skipped + " not found in this file (or failed to save) - left unchanged.";
-      }
-      if (r.networkImported) {
-        // Stronger wording than the plain camera-password note below -
-        // rebooting with a blank WiFi password (not just a broken camera)
-        // strands the board off the network entirely, reachable only via
-        // physical/serial access to fix.
-        banner += " \xE2\x9A\xA0\xEF\xB8\x8F Network was imported WITHOUT a WiFi password (never "
-                  "included in an export) - go to the Network page and re-enter it now. Rebooting "
-                  "before fixing this will leave the board unable to reconnect to WiFi at all.";
-      }
-      if (r.camerasImported) {
-        banner += " Imported camera(s) also have blank passwords - re-enter them on the Cameras "
-                  "page before rebooting.";
-      }
-      if (imported.length() > 0) {
-        banner += r.backupSaved
-            ? " A backup of what was stored just before this import was saved automatically - "
-              "<a href=\"/import/backup\">download it</a> if you need to undo this."
-            : " \xE2\x9A\xA0\xEF\xB8\x8F The automatic pre-import backup FAILED to save (NVS write "
-              "error) - there is nothing to undo this with if it turns out wrong.";
-        banner += " Reboot the board (Maintenance page) to apply.";
-      }
+  static PsychicUploadHandler* importHandler = new PsychicUploadHandler();
+  importHandler->onUpload([](PsychicRequest* request, const String& filename, uint64_t index, uint8_t* data,
+                              size_t len, bool last) -> esp_err_t {
+    if (index == 0) g_importText = ""; // first chunk of THIS upload - drop any leftover from a previous one
+    if (len > 0) g_importText.concat((const char*)data, len);
+    if (last) {
+      ConfigImportApplyResult r = applyConfigImport(g_importText);
+      g_importText = ""; // done with it - don't hold the buffer until the next import
+      g_importBanner = renderImportResultBanner(r);
     }
-    return response->send(200, "text/html", renderShell(Tab::Security, banner, renderSecurityPanel()).c_str());
+    return ESP_OK;
   });
+  importHandler->onRequest([](PsychicRequest* request, PsychicResponse* response) -> esp_err_t {
+    return response->send(200, "text/html", renderShell(Tab::Security, g_importBanner, renderSecurityPanel()).c_str());
+  });
+  server.on("/import", HTTP_POST, importHandler);
 
   // Downloads the snapshot applyConfigImport() (webserver_security.cpp)
   // automatically saves of whatever was stored just before the most recent
