@@ -584,9 +584,21 @@ void loop() {
     }
   }
 
+  // Every one of these three can block on telegram.cpp's g_telegramNetMutex
+  // for up to TELEGRAM_NET_MUTEX_TIMEOUT_MS (45s) before a send is even
+  // attempted - and HEARTBEAT_INTERVAL_MS/NVS_USAGE_CHECK_INTERVAL_MS/
+  // WIFI_RSSI_CHECK_INTERVAL_MS (6h/1h/15min) are exact multiples of each
+  // other, so all three land on the SAME loop() tick every 6 hours by
+  // construction, not just by bad luck. None of sendHeartbeat/
+  // checkNvsUsage/checkWifiSignal feed the task watchdog mid-call the way
+  // handleAllCamerasCommand's "/snap all" loop already does - without a
+  // reset between them here, three stacked worst-case waits in one tick
+  // could approach or exceed WATCHDOG_TIMEOUT_MS (90s, initWatchdog()) and
+  // panic-reboot the board over nothing but timing.
   if (WiFi.status() == WL_CONNECTED && millis() - lastHeartbeatMs >= HEARTBEAT_INTERVAL_MS) {
     lastHeartbeatMs = millis();
     sendHeartbeat();
+    esp_task_wdt_reset();
   }
 
   // NVS usage doesn't need WiFi to check (it's a local flash read), but
@@ -596,11 +608,13 @@ void loop() {
   if (WiFi.status() == WL_CONNECTED && millis() - lastNvsCheckMs >= NVS_USAGE_CHECK_INTERVAL_MS) {
     lastNvsCheckMs = millis();
     checkNvsUsage();
+    esp_task_wdt_reset();
   }
 
   if (WiFi.status() == WL_CONNECTED && millis() - lastWifiRssiCheckMs >= WIFI_RSSI_CHECK_INTERVAL_MS) {
     lastWifiRssiCheckMs = millis();
     checkWifiSignal();
+    esp_task_wdt_reset();
   }
 
   if (WiFi.status() == WL_CONNECTED && millis() - lastCommandPollMs >= TELEGRAM_COMMAND_POLL_MS) {
