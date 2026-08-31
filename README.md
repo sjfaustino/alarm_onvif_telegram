@@ -214,7 +214,11 @@ Arduino-ESP32/IDF releases.
   shouldn't roll back otherwise-good firmware). The Firmware page also shows
   NVS usage (% of entries used) - this project has silently hit NVS's practical
   size ceiling before (see `camera_store.cpp`'s history), so a visible warning
-  above 80% is meant to catch that before it happens again, not after. The
+  above 80% is meant to catch that before it happens again, not after - and free
+  internal heap (current, lifetime minimum, and largest single allocatable
+  block - the same numbers `checkHeapHealth()`'s Activity-log trail and
+  Telegram alert are built from, above), plus free PSRAM, with a hint if the
+  lifetime minimum has ever dropped close to allocation-failure territory. The
   Maintenance page has a manual reboot button (confirmation popup first) for
   when you just want the board to restart without a firmware change.
 - Any number of Telegram users, each independently configured for which cameras

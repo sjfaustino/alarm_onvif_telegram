@@ -1,7 +1,8 @@
 #include "webserver_firmware.h"
 #include "build_version.h" // FIRMWARE_VERSION
-#include "config.h" // NVS_USAGE_WARN_PERCENT
+#include "config.h" // NVS_USAGE_WARN_PERCENT, HEAP_LOW_WARN_BYTES
 #include <esp_ota_ops.h>
+#include <esp_heap_caps.h> // heap_caps_get_free_size(MALLOC_CAP_SPIRAM)
 #include <nvs_flash.h>
 #include <nvs.h>
 
@@ -15,6 +16,23 @@ String renderFirmwarePanel() {
   html += "<tr><th>Running partition</th><td>" + String(running ? running->label : "?") + "</td></tr>";
   html += "<tr><th>Sketch size</th><td>" + String(ESP.getSketchSize() / 1024) + " KB</td></tr>";
   html += "<tr><th>Free space for update</th><td>" + String(ESP.getFreeSketchSpace() / 1024) + " KB</td></tr>";
+
+  // Same internal-RAM pool WiFiClientSecure/mbedTLS allocate from - see
+  // main.cpp's checkHeapHealth()/HEAP_LOW_WARN_BYTES (config.h) for the
+  // proactive Telegram alert and timestamped Activity-log trail this
+  // mirrors; shown here too so it's visible without Telegram/Serial
+  // access, same "don't only rely on someone noticing a push notification"
+  // reasoning as the NVS usage row below. Largest allocatable block, not
+  // just the free-byte total, distinguishes a fragmented heap (plenty of
+  // free bytes, none of them contiguous enough for whatever allocation
+  // actually needs one) from genuinely low total memory - same stat
+  // sendTelegramPhotoBuffered (telegram.cpp) already logs before every
+  // photo send.
+  html += "<tr><th>Free heap (internal)</th><td>" + String(ESP.getFreeHeap()) + " bytes</td></tr>";
+  html += "<tr><th>Free heap - lifetime min</th><td>" + String(ESP.getMinFreeHeap()) + " bytes</td></tr>";
+  html += "<tr><th>Largest allocatable block</th><td>" + String(ESP.getMaxAllocHeap()) + " bytes</td></tr>";
+  html += "<tr><th>Free PSRAM</th><td>" +
+          String((unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM)) + " bytes</td></tr>";
 
   // NVS is entry-based (fixed ~32-byte slots), not a raw byte pool, so
   // "% used" here means % of entries, not bytes - still the right signal:
@@ -39,6 +57,13 @@ String renderFirmwarePanel() {
     }
   } else {
     html += "</table>";
+  }
+
+  if (ESP.getMinFreeHeap() < HEAP_LOW_WARN_BYTES) {
+    html += "<p class=\"hint\">Free internal heap has dropped close to allocation-failure territory "
+            "at least once since boot - checkHeapHealth() (main.cpp) logs a timestamped Activity page "
+            "entry every time this happens, including the largest-allocatable-block reading at that "
+            "moment, so check there for what else was going on around the same time.</p>";
   }
 
   html += "<fieldset><legend>Upload new firmware</legend>";
