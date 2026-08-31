@@ -645,6 +645,14 @@ void loop() {
   // checkScheduledAlertReverts below for the same "runs regardless of WiFi"
   // reasoning (a heap event during an outage should still get a timestamp).
   checkHeapHealth();
+  // checkHeapHealth's one-time low-heap alert can block on
+  // telegram.cpp's g_telegramNetMutex for up to TELEGRAM_NET_MUTEX_TIMEOUT_MS
+  // (45s) before sendTelegramMessage's own per-recipient reset ever fires -
+  // same reasoning as the reset after each of sendHeartbeat/checkNvsUsage/
+  // checkWifiSignal below: without this, that alert (rare, but its timing
+  // is uncorrelated with theirs) landing on the same tick as one of those
+  // could stack two uncovered ~45s gaps toward WATCHDOG_TIMEOUT_MS (90s).
+  esp_task_wdt_reset();
 
   // loop() alone owns WiFi connect/reconnect - camera tasks only ever read
   // WiFi.status(), never call WiFi.begin(). g_wifiRetryDueMs is the backoff
