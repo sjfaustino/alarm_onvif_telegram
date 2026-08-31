@@ -45,6 +45,18 @@ void checkMotionWatchdog(const CameraConfig& cfg, CameraState& st);
 // checkMotionWatchdog above.
 void checkPendingMotionDigest(const CameraConfig& cfg, CameraState& st);
 
+// Broadcasts an alert if this camera has been responding (see
+// checkCameraOnlineStatus - not OFFLINE) but hasn't held a working
+// subscription in over cfg.offlineThresholdMs, so it can't actually report
+// any motion/tamper/signal-loss event - the case checkCameraOnlineStatus's
+// own lastContactMs can't catch on its own, since a camera answering every
+// call with a SOAP fault keeps lastContactMs fresh forever without ever
+// subscribing (see cameraSoapCall's own comment, camera.cpp). No-op while
+// isOffline is already true - that's a distinct, already-alerted condition.
+// Re-arms once subscribed again. Call this AFTER checkCameraOnlineStatus
+// each cameraTaskFn loop iteration, so st.isOffline is current.
+void checkSubscriptionHealth(const CameraConfig& cfg, CameraState& st);
+
 // Captures exactly one snapshot and stores it via pushCameraSnapshot (SD
 // if active, RAM ring otherwise) - never sent to Telegram, no recipients,
 // no cooldown interaction. No-op if st.snapshotUri hasn't resolved yet.

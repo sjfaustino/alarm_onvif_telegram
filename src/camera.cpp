@@ -470,6 +470,12 @@ void cameraTaskFn(void* pvParameters) {
   // instant it subscribes instead of waiting a full interval first.
   st.lastTimelapseMs = millis();
 
+  // Same reasoning again for checkSubscriptionHealth (telegram.cpp) - a 0
+  // baseline would make this camera look like it's been unsubscribed since
+  // the epoch, tripping the alert immediately instead of giving the retry
+  // loop below a fair chance first.
+  st.lastSubscribedMs = millis();
+
   for (;;) {
     // Live teardown (webserver_cameras.cpp, disable/delete of an already-
     // running camera via requestCameraStop) - checked before the pending-
@@ -583,6 +589,13 @@ void cameraTaskFn(void* pvParameters) {
         }
       }
     } else {
+      // Confirmed subscribed as of the top of this pass - refreshed every
+      // iteration while subscribed, same "continuously refreshed while
+      // healthy" shape as cameraSoapCall's lastContactMs. Deliberately
+      // BEFORE cameraPullMessages/cameraRenewSubscription below, which can
+      // themselves flip subscriptionActive back to false mid-iteration on
+      // failure - this only ever advances past a pass that started subscribed.
+      st.lastSubscribedMs = millis();
       if (millis() - st.lastPull >= PULL_INTERVAL_MS) {
         st.lastPull = millis();
         cameraPullMessages(cfg, st);
@@ -617,6 +630,7 @@ void cameraTaskFn(void* pvParameters) {
     }
 
     checkCameraOnlineStatus(cfg, st);
+    checkSubscriptionHealth(cfg, st); // after checkCameraOnlineStatus - reads its just-updated st.isOffline
     checkMotionWatchdog(cfg, st);
     checkPendingMotionDigest(cfg, st);
 

@@ -130,6 +130,19 @@ struct CameraState {
   // the configured interval to come up.
   unsigned long lastTimelapseMs = 0;
 
+  // Same-task-only - last time subscriptionActive was confirmed true
+  // (cameraTaskFn's main loop, refreshed every iteration while subscribed -
+  // same "continuously refreshed while healthy" shape as lastContactMs).
+  // Baselined to task-start time, same reasoning as lastMotionMs/
+  // lastTimelapseMs. What checkSubscriptionHealth (telegram.cpp) uses to
+  // catch a camera that keeps *answering* (refreshing lastContactMs, even
+  // with a SOAP fault - see cameraSoapCall's own comment) but can never
+  // actually hold a subscription, and so can never report a real
+  // motion/tamper/signal-loss event - a failure mode lastContactMs alone
+  // can't distinguish from a genuinely healthy camera.
+  unsigned long lastSubscribedMs = 0;
+  bool subscriptionLostAlerted = false; // avoid repeat alerts until subscribed again - see checkMotionWatchdog's motionWatchdogTripped for the same pattern
+
   // True once triggerMotionAlert (telegram.cpp) has actually sent a real
   // (non-quiet-hours) motion snapshot and is now tracking whether more
   // motion arrives before the cooldown ends - see checkPendingMotionDigest.

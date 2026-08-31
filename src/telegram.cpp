@@ -768,6 +768,44 @@ void checkCameraOnlineStatus(const CameraConfig& cfg, CameraState& st) {
   }
 }
 
+// lastSubscribedMs/subscriptionLostAlerted are same-task-only (see
+// CameraState's own comment) - this runs on the camera's own task, same as
+// checkCameraOnlineStatus above, no lock needed. isOffline itself is a
+// same-task self-read here too - see checkCameraOnlineStatus's own comment.
+void checkSubscriptionHealth(const CameraConfig& cfg, CameraState& st) {
+  if (st.isOffline) {
+    // Already covered by the OFFLINE alert above - genuinely no response
+    // at all is a distinct, already-alerted condition, and this would just
+    // be a confusing second alert for the same underlying "not monitoring"
+    // state. Re-armed here so recovering from OFFLINE doesn't leave this
+    // pre-tripped and silent if the camera goes on to answer-but-never-
+    // subscribe again later.
+    st.subscriptionLostAlerted = false;
+    return;
+  }
+
+  // Reuses the same (already-clamped) threshold checkCameraOnlineStatus
+  // does - "hasn't been able to hold a subscription for as long as it
+  // would take to be considered OFFLINE" is exactly the bar this is meant
+  // to catch, without adding a whole separate dashboard field for it.
+  unsigned long threshold = safeOfflineThresholdMs(cfg);
+  if (millis() - st.lastSubscribedMs < threshold) {
+    st.subscriptionLostAlerted = false; // subscribed recently enough - re-arm
+    return;
+  }
+  if (st.subscriptionLostAlerted) return; // already alerted for this stretch
+
+  st.subscriptionLostAlerted = true;
+  Serial.printf("[%s] Responding, but hasn't held a working subscription in over %lus - no events can "
+                "be received.\n", cfg.name.c_str(), threshold / 1000UL);
+  logEvent(cfg.name + ": responding but not subscribed for over " + String(threshold / 60000UL) +
+           "m - not receiving events");
+  sendTelegramMessage("\xE2\x9A\xA0\xEF\xB8\x8F " + cfg.name + " is responding but hasn't held a working "
+                       "ONVIF subscription in over " + String(threshold / 60000UL) + " minute(s) - it is "
+                       "NOT receiving motion/tamper events. Check credentials, WS-Security mode, or the "
+                       "camera's ONVIF eventing support.");
+}
+
 // lastMotionMs/motionWatchdogTripped are same-task-only (see CameraState's
 // own comment) - this runs on the camera's own task, same as
 // checkCameraOnlineStatus above, no lock needed.
