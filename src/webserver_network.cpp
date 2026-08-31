@@ -132,19 +132,6 @@ String renderNetworkPanel(const String& prefillSsid) {
   return html;
 }
 
-// mDNS hostnames only support letters, digits, and hyphens - strip anything
-// else rather than rejecting the whole save, so a stray pasted space or dot
-// doesn't produce a hostname that silently fails to resolve.
-static String sanitizeHostname(const String& raw) {
-  String out;
-  out.reserve(raw.length());
-  for (size_t i = 0; i < raw.length(); i++) {
-    char c = raw[i];
-    if (isalnum((unsigned char)c) || c == '-') out += c;
-  }
-  return out;
-}
-
 void handleSaveNetwork(PsychicRequest* request, String& banner) {
   WifiCredentials creds = loadWifiCredentials(); // current values, so a blank field keeps them
 

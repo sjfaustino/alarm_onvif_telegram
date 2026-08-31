@@ -1,6 +1,7 @@
 #include "network_store.h"
 #include "secrets.h"
 #include <Preferences.h>
+#include <cctype>
 
 static const char* NVS_NAMESPACE = "netcfg";
 static const char* NVS_KEY_SSID   = "ssid";  // primary
@@ -18,6 +19,16 @@ static const char* NVS_KEY_NTPINT = "ntpint";
 static const char* NVS_KEY_TZ     = "posixtz";
 static const char* DEFAULT_HOSTNAME = "cameramonitor";
 static const char* DEFAULT_NTP_SERVER = "pool.ntp.org";
+
+String sanitizeHostname(const String& raw) {
+  String out;
+  out.reserve(raw.length());
+  for (size_t i = 0; i < raw.length(); i++) {
+    char c = raw[i];
+    if (isalnum((unsigned char)c) || c == '-') out += c;
+  }
+  return out;
+}
 
 WifiCredentials loadWifiCredentials() {
   Preferences prefs;

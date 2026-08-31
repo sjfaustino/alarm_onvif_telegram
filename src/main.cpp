@@ -421,9 +421,20 @@ void spawnCameraTask(size_t index) {
 static void startMonitoring() {
   setupTime();
 
-  if (MDNS.begin(g_wifiCredentials.hostname.c_str())) {
+  // Re-sanitized here, at the point of use, not just at the dashboard save
+  // (webserver_network.cpp's handleSaveNetwork already does this) - same
+  // "hand-edited/imported NVS blob bypasses the form entirely" reasoning
+  // as this project's numeric config clamps: config Import
+  // (webserver_security.cpp) writes WifiCredentials::hostname straight
+  // from an uploaded file via saveWifiCredentials, with no filtering of
+  // its own. An unsanitized character here wouldn't crash anything - it
+  // would just silently fail to resolve (see sanitizeHostname's own
+  // comment, network_store.h) - the existing failure branch below already
+  // covers "resulted in nothing usable".
+  String safeHostname = sanitizeHostname(g_wifiCredentials.hostname);
+  if (MDNS.begin(safeHostname.c_str())) {
     MDNS.addService("http", "tcp", 80);
-    Serial.printf("mDNS: reachable at http://%s.local/\n", g_wifiCredentials.hostname.c_str());
+    Serial.printf("mDNS: reachable at http://%s.local/\n", safeHostname.c_str());
   } else {
     Serial.println("WARNING: mDNS.begin() failed - the .local hostname won't resolve; "
                     "the IP address still works.");

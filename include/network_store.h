@@ -55,3 +55,15 @@ WifiCredentials loadWifiCredentials();
 // Overwrites the persisted WiFi credentials + hostname. Pass the existing
 // value for any field to leave it unchanged.
 bool saveWifiCredentials(const WifiCredentials& creds);
+
+// mDNS hostnames only support letters, digits, and hyphens - strips
+// anything else rather than rejecting the whole value, so a stray pasted
+// space or dot doesn't produce a hostname that silently fails to resolve.
+// Shared (not just webserver_network.cpp's own form-save path) so
+// main.cpp's MDNS.begin() call can re-sanitize at the actual point of use
+// too - config Import (webserver_security.cpp's applyConfigImport) writes
+// WifiCredentials::hostname straight from an uploaded file via
+// saveWifiCredentials, bypassing the dashboard form (and this filter)
+// entirely, same "hand-edited/imported NVS blob bypasses the form"
+// reasoning as this project's numeric config clamps (config.h).
+String sanitizeHostname(const String& raw);

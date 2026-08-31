@@ -715,7 +715,20 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
         renderShell(Tab::Firmware, "Firmware accepted - rebooting now, this page will stop responding.",
                     "<p class=\"hint\">Reconnect in about 15 seconds.</p>")
             .c_str());
-    xTaskCreate(delayedRebootTask, "otaReboot", 2048, nullptr, 1, nullptr);
+    // The response above already promised a reboot is coming, and
+    // Update.end(true) already committed the new image as bootable - if
+    // task creation fails here (out of memory, plausible right after a
+    // multi-hundred-KB firmware upload), nothing else will ever call
+    // ESP.restart() and the new firmware silently never takes effect until
+    // some unrelated later reboot. No user-facing recovery is possible at
+    // this point (the response is already sent) - logging loudly is the
+    // best available: a manual reboot (Maintenance page, once memory frees
+    // up) is what actually applies the update.
+    if (xTaskCreate(delayedRebootTask, "otaReboot", 2048, nullptr, 1, nullptr) != pdPASS) {
+      Serial.println("[Firmware] ERROR: failed to start the post-update reboot task (out of memory?) - "
+                      "the new firmware is flashed but the board will NOT reboot on its own. Reboot "
+                      "manually from the Maintenance page once memory frees up.");
+    }
     return result;
   });
   server.on("/firmware/update", HTTP_POST, otaHandler);
@@ -731,7 +744,13 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
         renderShell(Tab::Maintenance, "Rebooting now - reconnect in about 15-20 seconds.",
                     renderMaintenancePanel())
             .c_str());
-    xTaskCreate(delayedRebootTask, "maintReboot", 2048, nullptr, 1, nullptr);
+    // See the OTA reboot handler's own comment above (/firmware/update) -
+    // same failure mode, no user-facing recovery possible once the
+    // response above is already sent, so just log loudly.
+    if (xTaskCreate(delayedRebootTask, "maintReboot", 2048, nullptr, 1, nullptr) != pdPASS) {
+      Serial.println("[Maintenance] ERROR: failed to start the reboot task (out of memory?) - the "
+                      "board will NOT reboot. Try again once memory frees up, or power-cycle manually.");
+    }
     return result;
   });
 
