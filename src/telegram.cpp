@@ -205,7 +205,18 @@ static bool readTelegramResponse(WiFiClientSecure& client) {
   while (client.available()) fullResponse += (char)client.read();
   client.stop();
 
-  String statusLine = fullResponse.substring(0, fullResponse.indexOf('\n'));
+  int lineEnd = fullResponse.indexOf('\n');
+  if (lineEnd < 0) {
+    // No newline at all - a malformed/truncated response, not a real HTTP
+    // status line. String::substring(0, -1) would otherwise clamp to the
+    // WHOLE response and scan the entire body for "200", which could match
+    // incidentally inside body text (e.g. a chat ID or byte count) and
+    // misreport a failed send as successful. Treated as a failure, same as
+    // the "no response within timeout" case above.
+    Serial.println("Telegram sendPhoto FAILED: no status line in response.");
+    return false;
+  }
+  String statusLine = fullResponse.substring(0, lineEnd);
   bool ok = statusLine.indexOf("200") > 0;
   Serial.println(ok ? "Telegram sendPhoto OK" : "Telegram sendPhoto FAILED: " + statusLine);
   return ok;
