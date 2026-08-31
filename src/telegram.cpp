@@ -1,5 +1,6 @@
 #include "telegram.h"
 #include "config.h" // CAMERA_ALERT_COOLDOWN_MAX_MS/CAMERA_OFFLINE_THRESHOLD_MAX_MS/CAMERA_SNAPSHOT_BURST_MAX
+#include "subscription_health.h"
 #include "telegram_ca.h"
 #include "telegram_users.h"
 #include "telegram_parse.h"
@@ -773,29 +774,20 @@ void checkCameraOnlineStatus(const CameraConfig& cfg, CameraState& st) {
 // checkCameraOnlineStatus above, no lock needed. isOffline itself is a
 // same-task self-read here too - see checkCameraOnlineStatus's own comment.
 void checkSubscriptionHealth(const CameraConfig& cfg, CameraState& st) {
-  if (st.isOffline) {
-    // Already covered by the OFFLINE alert above - genuinely no response
-    // at all is a distinct, already-alerted condition, and this would just
-    // be a confusing second alert for the same underlying "not monitoring"
-    // state. Re-armed here so recovering from OFFLINE doesn't leave this
-    // pre-tripped and silent if the camera goes on to answer-but-never-
-    // subscribe again later.
-    st.subscriptionLostAlerted = false;
-    return;
-  }
-
   // Reuses the same (already-clamped) threshold checkCameraOnlineStatus
   // does - "hasn't been able to hold a subscription for as long as it
   // would take to be considered OFFLINE" is exactly the bar this is meant
-  // to catch, without adding a whole separate dashboard field for it.
+  // to catch, without adding a whole separate dashboard field for it. The
+  // actual alert-once/re-arm decision is pure logic (subscription_health.h),
+  // natively tested (test/test_subscription_health) - this function is just
+  // the FreeRTOS/CameraState/Telegram glue around it.
   unsigned long threshold = safeOfflineThresholdMs(cfg);
-  if (millis() - st.lastSubscribedMs < threshold) {
-    st.subscriptionLostAlerted = false; // subscribed recently enough - re-arm
-    return;
-  }
-  if (st.subscriptionLostAlerted) return; // already alerted for this stretch
+  SubscriptionHealthResult result =
+      evaluateSubscriptionHealth(st.isOffline, millis() - st.lastSubscribedMs, threshold,
+                                  st.subscriptionLostAlerted);
+  st.subscriptionLostAlerted = result.alerted;
+  if (!result.shouldAlert) return;
 
-  st.subscriptionLostAlerted = true;
   Serial.printf("[%s] Responding, but hasn't held a working subscription in over %lus - no events can "
                 "be received.\n", cfg.name.c_str(), threshold / 1000UL);
   logEvent(cfg.name + ": responding but not subscribed for over " + String(threshold / 60000UL) +
