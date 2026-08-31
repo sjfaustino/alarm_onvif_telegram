@@ -25,6 +25,11 @@ Arduino-ESP32/IDF releases.
   single standardized topic name for person/vehicle detection across vendors) is
   logged - to Serial and the Activity page - instead of silently dropped, so support
   for it can be added deliberately once you know what your camera actually sends.
+  Motion that keeps firing while the cooldown from the last photo is still running
+  doesn't just vanish - each suppressed event is counted, and once the cooldown
+  ends a single follow-up text reports how many more happened and over how many
+  seconds (measured to the last one actually suppressed, not the cooldown length
+  itself), so sustained motion is still visible without a full photo alert per event.
 - Per-camera recurring daily quiet hours (Cameras page edit form) mute motion
   Telegram alerts during a configured window - tamper and signal-loss alerts stay
   always-on regardless, since those are security/connectivity-relevant, not
@@ -69,6 +74,16 @@ Arduino-ESP32/IDF releases.
   a rock-solid one in the live subscribed/OFFLINE status alone, so this is the
   one place that history is actually visible instead of silently resetting on
   every successful reconnect.
+- Stuck-subscription detection: OFFLINE (above) only catches a camera that stops
+  answering entirely - but a camera that answers every ONVIF call with a fault
+  (wrong credentials after a camera-side password change, a firmware update that
+  broke eventing, a WS-Security mismatch) keeps counting as "contact" and never
+  goes OFFLINE, while never actually holding a subscription either, so it can't
+  report a single motion/tamper/signal-loss event. A separate alert catches this:
+  if a camera has been responding but unable to hold a subscription for longer
+  than its own offline threshold, it fires once (re-arming once it subscribes
+  again), so this failure mode isn't silently invisible until you happen to
+  notice "NOT subscribed" in a heartbeat.
 - A "Test all cameras" button on the Cameras page checks reachability and
   ONVIF event-service response (GetCapabilities/GetEventProperties - not a
   full subscription test, to avoid disrupting the real subscription each
@@ -238,7 +253,21 @@ Arduino-ESP32/IDF releases.
   page also has a config export/backup - a plain-text download of every camera,
   Telegram user, and network setting (no passwords - those still have to be
   re-entered by hand), for reconstructing the tedious parts of the configuration
-  if NVS is ever erased or a board gets replaced.
+  if NVS is ever erased or a board gets replaced. A matching Import restores from
+  a previously exported file - a real file upload (not a size-limited form field,
+  so it scales to as many cameras/users as you actually have), REPLACING whichever
+  of the four sections (cameras, Telegram users, network, SD settings) the file
+  actually contains; a section missing from the file is left untouched. A file
+  with two cameras or two Telegram users sharing a name (or two users sharing a
+  Chat ID) is rejected outright for that section rather than importing an
+  ambiguous pair - the same rule the Add-camera/Add-user forms already enforce
+  one at a time. Every import automatically saves a one-slot backup of whatever
+  was stored just before it, downloadable from the same page, so importing the
+  wrong file is undoable by importing that backup back. Imported cameras/network
+  always have blank passwords (never in an export) - re-enter them before
+  rebooting, since network settings missing the WiFi password will otherwise
+  strand the board off the network entirely. Takes effect after a reboot, same
+  as any other bulk camera/network change.
 
 ## Hardware
 
@@ -381,6 +410,10 @@ include/
                        # erase-all, readability check) - thread-safe, hardware-dependent
   snapshot_history.h  # picks SD (sd_store.h) vs the PSRAM ring (camera.h) per camera - the
                        # one place that decision is made
+  background_job.h    # BackgroundJob<T> - mutex-guarded start/finish/status wrapper shared by
+                       # every "click a button, run on a task, poll for the result" dashboard
+                       # action (Test all cameras, Search network, WiFi scan, Test Connection,
+                       # send test message, storage check/erase)
   webserver.h       # sidebar dashboard - Network/Cameras/Users/Activity/Gallery/System (Firmware,
                      # Maintenance, Storage)/Security (PsychicHttp)
   webserver_network.h, webserver_cameras.h, webserver_users.h, webserver_activity.h,
@@ -427,6 +460,15 @@ lib/                 # pure-logic modules with no hardware dependencies, split o
   telegram_parse/         # Telegram JSON escaping, /on,/off,/snap camera-name matching, and
                            # /on,/off timer-token parsing (minutes or HH:MM)
   telegram_multipart/     # multipart/form-data body construction for Telegram's sendPhoto
+  network_serialize/      # WifiCredentials <-> NVS blob (de)serialization, schema-versioned -
+                           # same shape as camera_serialize/telegram_user_serialize, passwords
+                           # never included
+  config_import_parse/    # parses the Security page's exported config text back into
+                           # CameraConfig/TelegramUser/WifiCredentials/SdSettings for Import
+  background_job_state/   # pure start/finish/failed-to-start transition rules behind
+                           # BackgroundJob<T> (include/background_job.h)
+  subscription_health/    # alert-once/re-arm decision logic behind the stuck-subscription
+                           # alert (telegram.cpp's checkSubscriptionHealth)
   backoff/                # the doubling-with-a-cap retry delay formula (shared by main.cpp,
                            # camera.cpp, and webserver.cpp's login rate-limiter)
   quiet_hours/              # recurring daily do-not-disturb window predicate (start/end minute
@@ -484,6 +526,16 @@ alongside the firmware build.
   containing both a false `MotionAlarm` and a true `TamperDetector` topic would
   currently trigger on the wrong one. See the comment above `parseEvents()` in
   `src/camera.cpp`.
+- Every background-task button (Test all cameras, Search network, WiFi scan, Test
+  Connection, send test message, storage check/erase) checks whether its
+  underlying FreeRTOS task actually started before telling you it did - genuine
+  memory pressure can make task creation itself fail, and the dashboard now says
+  so (and rolls the button back to retryable) instead of leaving it silently
+  stuck as "running" forever or claiming success it never achieved. The two
+  routes that trigger a reboot (a firmware update, and the Maintenance page's
+  reboot button) log clearly to Serial on the same kind of failure, since by
+  then the page has already told you a reboot is coming and there's no way to
+  correct that response after the fact.
 
 ## License
 
