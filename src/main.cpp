@@ -388,18 +388,31 @@ static void checkHeapHealth() {
   if (r.shouldAlert) g_heapLowAlerted = true;
   if (!r.shouldLog) return;
 
+  // Largest single allocatable block, not just the free-byte total - same
+  // stat sendTelegramPhotoBuffered (telegram.cpp) already logs before every
+  // TLS send, for the same reason: a free-heap number much bigger than this
+  // one means a FRAGMENTED heap (plenty of free bytes, none of them
+  // contiguous enough for whatever allocation actually failed), a different
+  // problem to chase than genuinely low total memory.
+  uint32_t maxAlloc = ESP.getMaxAllocHeap();
+
   if (r.isNewLow) {
-    Serial.printf("New lifetime-low free heap: %u bytes.\n", (unsigned)r.baseline);
-    logEvent("New low free heap record: " + String(r.baseline) + " bytes");
+    Serial.printf("New lifetime-low free heap: %u bytes (largest block: %u).\n",
+                  (unsigned)r.baseline, (unsigned)maxAlloc);
+    logEvent("New low free heap record: " + String(r.baseline) + " bytes (largest block: " +
+             String(maxAlloc) + ")");
   } else {
-    Serial.printf("Free heap minimum so far this boot: %u bytes.\n", (unsigned)r.baseline);
-    logEvent("Free heap minimum so far this boot: " + String(r.baseline) + " bytes");
+    Serial.printf("Free heap minimum so far this boot: %u bytes (largest block: %u).\n",
+                  (unsigned)r.baseline, (unsigned)maxAlloc);
+    logEvent("Free heap minimum so far this boot: " + String(r.baseline) + " bytes (largest block: " +
+             String(maxAlloc) + ")");
   }
   if (r.shouldAlert) {
     sendTelegramMessage("\xE2\x9A\xA0\xEF\xB8\x8F Free (internal) heap hit a new low of " +
-                         String(r.baseline) + " bytes - getting close to allocation-failure "
-                         "territory. Check the Activity log around this time for what else was "
-                         "happening (a motion burst, several cameras reconnecting, ...).");
+                         String(r.baseline) + " bytes (largest allocatable block: " + String(maxAlloc) +
+                         " bytes) - getting close to allocation-failure territory. Check the Activity "
+                         "log around this time for what else was happening (a motion burst, several "
+                         "cameras reconnecting, ...).");
   }
 }
 

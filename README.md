@@ -68,9 +68,13 @@ Arduino-ESP32/IDF releases.
   tick - cheap, `ESP.getMinFreeHeap()` is a running watermark the IDF already
   tracks on its own), an Activity log entry is written, so a slow leak or a
   sudden allocation burst (a multi-camera TLS spike, say) can be correlated
-  against whatever else was happening around the same time. Also sends a
-  one-time Telegram alert the first time a new low crosses a genuinely
-  concerning threshold (20KB free internal RAM, `HEAP_LOW_WARN_BYTES` -
+  against whatever else was happening around the same time. Each entry also
+  notes the largest single allocatable block alongside the free-byte total
+  (same stat already logged before every Telegram photo send) - a free
+  total much bigger than that block means a fragmented heap, a different
+  problem to chase than genuinely low total memory. Also sends a one-time
+  Telegram alert the first time a new low crosses a genuinely concerning
+  threshold (20KB free internal RAM, `HEAP_LOW_WARN_BYTES` -
   `WiFiClientSecure`/mbedTLS allocate from this same pool) - real allocation-
   failure territory, not a sanity nicety.
 - Offline camera detection: if a camera goes without answering *any* SOAP request
