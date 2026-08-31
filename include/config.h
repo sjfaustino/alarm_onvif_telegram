@@ -77,6 +77,23 @@ static const unsigned long WIFI_RSSI_CHECK_INTERVAL_MS = 15UL * 60UL * 1000UL; /
 // still time to do something about it (move the board/AP, reconsider
 // channel/placement), not just note that it already happened.
 static const int WIFI_RSSI_WARN_DBM = -75;
+// Free-heap threshold (bytes, ESP.getMinFreeHeap() - internal SRAM, not
+// PSRAM) below which checkHeapHealth() (main.cpp) sends a one-time Telegram
+// alert the first time a new lifetime-low record crosses it. mbedTLS/
+// WiFiClientSecure allocate from this same pool (see g_telegramNetMutex's
+// own comment, telegram.cpp), so a genuinely low reading here is real
+// allocation-failure territory, not a sanity nicety - 20KB is comfortably
+// above a single TLS handshake's typical needs, so crossing it is an early
+// warning, not already-crashed. No re-arm: this is a running minimum
+// (never increases within a boot), so "already alerted" only ever resets
+// on the next reboot.
+static const uint32_t HEAP_LOW_WARN_BYTES = 20000;
+// How often main.cpp's loop() re-checks ESP.getMinFreeHeap() - cheap (a
+// stored-value read, no computation), checked every loop() tick rather
+// than gated behind an interval like the checks above: this is a running
+// watermark the IDF already tracks continuously, so checking often costs
+// nothing and only improves how closely the resulting Activity log
+// timestamp lines up with whatever actually caused the drop.
 static const size_t        SNAPSHOT_MAX_BYTES       = 100000;        // internal-RAM fallback cap - see note below
 static const size_t        SNAPSHOT_MAX_BYTES_PSRAM = 2000000UL;     // PSRAM buffer cap - generous; real snapshots are far smaller
 static const bool          VERBOSE_SOAP_LOG         = false;         // flip true to debug one camera at a time

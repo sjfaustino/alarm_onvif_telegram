@@ -21,6 +21,7 @@
 #include "event_log_store.h"
 #include "camera_tasks.h"
 #include "sd_store.h"
+#include "heap_health.h"
 
 static std::vector<CameraConfig> g_cameras;
 static std::vector<CameraState> g_cameraStates;
@@ -39,6 +40,13 @@ static unsigned long lastWifiRssiCheckMs = 0;
 // Same alert-once-per-transition/re-arm shape as g_nvsUsageAlerted above,
 // for checkWifiSignal() instead of checkNvsUsage().
 static bool g_wifiRssiWeakAlerted = false;
+
+// checkHeapHealth()'s own state - see evaluateHeapHealth's own comment
+// (lib/heap_health) for why this never re-arms (a lifetime-low watermark
+// only ever decreases within a boot, unlike NVS usage/WiFi RSSI above).
+static bool g_heapBaselineSet = false;
+static uint32_t g_heapBaseline = 0;
+static bool g_heapLowAlerted = false;
 
 // True once startMonitoring() has actually run - see its comment for why
 // this can happen later than setup() if WiFi wasn't up yet at boot.
@@ -364,6 +372,37 @@ static void checkWifiSignal() {
   }
 }
 
+// /health and the heartbeat already show ESP.getMinFreeHeap() as a bare
+// number with no context - this gives it a timestamped trail instead, so a
+// slow leak or a sudden burst (a multi-camera TLS/allocation spike) can
+// actually be correlated against what else was happening in the Activity
+// log around the same time. See evaluateHeapHealth's own comment
+// (lib/heap_health) for the pure decision logic this wraps; called every
+// loop() tick, not gated behind an interval - see HEAP_LOW_WARN_BYTES'
+// own comment (config.h) for why that's cheap enough to do unconditionally.
+static void checkHeapHealth() {
+  HeapHealthResult r = evaluateHeapHealth(ESP.getMinFreeHeap(), g_heapBaselineSet, g_heapBaseline,
+                                           HEAP_LOW_WARN_BYTES, g_heapLowAlerted);
+  g_heapBaselineSet = true;
+  g_heapBaseline = r.baseline;
+  if (r.shouldAlert) g_heapLowAlerted = true;
+  if (!r.shouldLog) return;
+
+  if (r.isNewLow) {
+    Serial.printf("New lifetime-low free heap: %u bytes.\n", (unsigned)r.baseline);
+    logEvent("New low free heap record: " + String(r.baseline) + " bytes");
+  } else {
+    Serial.printf("Free heap minimum so far this boot: %u bytes.\n", (unsigned)r.baseline);
+    logEvent("Free heap minimum so far this boot: " + String(r.baseline) + " bytes");
+  }
+  if (r.shouldAlert) {
+    sendTelegramMessage("\xE2\x9A\xA0\xEF\xB8\x8F Free (internal) heap hit a new low of " +
+                         String(r.baseline) + " bytes - getting close to allocation-failure "
+                         "territory. Check the Activity log around this time for what else was "
+                         "happening (a motion burst, several cameras reconnecting, ...).");
+  }
+}
+
 // Spawns g_cameras[index]'s monitoring task - see camera_tasks.h for the
 // external-linkage contract (index must already be a valid, existing slot;
 // this never grows g_cameras/g_cameraStates, only starts a task for a slot
@@ -587,6 +626,12 @@ void setup() {
 
 void loop() {
   esp_task_wdt_reset(); // feed the watchdog armed in initWatchdog() - see its comment
+
+  // Every tick, not gated behind an interval or WiFi.status() - see
+  // checkHeapHealth's own comment for why that's cheap, and
+  // checkScheduledAlertReverts below for the same "runs regardless of WiFi"
+  // reasoning (a heap event during an outage should still get a timestamp).
+  checkHeapHealth();
 
   // loop() alone owns WiFi connect/reconnect - camera tasks only ever read
   // WiFi.status(), never call WiFi.begin(). g_wifiRetryDueMs is the backoff

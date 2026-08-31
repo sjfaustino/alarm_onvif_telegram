@@ -63,6 +63,16 @@ Arduino-ESP32/IDF releases.
   a steady minimum means normal overhead, a minimum that keeps dropping means a
   leak - and per-camera subscription status) so a silently hung, endlessly-retrying,
   or slowly leaking board doesn't go unnoticed.
+- That lifetime-minimum free heap number gets a timestamped trail, not just a
+  bare figure: every time it drops to a new record low (checked every `loop()`
+  tick - cheap, `ESP.getMinFreeHeap()` is a running watermark the IDF already
+  tracks on its own), an Activity log entry is written, so a slow leak or a
+  sudden allocation burst (a multi-camera TLS spike, say) can be correlated
+  against whatever else was happening around the same time. Also sends a
+  one-time Telegram alert the first time a new low crosses a genuinely
+  concerning threshold (20KB free internal RAM, `HEAP_LOW_WARN_BYTES` -
+  `WiFiClientSecure`/mbedTLS allocate from this same pool) - real allocation-
+  failure territory, not a sanity nicety.
 - Offline camera detection: if a camera goes without answering *any* SOAP request
   for longer than its own offline threshold (per-camera, default 5 minutes), it's
   flagged OFFLINE and an immediate Telegram alert goes out (and another when it
@@ -469,6 +479,8 @@ lib/                 # pure-logic modules with no hardware dependencies, split o
                            # BackgroundJob<T> (include/background_job.h)
   subscription_health/    # alert-once/re-arm decision logic behind the stuck-subscription
                            # alert (telegram.cpp's checkSubscriptionHealth)
+  heap_health/             # new-record-low/threshold-alert decision logic behind the free-heap
+                           # trail (main.cpp's checkHeapHealth)
   backoff/                # the doubling-with-a-cap retry delay formula (shared by main.cpp,
                            # camera.cpp, and webserver.cpp's login rate-limiter)
   quiet_hours/              # recurring daily do-not-disturb window predicate (start/end minute
