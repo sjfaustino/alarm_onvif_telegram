@@ -155,6 +155,14 @@ struct CameraState {
   // motion continue after the photo, or was it a one-off" is answerable
   // without a photo per event.
   uint32_t suppressedMotionCount = 0;
+  // millis() of the MOST RECENT suppressed event counted above - lets
+  // checkPendingMotionDigest report how long motion actually continued for
+  // (last suppressed event minus the snapshot), not how long the cooldown
+  // window itself lasted - motion that stopped 10s into a 30s cooldown
+  // should say "10 seconds," not "30 seconds" just because that's when the
+  // digest happened to flush. Same-task-only, same reasoning as
+  // suppressedMotionCount above.
+  unsigned long lastSuppressedMotionMs = 0;
 
   // Copied once from cfg.user/cfg.pass by resolveCameraCredentials() at
   // startup. Safe as const char*: cfg lives in main.cpp's camera vector,

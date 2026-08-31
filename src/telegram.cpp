@@ -576,7 +576,10 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st) {
     // that branch below), so motion suppressed during a quiet stretch
     // doesn't get reported as "since the snapshot" when no snapshot was
     // actually sent to anyone. See checkPendingMotionDigest for the flush.
-    if (st.digestArmed) st.suppressedMotionCount++;
+    if (st.digestArmed) {
+      st.suppressedMotionCount++;
+      st.lastSuppressedMotionMs = nowMs; // when THIS event happened, not when the digest will flush
+    }
     return; // cooling down
   }
 
@@ -833,7 +836,7 @@ void checkMotionWatchdog(const CameraConfig& cfg, CameraState& st) {
 
 // Flushes triggerMotionAlert's suppressedMotionCount as one summary text
 // once the cooldown it accumulated during ends - so "5 more motion events
-// since the snapshot" (motion kept happening) and silence (it was a
+// in the last 30 seconds" (motion kept happening) and silence (it was a
 // one-off) are both visible, instead of every event after the first
 // simply vanishing until the next real send. digestArmed/
 // suppressedMotionCount are same-task-only (see their own comments,
@@ -844,6 +847,7 @@ void checkPendingMotionDigest(const CameraConfig& cfg, CameraState& st) {
 
   st.digestArmed = false; // one flush per cooldown cycle, whatever the count
   uint32_t count = st.suppressedMotionCount;
+  unsigned long lastSuppressedMotionMs = st.lastSuppressedMotionMs;
   st.suppressedMotionCount = 0;
   if (count == 0) return; // genuinely a one-off - nothing to report
 
@@ -859,10 +863,17 @@ void checkPendingMotionDigest(const CameraConfig& cfg, CameraState& st) {
   }
   if (recipients.empty()) return;
 
+  // Seconds, not a vaguer "since the last snapshot" - matches how a user
+  // sets alertCooldownSec on the Cameras page, so it's a unit they'll
+  // actually recognize. Measured from the snapshot to the LAST suppressed
+  // event, not to now (when the cooldown/digest happens to flush) - motion
+  // that actually stopped 10s into a 30s cooldown should say "10 seconds,"
+  // not "30 seconds" just because that's when this check next ran.
+  unsigned long elapsedSec = (lastSuppressedMotionMs - st.lastAlert) / 1000UL;
   String msg = cfg.name + ": motion continued - " + String(count) +
-               " more event(s) since the last snapshot.";
+               " more event(s) in the last " + String(elapsedSec) + " second(s).";
   for (auto& chatId : recipients) sendTelegramMessageTo(chatId, msg);
-  logEvent(cfg.name + ": motion digest - " + String(count) + " event(s) since last snapshot");
+  logEvent(cfg.name + ": motion digest - " + String(count) + " event(s) in " + String(elapsedSec) + "s");
 }
 
 // ============================================================
