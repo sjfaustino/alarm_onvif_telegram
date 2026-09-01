@@ -419,6 +419,23 @@ bool cameraSetupSequence(const CameraConfig& cfg, CameraState& st) {
 // alert on its own, with nothing actually wrong.
 static const unsigned long RETRY_BACKOFF_MAX_MS = 300000UL; // 5 minutes between retries
 
+// Clamped here, at the point of use, not just at the dashboard save
+// (webserver_cameras.cpp's parseCameraForm clamps user input to
+// [CAMERA_POLL_INTERVAL_MIN_MS, CAMERA_POLL_INTERVAL_MAX_MS]) - same
+// "hand-edited/imported NVS blob bypasses the form entirely" reasoning as
+// this project's other per-camera clamps (telegram.cpp's
+// safeAlertCooldownMs and siblings). A value near 0 here wouldn't just
+// poll aggressively - every SOAP call sends "Connection: close"
+// (onvif_soap.cpp), so it would open and tear down a fresh TCP connection
+// to the camera in a tight loop, real hammering on a device whose
+// embedded HTTP stack may only tolerate one or two connections at all.
+static unsigned long safePollIntervalMs(const CameraConfig& cfg) {
+  unsigned long ms = cfg.pollIntervalMs;
+  if (ms < CAMERA_POLL_INTERVAL_MIN_MS) ms = CAMERA_POLL_INTERVAL_MIN_MS;
+  if (ms > CAMERA_POLL_INTERVAL_MAX_MS) ms = CAMERA_POLL_INTERVAL_MAX_MS;
+  return ms;
+}
+
 // ============================================================
 // Per-camera FreeRTOS task - one per enabled camera, created once in
 // setup() and pinned to core 1. Runs forever; never returns. Pinning to
@@ -547,7 +564,22 @@ void cameraTaskFn(void* pvParameters) {
       continue;
     }
 
-    if (!st.subscriptionActive) {
+    // A snapshot fetch (motion/tamper alert or timelapse capture on this
+    // same task, or an on-demand /snap from loop()'s task) has an HTTP GET
+    // in flight to this camera right now - skip this iteration's
+    // poll/renew/resubscribe entirely rather than risk a second concurrent
+    // connection to a camera whose embedded HTTP stack may only tolerate
+    // one or two at all. Retried next loop pass (10ms later), same as any
+    // other "not due yet" gate below - see CameraState::snapshotInFlight's
+    // own comment (camera.h). checkCameraOnlineStatus/checkSubscriptionHealth/
+    // checkMotionWatchdog/checkPendingMotionDigest below still run either
+    // way - none of them open a connection to the camera.
+    bool snapshotBusy;
+    { CameraStateLock lock(st); snapshotBusy = st.snapshotInFlight; }
+
+    if (snapshotBusy) {
+      // Nothing to do this pass - see the comment above.
+    } else if (!st.subscriptionActive) {
       unsigned long dueInterval = (st.retryDelayMs > 0) ? st.retryDelayMs : RETRY_INTERVAL_MS;
       if (millis() - st.lastRetry >= dueInterval) {
         // Jitter the retry timer (+/- up to 2s) so cameras that failed
@@ -599,7 +631,7 @@ void cameraTaskFn(void* pvParameters) {
       // themselves flip subscriptionActive back to false mid-iteration on
       // failure - this only ever advances past a pass that started subscribed.
       st.lastSubscribedMs = millis();
-      if (millis() - st.lastPull >= PULL_INTERVAL_MS) {
+      if (millis() - st.lastPull >= safePollIntervalMs(cfg)) {
         st.lastPull = millis();
         cameraPullMessages(cfg, st);
       }

@@ -19,15 +19,42 @@
 // ============================================================
 // Timing (all in ms unless noted)
 // ============================================================
-static const unsigned long PULL_INTERVAL_MS         = 2000UL;        // per-camera poll cadence you asked for
+// Default for CameraConfig::pollIntervalMs (Cameras page) - the per-camera
+// poll cadence, editable per camera since some cameras' embedded HTTP
+// stacks tolerate more frequent polling than others. This value is only
+// CameraConfig's own default member initializer now (an existing camera
+// loaded from a pre-pollIntervalMs schema record - see camera_serialize.h's
+// CAMERA_SCHEMA_VERSION comment - gets this too, so nothing changes for it
+// without an explicit edit); camera.cpp's actual poll-due check reads
+// cfg.pollIntervalMs (clamped - see safePollIntervalMs, camera.cpp), never
+// this constant directly.
+static const unsigned long PULL_INTERVAL_MS         = 2000UL;
 static const unsigned long SUBSCRIPTION_LIFETIME_MS = 4UL * 60UL * 1000UL;
 static const unsigned long RENEW_MARGIN_MS          = 60UL * 1000UL;
 static const unsigned long RETRY_INTERVAL_MS        = 10000UL;
 // See CameraState::pullAmbiguousStreak's own comment - how many
 // consecutive genuinely-unrecognized PullMessages responses in a row
-// force a resubscribe. At PULL_INTERVAL_MS's 2s cadence, 5 is ~10s of
-// tolerance for a transient hiccup before treating the pullpoint as dead.
+// force a resubscribe. At the default 2s poll cadence, 5 is ~10s of
+// tolerance for a transient hiccup before treating the pullpoint as dead -
+// proportionally longer in real time for a camera configured with a
+// longer pollIntervalMs, which is an acceptable tradeoff for whoever
+// deliberately chose that.
 static const uint8_t        PULL_MESSAGES_AMBIGUOUS_LIMIT = 5;
+// Clamp for CameraConfig::pollIntervalMs - webserver_cameras.cpp's
+// parseCameraForm clamps user input to this range; camera.cpp's
+// safePollIntervalMs re-clamps at the actual point of use, same
+// "hand-edited/imported NVS blob bypasses the form entirely" reasoning as
+// this project's other per-camera clamps (CAMERA_ALERT_COOLDOWN_MAX_MS
+// etc., above). The floor matters here specifically: every SOAP call in
+// this project sends "Connection: close" (onvif_soap.cpp's soapPost), so
+// an interval near 0 wouldn't just poll aggressively, it would open and
+// tear down a fresh TCP connection to the camera in a tight loop - real
+// hammering, not just "frequent," on a device whose embedded HTTP stack
+// may only tolerate 1-2 connections at all (see camera_tasks.h's own
+// staggered-boot comment for a real incident from exactly that class of
+// overload).
+static const unsigned long CAMERA_POLL_INTERVAL_MIN_MS = 250UL;
+static const unsigned long CAMERA_POLL_INTERVAL_MAX_MS = 30000UL; // 30s
 // See CameraState::lastSnapshotUriRetryMs's own comment - how often a
 // subscribed camera with a still-unresolved snapshotUri retries
 // GetProfiles/GetSnapshotUri. Not too aggressive: a camera whose Media

@@ -187,6 +187,21 @@ struct CameraState {
   // down at all now (it couldn't before this).
   bool stopRequested = false;
 
+  // True while fetchOneSnapshot (telegram.cpp) has an HTTP GET in flight to
+  // this specific camera - the single choke point every snapshot fetch
+  // goes through (motion/tamper alerts and timelapse capture on this
+  // camera's own task, on-demand /snap on loop()'s task). Set/cleared
+  // there, checked by cameraTaskFn before starting its own next scheduled
+  // PullMessages poll, subscription renewal, or resubscribe attempt -
+  // skipping (not blocking - just retried next loop pass) rather than
+  // risking a second concurrent HTTP connection to a camera whose embedded
+  // stack may only tolerate one or two at all (see camera_tasks.h's own
+  // staggered-boot comment for a real incident from exactly that class of
+  // overload). Cross-task by construction (the two call sites above are on
+  // different tasks), so this is lock-guarded like every other field in
+  // this comment block, not same-task-only.
+  bool snapshotInFlight = false;
+
   // A ring of the most recently sent snapshots' raw JPEG bytes (motion,
   // tamper, on-demand /snap), so the dashboard can show a timeline without
   // a fresh fetch. Owned by this struct - pushSnapshotHistory
@@ -203,9 +218,10 @@ struct CameraState {
 
   // Guards subscriptionActive, isOffline, alertsEnabled, hasAlerted,
   // lastAlert, snapshotUri, user, pass, scheduledRevertDueMs,
-  // scheduledRevertToOn, pendingConfig, stopRequested, snapshotHistory
-  // (+Next/Count), lastContactMs, totalReconnects, reconnectHistory
-  // (+Next/Count), and offlineHistory (+Next/Count) - the fields both written by this
+  // scheduledRevertToOn, pendingConfig, stopRequested, snapshotInFlight,
+  // snapshotHistory (+Next/Count), lastContactMs, totalReconnects,
+  // reconnectHistory (+Next/Count), and offlineHistory (+Next/Count) - the
+  // fields both written by this
   // camera's own task and read/written from another task (webserver.cpp's
   // dashboard render and /cameras/snapshot route, main.cpp's heartbeat,
   // telegram.cpp's /on /off /snap handling, checkScheduledAlertReverts,

@@ -2,6 +2,7 @@
 #include <Arduino.h>
 #include <vector>
 #include <functional>
+#include "config.h" // PULL_INTERVAL_MS - CameraConfig::pollIntervalMs's own default
 
 // A camera's full configuration - persisted in NVS (Preferences, namespace
 // "camstore") so cameras can be added/deleted at runtime via the web UI.
@@ -74,6 +75,14 @@ struct CameraConfig {
   // the same way as an alert snapshot (SD if active, RAM ring otherwise) -
   // never sent to Telegram. 0 = off (default).
   uint16_t timelapseIntervalMin = 0;
+
+  // How often this camera's own task asks "anything new?" via ONVIF
+  // PullMessages (camera.cpp's cameraTaskFn) - lower means motion is
+  // noticed sooner (PullMessages' own PT1S long-poll is designed for
+  // frequent re-polling), at the cost of more frequent SOAP round-trips to
+  // this specific camera. Per-camera, not global, since cheaper embedded
+  // HTTP stacks tolerate more frequent polling worse than others do.
+  unsigned long pollIntervalMs = PULL_INTERVAL_MS;
 };
 
 // Loads the camera list from NVS, seeding once from CAMERA_SEED in

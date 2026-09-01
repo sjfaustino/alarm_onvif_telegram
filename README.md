@@ -12,7 +12,16 @@ Arduino-ESP32/IDF releases.
 ## Features
 
 - Polls each enabled camera's ONVIF PullPoint subscription on its own FreeRTOS task
-  (parallel, not round-robin) and auto-resubscribes/retries on failure.
+  (parallel, not round-robin) and auto-resubscribes/retries on failure. The poll
+  interval is per-camera and dashboard-editable (default 2000ms - see the Cameras
+  page below), since PullMessages' own 1-second long-poll is designed for frequent
+  re-polling and some cameras notice motion sooner with a shorter interval, while a
+  cheaper camera's embedded HTTP stack may not tolerate that as well as a more
+  capable one does. Whenever a snapshot fetch (a motion/tamper photo, a timelapse
+  capture, or an on-demand `/snap`) is in flight to a given camera, that camera's
+  own task skips its next scheduled poll/renewal/resubscribe attempt rather than
+  risk a second concurrent HTTP connection to the same device - some embedded
+  camera stacks only tolerate one or two connections at all.
 - Sends a Telegram alert on motion, tamper, and video signal-loss events, per-camera
   cooldown (one shared budget across all three) to avoid spam. Motion alerts include
   a photo, JPEG buffered once in PSRAM and resent to every Telegram user subscribed
@@ -384,7 +393,11 @@ has, on the PSRAM-only ring, without one.
      (minimum seconds between Telegram alerts for that camera, default 30s), offline
      threshold (minutes without a response before it's flagged OFFLINE, default 5),
      snapshots per alert (1-10, default 1 - that many consecutive fresh-fetched photos
-     instead of just one, for extra context on why an alert fired), and any per-camera
+     instead of just one, for extra context on why an alert fired), poll interval
+     (milliseconds, 250-30000, default 2000 - how often this camera is asked "anything
+     new?" via ONVIF PullMessages; lower notices motion sooner at the cost of more
+     frequent requests to that camera, so a cheaper camera's embedded HTTP stack may
+     tolerate a shorter interval worse than a more capable one does), and any per-camera
      quirk flags (the form documents what each one does). A Test
      Connection button runs a live check against whatever's currently in the form
      (GetCapabilities, event service, snapshot URI) without saving anything, so a

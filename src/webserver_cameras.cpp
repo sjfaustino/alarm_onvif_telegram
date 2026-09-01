@@ -107,6 +107,12 @@ static String renderCameraForm(const CameraConfig& v, bool isEdit) {
           "fires, each a fresh fetch from the camera; raise it to see more of what led up to the alert"
           "<input type=\"text\" name=\"snapshotBurstCount\" value=\"" + String(v.snapshotBurstCount) +
           "\"></label>";
+  html += "<label>Poll interval, ms, " + String(CAMERA_POLL_INTERVAL_MIN_MS) + "-" +
+          String(CAMERA_POLL_INTERVAL_MAX_MS) + " (how often this camera is asked \"anything new?\" - "
+          "lower notices motion sooner, at the cost of more frequent requests to this camera; some "
+          "cheaper cameras' embedded HTTP stacks tolerate that worse than others)"
+          "<input type=\"text\" name=\"pollIntervalMs\" value=\"" + String(v.pollIntervalMs) +
+          "\"></label>";
   html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"quietHoursEnabled\"" +
           String(v.quietHoursEnabled ? " checked" : "") +
           "> Quiet hours (mutes motion alerts only - tamper/offline still alert)</label>";
@@ -455,6 +461,22 @@ CameraConfig parseCameraForm(PsychicRequest* request) {
   if (timelapseMin < 0) timelapseMin = 0;
   if (timelapseMin > 1440) timelapseMin = 1440; // 24h
   c.timelapseIntervalMin = (uint16_t)timelapseMin;
+
+  // A blank/zero/negative field shouldn't produce a near-0 interval that
+  // hammers the camera (see CAMERA_POLL_INTERVAL_MIN_MS's own comment,
+  // config.h) - fall back to CameraConfig's own default instead, same
+  // reasoning as alertCooldownSec/offlineThresholdMin above. A positive
+  // value that's merely too low is clamped UP to the floor rather than
+  // discarded outright - the user clearly wants it fast, just not unsafely
+  // so. This is a form-input sanity bound, not the only guard - see
+  // camera.cpp's safePollIntervalMs for the point-of-use clamp that also
+  // covers a value that bypassed this form entirely (a hand-edited/
+  // imported NVS blob).
+  long pollIntervalMs = request->getParam("pollIntervalMs", "2000").toInt();
+  if (pollIntervalMs <= 0) pollIntervalMs = (long)CameraConfig().pollIntervalMs;
+  if (pollIntervalMs < (long)CAMERA_POLL_INTERVAL_MIN_MS) pollIntervalMs = (long)CAMERA_POLL_INTERVAL_MIN_MS;
+  if (pollIntervalMs > (long)CAMERA_POLL_INTERVAL_MAX_MS) pollIntervalMs = (long)CAMERA_POLL_INTERVAL_MAX_MS;
+  c.pollIntervalMs = (unsigned long)pollIntervalMs;
 
   return c;
 }

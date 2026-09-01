@@ -456,12 +456,40 @@ bool sendTelegramMessage(const String& text) {
   return anyOk;
 }
 
+// RAII guard for CameraState::snapshotInFlight (camera.h) - guarantees the
+// flag clears on every exit path out of fetchOneSnapshot below (several
+// early returns on failure), same reasoning CameraStateLock/TelegramNetLock
+// already apply to their own resources. camera.cpp's cameraTaskFn checks
+// this flag before starting its own next poll/renew/resubscribe, so a
+// fetch that set the flag true but never cleared it on an overlooked exit
+// path would silently wedge that camera's own polling forever - not a
+// theoretical concern, exactly the class of bug this whole codebase has
+// hunted down repeatedly for other "started but might not reach the
+// matching cleanup" resources this session.
+class SnapshotInFlightGuard {
+ public:
+  explicit SnapshotInFlightGuard(CameraState& state) : st_(state) {
+    CameraStateLock lock(st_);
+    st_.snapshotInFlight = true;
+  }
+  ~SnapshotInFlightGuard() {
+    CameraStateLock lock(st_);
+    st_.snapshotInFlight = false;
+  }
+  SnapshotInFlightGuard(const SnapshotInFlightGuard&) = delete;
+  SnapshotInFlightGuard& operator=(const SnapshotInFlightGuard&) = delete;
+
+ private:
+  CameraState& st_;
+};
+
 // Fetches exactly one snapshot from st.snapshotUri, buffered fully (see
 // fetchSnapshotBuffered). Returns nullptr (and logs) on any failure - HTTP
 // GET failure, or the buffer fetch itself failing. Caller must free() a
 // non-null result.
 static uint8_t* fetchOneSnapshot(const CameraConfig& cfg, CameraState& st, size_t& outLen) {
   outLen = 0;
+  SnapshotInFlightGuard snapshotGuard(st); // see its own comment - covers every return path below
 
   // snapshotUri/user/pass are written by this camera's own task
   // (camera.cpp) but this function is also called from loop()'s task via
