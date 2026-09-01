@@ -141,10 +141,24 @@ void test_classifyCameraEvent_value_false_is_not_anyTrue(void) {
   TEST_ASSERT_FALSE(ev.anyTrue);
 }
 
+// The specific vendor topic seen in the field (tns1:RuleEngine/
+// MyRuleDetector/PeopleDetect) - matched by the "PeopleDetect" substring,
+// same convention as MotionAlarm/CellMotionDetector/TamperDetector/SignalLoss.
+void test_classifyCameraEvent_detects_people_detect(void) {
+  String xml = "<wsnt:NotificationMessage><tt:Topic>tns1:RuleEngine/MyRuleDetector/PeopleDetect"
+               "</tt:Topic><tt:SimpleItem Name=\"State\" Value=\"true\"/></wsnt:NotificationMessage>";
+  auto ev = classifyCameraEvent(xml);
+  TEST_ASSERT_TRUE(ev.peopleDetect);
+  TEST_ASSERT_TRUE(ev.anyTrue);
+  TEST_ASSERT_FALSE(ev.motionAlarm);
+  TEST_ASSERT_FALSE(ev.cellMotion);
+}
+
 void test_classifyCameraEvent_no_recognized_topic(void) {
   auto ev = classifyCameraEvent("<a>SomeOtherTopic Value=\"true\"</a>");
   TEST_ASSERT_FALSE(ev.motionAlarm);
   TEST_ASSERT_FALSE(ev.cellMotion);
+  TEST_ASSERT_FALSE(ev.peopleDetect);
   TEST_ASSERT_FALSE(ev.signalLoss);
   TEST_ASSERT_FALSE(ev.tamper);
 }
@@ -182,6 +196,17 @@ void test_motionEventFired_true_when_motion_topic_itself_is_true_alongside_anoth
                "<tt:SimpleItem Name=\"State\" Value=\"false\"/></wsnt:NotificationMessage>"
                "<wsnt:NotificationMessage><tt:Topic>MotionAlarm</tt:Topic>"
                "<tt:SimpleItem Name=\"State\" Value=\"true\"/></wsnt:NotificationMessage>";
+  auto ev = classifyCameraEvent(xml);
+  TEST_ASSERT_TRUE(motionEventFired(xml, ev));
+}
+
+// PeopleDetect is a motion-relevant topic too, same as MotionAlarm/
+// CellMotionDetector - the specific case reported in the field
+// (tns1:RuleEngine/MyRuleDetector/PeopleDetect), previously only ever
+// logged as "unrecognized" and never fired an alert.
+void test_motionEventFired_true_for_people_detect_reporting_true(void) {
+  String xml = "<wsnt:NotificationMessage><tt:Topic>tns1:RuleEngine/MyRuleDetector/PeopleDetect"
+               "</tt:Topic><tt:SimpleItem Name=\"State\" Value=\"true\"/></wsnt:NotificationMessage>";
   auto ev = classifyCameraEvent(xml);
   TEST_ASSERT_TRUE(motionEventFired(xml, ev));
 }
@@ -260,8 +285,10 @@ int main(int argc, char** argv) {
   RUN_TEST(test_extractEventStateValue_missing_topic_returns_empty);
   RUN_TEST(test_classifyCameraEvent_detects_motion_alarm);
   RUN_TEST(test_classifyCameraEvent_value_false_is_not_anyTrue);
+  RUN_TEST(test_classifyCameraEvent_detects_people_detect);
   RUN_TEST(test_classifyCameraEvent_no_recognized_topic);
   RUN_TEST(test_motionEventFired_true_for_motion_alarm_reporting_true);
+  RUN_TEST(test_motionEventFired_true_for_people_detect_reporting_true);
   RUN_TEST(test_motionEventFired_false_when_only_an_unrelated_topic_is_true);
   RUN_TEST(test_motionEventFired_true_when_motion_topic_itself_is_true_alongside_another);
   RUN_TEST(test_motionEventFired_false_when_no_motion_topic_present);

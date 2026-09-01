@@ -287,7 +287,7 @@ static void printEventState(const CameraConfig& cfg, const String& xml, const St
 static void parseEvents(const CameraConfig& cfg, CameraState& st, const String& xml) {
   CameraEventClassification ev = classifyCameraEvent(xml);
   if (!ev.anyTrue && !VERBOSE_SOAP_LOG) return;
-  if (!ev.motionAlarm && !ev.cellMotion && !ev.signalLoss && !ev.tamper) {
+  if (!ev.motionAlarm && !ev.cellMotion && !ev.peopleDetect && !ev.signalLoss && !ev.tamper) {
     // A real notification arrived (not just an empty/heartbeat-ish
     // PullMessagesResponse - see the anyTrue/VERBOSE_SOAP_LOG guard above)
     // but none of the topics this project knows about were in it - e.g. a
@@ -304,10 +304,11 @@ static void parseEvents(const CameraConfig& cfg, CameraState& st, const String& 
     return;
   }
 
-  if (ev.motionAlarm) { Serial.printf("[%s] MOTION ALARM EVENT\n", cfg.name.c_str()); printEventState(cfg, xml, "MotionAlarm"); }
-  if (ev.cellMotion)  { Serial.printf("[%s] CELL MOTION EVENT\n", cfg.name.c_str());  printEventState(cfg, xml, "CellMotionDetector"); }
-  if (ev.signalLoss)  { Serial.printf("[%s] SIGNAL LOSS EVENT\n", cfg.name.c_str());  printEventState(cfg, xml, "SignalLoss"); }
-  if (ev.tamper)      { Serial.printf("[%s] TAMPER EVENT\n", cfg.name.c_str());       printEventState(cfg, xml, "TamperDetector"); }
+  if (ev.motionAlarm)  { Serial.printf("[%s] MOTION ALARM EVENT\n", cfg.name.c_str());  printEventState(cfg, xml, "MotionAlarm"); }
+  if (ev.cellMotion)   { Serial.printf("[%s] CELL MOTION EVENT\n", cfg.name.c_str());   printEventState(cfg, xml, "CellMotionDetector"); }
+  if (ev.peopleDetect) { Serial.printf("[%s] PEOPLE DETECT EVENT\n", cfg.name.c_str()); printEventState(cfg, xml, "PeopleDetect"); }
+  if (ev.signalLoss)   { Serial.printf("[%s] SIGNAL LOSS EVENT\n", cfg.name.c_str());   printEventState(cfg, xml, "SignalLoss"); }
+  if (ev.tamper)       { Serial.printf("[%s] TAMPER EVENT\n", cfg.name.c_str());        printEventState(cfg, xml, "TamperDetector"); }
 
   // Each check below uses topicReportedTrue's per-NotificationMessage
   // scoping, not ev.anyTrue/ev.signalLoss/ev.tamper alone - a body-wide
