@@ -564,6 +564,17 @@ void cameraTaskFn(void* pvParameters) {
       continue;
     }
 
+    // Confirmed subscribed as of the top of this pass - refreshed every
+    // iteration while subscribed, same "continuously refreshed while
+    // healthy" shape as cameraSoapCall's lastContactMs. Deliberately
+    // decoupled from the snapshotBusy skip below: we already KNOW the
+    // subscription is active here regardless of whether this particular
+    // pass's own poll/renew gets skipped, so checkSubscriptionHealth
+    // (which reads this unconditionally, skip or not) shouldn't see a
+    // camera that's actually fine start looking stale just because
+    // snapshot fetches happened to keep landing on consecutive passes.
+    if (st.subscriptionActive) st.lastSubscribedMs = millis();
+
     // A snapshot fetch (motion/tamper alert or timelapse capture on this
     // same task, or an on-demand /snap from loop()'s task) has an HTTP GET
     // in flight to this camera right now - skip this iteration's
@@ -625,12 +636,8 @@ void cameraTaskFn(void* pvParameters) {
       }
     } else {
       // Confirmed subscribed as of the top of this pass - refreshed every
-      // iteration while subscribed, same "continuously refreshed while
-      // healthy" shape as cameraSoapCall's lastContactMs. Deliberately
-      // BEFORE cameraPullMessages/cameraRenewSubscription below, which can
-      // themselves flip subscriptionActive back to false mid-iteration on
-      // failure - this only ever advances past a pass that started subscribed.
-      st.lastSubscribedMs = millis();
+      // lastSubscribedMs is already refreshed above (unconditionally,
+      // decoupled from the snapshotBusy skip) - nothing to do here for it.
       if (millis() - st.lastPull >= safePollIntervalMs(cfg)) {
         st.lastPull = millis();
         cameraPullMessages(cfg, st);
