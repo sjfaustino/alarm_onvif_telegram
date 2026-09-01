@@ -93,11 +93,12 @@ String extractEventStateValue(const String& xml, const String& topicKeyword) {
 CameraEventClassification classifyCameraEvent(const String& xml) {
   CameraEventClassification ev;
   ev.anyTrue = xml.indexOf("Value=\"true\"") >= 0;
-  ev.motionAlarm  = xml.indexOf("MotionAlarm") >= 0;
-  ev.cellMotion   = xml.indexOf("CellMotionDetector") >= 0;
-  ev.peopleDetect = xml.indexOf("PeopleDetect") >= 0;
-  ev.signalLoss   = xml.indexOf("SignalLoss") >= 0;
-  ev.tamper       = xml.indexOf("TamperDetector") >= 0;
+  ev.motionAlarm   = xml.indexOf("MotionAlarm") >= 0;
+  ev.cellMotion    = xml.indexOf("CellMotionDetector") >= 0;
+  ev.peopleDetect  = xml.indexOf("PeopleDetect") >= 0;
+  ev.vehicleDetect = xml.indexOf("VehicleDetect") >= 0;
+  ev.signalLoss    = xml.indexOf("SignalLoss") >= 0;
+  ev.tamper        = xml.indexOf("TamperDetector") >= 0;
   return ev;
 }
 
@@ -109,6 +110,7 @@ bool motionEventFired(const String& xml, const CameraEventClassification& ev) {
   if (ev.motionAlarm && topicReportedTrue(xml, "MotionAlarm")) return true;
   if (ev.cellMotion && topicReportedTrue(xml, "CellMotionDetector")) return true;
   if (ev.peopleDetect && topicReportedTrue(xml, "PeopleDetect")) return true;
+  if (ev.vehicleDetect && topicReportedTrue(xml, "VehicleDetect")) return true;
   return false;
 }
 

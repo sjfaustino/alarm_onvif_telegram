@@ -48,6 +48,10 @@ struct CameraEventClassification {
   // in the field), so this one specific vendor topic is matched by name
   // like MotionAlarm/CellMotionDetector are, not inferred generically.
   bool peopleDetect = false;
+  // Same idea as peopleDetect, for that RuleEngine's vehicle-detection cell
+  // ("tns1:RuleEngine/MyRuleDetector/VehicleDetect") - seen from the same
+  // camera in the field alongside PeopleDetect.
+  bool vehicleDetect = false;
   bool signalLoss = false;
   bool tamper = false;
 };
@@ -61,10 +65,10 @@ CameraEventClassification classifyCameraEvent(const String& xml);
 // loss firing checks, are built from.
 bool topicReportedTrue(const String& xml, const String& topicKeyword);
 
-// Whether a motion-relevant topic (MotionAlarm, CellMotionDetector, or
-// PeopleDetect) that classifyCameraEvent found present in this batch
-// *itself* reported State/IsMotion="true" - NOT ev.anyTrue, which is a
-// body-wide flag that a
+// Whether a motion-relevant topic (MotionAlarm, CellMotionDetector,
+// PeopleDetect, or VehicleDetect) that classifyCameraEvent found present in
+// this batch *itself* reported State/IsMotion="true" - NOT ev.anyTrue,
+// which is a body-wide flag that a
 // same-batch, unrelated topic (SignalLoss, TamperDetector) can set to true
 // while the motion topic's own state is actually false (e.g. "motion just
 // ended"). Checking ev.anyTrue alone - what camera.cpp's parseEvents used
