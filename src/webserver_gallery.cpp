@@ -94,8 +94,10 @@ static String renderCameraGrid(const String& cameraName, size_t page, std::vecto
   if (hasNewer || hasOlder) {
     String base = "/gallery?camera=" + urlEncode(cameraName) + "&page=";
     html += "<p>";
-    if (hasNewer) html += "<a href=\"" + base + String((unsigned)(page - 1)) + "\">&laquo; Newer</a> ";
-    if (hasOlder) html += "<a href=\"" + base + String((unsigned)(page + 1)) + "\">Older &raquo;</a>";
+    if (hasNewer) html += "<a href=\"" + base + String((unsigned)(page - 1)) + "\" class=\"secondary\">"
+                           "&laquo; Newer</a> ";
+    if (hasOlder) html += "<a href=\"" + base + String((unsigned)(page + 1)) + "\" class=\"secondary\">"
+                           "Older &raquo;</a>";
     html += "</p>";
   }
   return html;
