@@ -54,6 +54,13 @@ static String renderTelegramUserForm(const TelegramUser& v, const std::vector<Ca
   return html;
 }
 
+// Same badge-on/badge-off pattern as the Cameras page's "Enabled" column
+// (webserver_cameras.cpp) - lets a wide permissions table be scanned at a
+// glance instead of reading four "yes"/"no" text columns per row.
+static String yesNoBadge(bool v) {
+  return v ? "<span class=\"badge badge-on\">yes</span>" : "<span class=\"badge badge-off\">no</span>";
+}
+
 String renderUsersPanel(const TelegramUser* prefill, bool isEdit) {
   std::vector<TelegramUser> users = loadTelegramUsers();
   std::vector<CameraConfig> cams = loadCameras();
@@ -75,9 +82,9 @@ String renderUsersPanel(const TelegramUser* prefill, bool isEdit) {
     }
 
     html += "<tr><td>" + htmlEscape(u.name) + "</td><td>" + htmlEscape(u.chatId) + "</td><td>" +
-            camerasCol + "</td><td>" + (u.systemMessages ? "yes" : "no") + "</td><td>" +
-            (u.canCommand ? "yes" : "no") + "</td><td>" + (u.canSnap ? "yes" : "no") + "</td><td>" +
-            (u.canReset ? "yes" : "no") + "</td><td>";
+            camerasCol + "</td><td>" + yesNoBadge(u.systemMessages) + "</td><td>" +
+            yesNoBadge(u.canCommand) + "</td><td>" + yesNoBadge(u.canSnap) + "</td><td>" +
+            yesNoBadge(u.canReset) + "</td><td>";
     html += renderEditDeleteActions("/users/edit?name=", "/users/delete", u.name) + "</td></tr>";
   }
   html += "</table>";
