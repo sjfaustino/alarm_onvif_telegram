@@ -7,7 +7,7 @@ String renderEditDeleteActions(const String& editRouteBase, const String& delete
   html += "<form class=\"inline\" method=\"POST\" action=\"" + deleteRoute + "\" "
           "onsubmit=\"return confirm('Delete " + htmlEscape(itemName) + "?');\">";
   html += "<input type=\"hidden\" name=\"name\" value=\"" + htmlEscape(itemName) + "\">";
-  html += "<button type=\"submit\">Delete</button></form>";
+  html += "<button type=\"submit\" class=\"danger\">Delete</button></form>";
   return html;
 }
 

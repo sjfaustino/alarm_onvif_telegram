@@ -169,9 +169,27 @@ static String renderShell(Tab active, const String& banner, const String& conten
   String html;
   html += "<!DOCTYPE html><html><head><meta charset=\"utf-8\">";
   html += "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">";
+  // Inline base64 SVG data URI - a small camera-lens glyph in the same
+  // blue (#2563eb) as the sidebar/buttons, so browser tabs get a real icon
+  // instead of the default blank/globe placeholder. No separate asset file
+  // or route needed - the whole icon lives in this one string, same
+  // "self-contained, no external request" constraint as everything else
+  // on this dashboard.
+  html += "<link rel=\"icon\" type=\"image/svg+xml\" href=\"data:image/svg+xml;base64,"
+          "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj48cmVjdCB3aWR0"
+          "aD0iMTAwIiBoZWlnaHQ9IjEwMCIgcng9IjIyIiBmaWxsPSIjMjU2M2ViIi8+PGNpcmNsZSBjeD0iNTAiIGN5PSI0NiIgcj0i"
+          "MjIiIGZpbGw9Im5vbmUiIHN0cm9rZT0iI2ZmZiIgc3Ryb2tlLXdpZHRoPSI3Ii8+PGNpcmNsZSBjeD0iNTAiIGN5PSI0NiIg"
+          "cj0iOSIgZmlsbD0iI2ZmZiIvPjxyZWN0IHg9IjMwIiB5PSIyNCIgd2lkdGg9IjE2IiBoZWlnaHQ9IjkiIHJ4PSIzIiBmaWxs"
+          "PSIjZmZmIi8+PC9zdmc+\">";
   html += "<title>Camera Monitor v" + String(FIRMWARE_VERSION) + "</title><style>";
   html += "*{box-sizing:border-box;}";
-  html += "body{font-family:sans-serif;margin:0;display:flex;min-height:100vh;color:#222;}";
+  // System font stack, not the plain "sans-serif" fallback - costs nothing
+  // to serve (no font files, no external request - every name here is
+  // either built into the OS or the browser silently skips to the next),
+  // but reads as considerably less "unstyled default" than the generic
+  // fallback ever does.
+  html += "body{font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Roboto,Helvetica,Arial,"
+          "sans-serif;margin:0;display:flex;min-height:100vh;color:#222;}";
   html += ".sidebar{width:200px;flex-shrink:0;background:#1f2937;color:#e5e7eb;padding:20px 0;}";
   html += ".sidebar .brand{font-weight:bold;font-size:16px;padding:0 20px 20px;}";
   html += ".sidebar a{display:block;padding:10px 20px;color:#cbd5e1;text-decoration:none;font-size:14px;}";
@@ -196,6 +214,43 @@ static String renderShell(Tab active, const String& banner, const String& conten
   html += ".flipbook-img{display:none;max-width:160px;max-height:120px;vertical-align:middle;}";
   html += ".sidebar-parent{cursor:pointer;}";
   html += ".sidebar-submenu a{padding-left:36px;font-size:13px;}";
+  // Real button styling instead of the browser's own default gray, chunky,
+  // inconsistent-across-browsers rendering. Plain blue "primary" look by
+  // default (most buttons here are ordinary save/run actions); .danger
+  // overrides to red for the specific handful that are actually
+  // destructive or disruptive (delete, erase-all, reboot, firmware flash) -
+  // a visual reinforcement of the confirm() dialogs those already have,
+  // not a replacement for them.
+  html += "button{font-family:inherit;font-size:14px;padding:7px 14px;border-radius:6px;"
+          "border:1px solid #2563eb;background:#2563eb;color:#fff;cursor:pointer;"
+          "transition:background .15s,border-color .15s;}";
+  html += "button:hover{background:#1d4ed8;border-color:#1d4ed8;}";
+  html += "button:active{background:#1e40af;border-color:#1e40af;}";
+  html += "button:disabled{background:#93c5fd;border-color:#93c5fd;cursor:not-allowed;}";
+  html += "button.danger{background:#dc2626;border-color:#dc2626;}";
+  html += "button.danger:hover{background:#b91c1c;border-color:#b91c1c;}";
+  html += "button.danger:active{background:#991b1b;border-color:#991b1b;}";
+  // Plain/outlined look for a minor, frequently-clicked toggle (the
+  // Preview flipbook's Play/Stop button) that shouldn't visually compete
+  // with an actual primary action on the same page - replaces that
+  // button's old ad hoc reuse of .hint (which only ever set text color,
+  // fine when buttons were unstyled, not once the base button rule above
+  // gives every button a filled blue background by default).
+  html += "button.secondary{background:#fff;color:#374151;border-color:#d1d5db;}";
+  html += "button.secondary:hover{background:#f3f4f6;border-color:#9ca3af;}";
+  // Small colored status pills - .badge-on (healthy/enabled, green),
+  // .badge-warn (needs attention but not a hard failure - e.g. responding
+  // but not subscribed, see telegram.cpp's checkSubscriptionHealth - amber),
+  // .badge-offline (hard failure, red), .badge-off (a deliberate/intentional
+  // state, not a problem - e.g. muted or disabled - neutral gray). Lets a
+  // multi-camera table be scanned at a glance instead of reading a run-on
+  // status sentence per row.
+  html += ".badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;"
+          "font-weight:600;color:#fff;white-space:nowrap;}";
+  html += ".badge-on{background:#16a34a;}";
+  html += ".badge-warn{background:#d97706;}";
+  html += ".badge-offline{background:#dc2626;}";
+  html += ".badge-off{background:#6b7280;}";
   html += "</style></head><body>";
 
   // System submenu (Firmware/Maintenance) starts expanded whenever either

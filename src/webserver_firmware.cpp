@@ -72,7 +72,7 @@ String renderFirmwarePanel() {
           "Do not power it off while this runs.');\">";
   html += "<label>Firmware .bin (e.g. .pio/build/esp32s3/firmware.bin from `pio run -e esp32s3`)"
           "<input type=\"file\" name=\"firmware\" accept=\".bin\" required></label>";
-  html += "<p><button type=\"submit\">Upload &amp; Flash</button></p>";
+  html += "<p><button type=\"submit\" class=\"danger\">Upload &amp; Flash</button></p>";
   html += "</form></fieldset>";
 
   html += "<p class=\"hint\">The board reboots automatically once the upload finishes and the new "

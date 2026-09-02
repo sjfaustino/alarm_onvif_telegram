@@ -60,7 +60,7 @@ String renderStoragePanel() {
     html += "<form method=\"POST\" action=\"/storage/erase\" "
             "onsubmit=\"return confirm('Erase ALL stored snapshot history for every camera? "
             "This cannot be undone.');\">";
-    html += "<p><button type=\"submit\">Erase all snapshot history</button></p></form>";
+    html += "<p><button type=\"submit\" class=\"danger\">Erase all snapshot history</button></p></form>";
     html += "<p class=\"hint\">Deletes every snapshot this project has written, for every camera - "
             "not a low-level format of the card itself (this project's SD support can't do that "
             "through the library it uses), just this project's own files. Anything else on the "

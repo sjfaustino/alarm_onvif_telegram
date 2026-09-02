@@ -218,8 +218,19 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
           if (v > latencyMax) latencyMax = v;
         }
       }
-      liveStatus = subscribed ? "subscribed" : "not subscribed";
-      if (offline) liveStatus += " - OFFLINE";
+      // Three-state badge, not two - OFFLINE (red, hard failure - not
+      // answering at all) and "not subscribed" (amber - answering fine but
+      // can't hold a subscription, exactly the case checkSubscriptionHealth,
+      // telegram.cpp, exists to catch) are genuinely different situations,
+      // not degrees of the same one. ONLINE (green) only once both are
+      // clear.
+      if (offline) {
+        liveStatus = "<span class=\"badge badge-offline\">OFFLINE</span>";
+      } else if (subscribed) {
+        liveStatus = "<span class=\"badge badge-on\">ONLINE</span>";
+      } else {
+        liveStatus = "<span class=\"badge badge-warn\">NOT SUBSCRIBED</span>";
+      }
       // Shown regardless of whether it's currently back online - a camera
       // that's flapped offline/online repeatedly and happens to be online
       // again right now is exactly the case a live-status snapshot alone
@@ -230,7 +241,7 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
         liveStatus += " - went offline " + String((unsigned)recentOfflineEvents) +
                       (recentOfflineEvents == EVENT_HISTORY_RING_SIZE ? "+" : "") + " time(s) in the last 24h";
       }
-      if (!alertsEnabled) liveStatus += " (alerts OFF)";
+      if (!alertsEnabled) liveStatus += " <span class=\"badge badge-off\">MUTED</span>";
       // (long) cast for the same overflow-safe "is this due yet" check
       // used everywhere else a millis() due-timestamp is compared - see
       // CameraState::scheduledRevertDueMs's comment.
@@ -315,15 +326,15 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
         // comment (this panel's shared <script>, below the table) for the
         // play/pause toggle itself.
         if (historyCount > 1) {
-          previewCell += "<br><button type=\"button\" class=\"hint\" "
+          previewCell += "<br><button type=\"button\" class=\"secondary\" "
                          "onclick=\"playFlipbook(this,'" + flipbookUrls + "')\">\xE2\x96\xB6 Play</button> "
                          "<img class=\"flipbook-img\">"; // sized/hidden via the shell's .flipbook-img rule
         }
       }
     } else if (!c.enabled) {
-      liveStatus = "disabled";
+      liveStatus = "<span class=\"badge badge-off\">DISABLED</span>";
     } else {
-      liveStatus = "not running - reboot to apply";
+      liveStatus = "<span class=\"badge badge-warn\">NOT RUNNING</span> - reboot to apply";
     }
 
     // Icon + native title-attribute tooltip instead of the full text, so a
@@ -333,8 +344,10 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
         ? "<span title=\"" + htmlEscape(c.notes) + "\" style=\"cursor:help;\">\xF0\x9F\x93\x9D</span>"
         : "";
 
+    String enabledBadge = c.enabled ? "<span class=\"badge badge-on\">yes</span>"
+                                      : "<span class=\"badge badge-off\">no</span>";
     html += "<tr><td>" + htmlEscape(c.name) + "</td><td>" + htmlEscape(c.deviceServiceUrl) +
-            "</td><td>" + (c.enabled ? "yes" : "no") + "</td><td>" + liveStatus + "</td><td>" +
+            "</td><td>" + enabledBadge + "</td><td>" + liveStatus + "</td><td>" +
             lastAlertStr + "</td><td>" + previewCell + "</td><td>" +
             notesCell + "</td><td>";
     html += renderEditDeleteActions("/cameras/edit?name=", "/delete", c.name) + "</td></tr>";
