@@ -10,6 +10,7 @@
 #include "webserver_activity.h"
 #include "webserver_gallery.h"
 #include "webserver_storage.h"
+#include "ui_settings.h"
 #include "event_log_store.h"
 #include "snapshot_history.h"
 #include "sd_store.h"
@@ -183,7 +184,14 @@ static bool tabHasActiveBackgroundJob(Tab active) {
 
 static String renderShell(Tab active, const String& banner, const String& contentHtml) {
   String html;
-  html += "<!DOCTYPE html><html><head><meta charset=\"utf-8\">";
+  // Server-authoritative theme (a persisted config, not the browser's own
+  // OS-level dark-mode preference) - see ui_settings.h. Stamping
+  // data-theme="dark" here is what the [data-theme="dark"] CSS block below
+  // keys off of.
+  bool darkMode = loadUiSettings().darkMode;
+  html += "<!DOCTYPE html><html";
+  if (darkMode) html += " data-theme=\"dark\"";
+  html += "><head><meta charset=\"utf-8\">";
   html += "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">";
   bool autoRefresh = tabHasActiveBackgroundJob(active);
   // Inline base64 SVG data URI - a small camera-lens glyph in the same
@@ -199,6 +207,27 @@ static String renderShell(Tab active, const String& banner, const String& conten
           "cj0iOSIgZmlsbD0iI2ZmZiIvPjxyZWN0IHg9IjMwIiB5PSIyNCIgd2lkdGg9IjE2IiBoZWlnaHQ9IjkiIHJ4PSIzIiBmaWxs"
           "PSIjZmZmIi8+PC9zdmc+\">";
   html += "<title>Camera Monitor v" + String(FIRMWARE_VERSION) + "</title><style>";
+  // Color as CSS custom properties, not literals, so dark mode (below) is
+  // a second block of the same token names rather than a second copy of
+  // every rule. :root holds today's original light values unchanged (so
+  // light mode looks pixel-identical to before this existed); the sidebar
+  // itself already reads as "dark" by design and is deliberately left the
+  // same in both themes - only the page/content-area tokens actually
+  // change under [data-theme="dark"].
+  html += ":root{--bg:#fff;--panel:#fff;--text:#222;--border:#ccc;--th-bg:#f0f0f0;--hint:#666;"
+          "--sidebar-bg:#1f2937;--sidebar-text:#e5e7eb;--sidebar-link:#cbd5e1;--sidebar-hover:#374151;"
+          "--accent:#2563eb;--accent-hover:#1d4ed8;--accent-active:#1e40af;--accent-disabled:#93c5fd;"
+          "--on-accent:#fff;--danger:#dc2626;--danger-hover:#b91c1c;--danger-active:#991b1b;"
+          "--secondary-text:#374151;--secondary-border:#d1d5db;--secondary-hover:#f3f4f6;"
+          "--secondary-hover-border:#9ca3af;--badge-on:#16a34a;--badge-warn:#d97706;--badge-offline:#dc2626;"
+          "--badge-off:#6b7280;--banner-bg:#fffae0;--banner-border:#e0d080;--banner-warn-bg:#fde2e1;"
+          "--banner-warn-border:#e08080;}";
+  html += "[data-theme=\"dark\"]{--bg:#111827;--panel:#1f2937;--text:#e5e7eb;--border:#374151;"
+          "--th-bg:#1f2937;--hint:#9ca3af;--accent:#3b82f6;--accent-hover:#2563eb;--accent-active:#1d4ed8;"
+          "--accent-disabled:#1e3a8a;--danger:#ef4444;--danger-hover:#dc2626;--danger-active:#b91c1c;"
+          "--secondary-text:#d1d5db;--secondary-border:#4b5563;--secondary-hover:#374151;"
+          "--secondary-hover-border:#6b7280;--banner-bg:#3f3512;--banner-border:#a1811f;"
+          "--banner-warn-bg:#3f1e1e;--banner-warn-border:#a34343;}";
   html += "*{box-sizing:border-box;}";
   // System font stack, not the plain "sans-serif" fallback - costs nothing
   // to serve (no font files, no external request - every name here is
@@ -206,31 +235,49 @@ static String renderShell(Tab active, const String& banner, const String& conten
   // but reads as considerably less "unstyled default" than the generic
   // fallback ever does.
   html += "body{font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Roboto,Helvetica,Arial,"
-          "sans-serif;margin:0;display:flex;min-height:100vh;color:#222;}";
-  html += ".sidebar{width:200px;flex-shrink:0;background:#1f2937;color:#e5e7eb;padding:20px 0;}";
+          "sans-serif;margin:0;display:flex;min-height:100vh;background:var(--bg);color:var(--text);}";
+  html += ".sidebar{width:200px;flex-shrink:0;background:var(--sidebar-bg);color:var(--sidebar-text);"
+          "padding:20px 0;display:flex;flex-direction:column;}";
   html += ".sidebar .brand{font-weight:bold;font-size:16px;padding:0 20px 20px;}";
-  html += ".sidebar a{display:block;padding:10px 20px;color:#cbd5e1;text-decoration:none;font-size:14px;}";
-  html += ".sidebar a:hover{background:#374151;}";
-  html += ".sidebar a.active{background:#2563eb;color:#fff;font-weight:bold;}";
+  html += ".sidebar a{display:block;padding:10px 20px;color:var(--sidebar-link);text-decoration:none;"
+          "font-size:14px;}";
+  html += ".sidebar a:hover{background:var(--sidebar-hover);}";
+  html += ".sidebar a.active{background:var(--accent);color:var(--on-accent);font-weight:bold;}";
+  html += ".sidebar-footer{margin-top:auto;padding:12px 20px 0;display:flex;flex-direction:column;gap:8px;}";
   html += ".content{flex:1;padding:24px 28px;max-width:960px;}";
   html += "h1{font-size:20px;margin-top:0;}";
   html += "table{border-collapse:collapse;width:100%;margin-bottom:24px;}";
-  html += "th,td{border:1px solid #ccc;padding:6px 8px;text-align:left;font-size:14px;vertical-align:top;}";
-  html += "th{background:#f0f0f0;}";
+  html += "th,td{border:1px solid var(--border);padding:6px 8px;text-align:left;font-size:14px;"
+          "vertical-align:top;}";
+  html += "th{background:var(--th-bg);}";
   html += "form.inline{display:inline;}";
   html += "fieldset{margin-bottom:20px;}";
   html += "label{display:block;margin-top:10px;font-size:14px;}";
   html += "label.checkbox{display:flex;align-items:center;gap:6px;font-weight:normal;}";
   html += "label.checkbox input{width:auto;}";
-  html += "input[type=text],input[type=password]{width:100%;box-sizing:border-box;padding:5px;margin-top:2px;}";
-  html += ".camera-list{border:1px solid #ddd;padding:8px;max-height:180px;overflow-y:auto;margin-top:2px;}";
+  html += "input[type=text],input[type=password]{width:100%;box-sizing:border-box;padding:5px;"
+          "margin-top:2px;background:var(--panel);color:var(--text);border:1px solid var(--border);}";
+  html += ".camera-list{border:1px solid var(--border);padding:8px;max-height:180px;overflow-y:auto;"
+          "margin-top:2px;}";
   html += ".camera-list label{margin-top:2px;}";
-  html += ".banner{background:#fffae0;border:1px solid #e0d080;padding:8px 12px;margin-bottom:16px;}";
-  html += ".banner-warn{background:#fde2e1;border:1px solid #e08080;padding:8px 12px;margin-bottom:16px;}";
-  html += ".hint{color:#666;font-size:13px;}";
+  html += ".banner{background:var(--banner-bg);border:1px solid var(--banner-border);padding:8px 12px;"
+          "margin-bottom:16px;}";
+  html += ".banner-warn{background:var(--banner-warn-bg);border:1px solid var(--banner-warn-border);"
+          "padding:8px 12px;margin-bottom:16px;}";
+  html += ".hint{color:var(--hint);font-size:13px;}";
   html += ".flipbook-img{display:none;max-width:160px;max-height:120px;vertical-align:middle;}";
   html += ".sidebar-parent{cursor:pointer;}";
   html += ".sidebar-submenu a{padding-left:36px;font-size:13px;}";
+  // The sidebar is always dark-chrome regardless of page theme (see the
+  // :root/[data-theme] comment above) - its own footer controls (theme
+  // toggle, Logout) get an outlined light-on-dark look that matches, not
+  // the page-content .secondary style (a white/panel-toned button would
+  // look like a stray light box sitting on the dark sidebar).
+  html += ".sidebar-footer button,.sidebar-footer a{display:block;width:100%;text-align:left;"
+          "font-family:inherit;font-size:13px;padding:8px 12px;border-radius:6px;"
+          "background:transparent;color:var(--sidebar-link);border:1px solid var(--sidebar-hover);"
+          "cursor:pointer;text-decoration:none;box-sizing:border-box;}";
+  html += ".sidebar-footer button:hover,.sidebar-footer a:hover{background:var(--sidebar-hover);color:#fff;}";
   // Real button styling instead of the browser's own default gray, chunky,
   // inconsistent-across-browsers rendering. Plain blue "primary" look by
   // default (most buttons here are ordinary save/run actions); .danger
@@ -239,44 +286,49 @@ static String renderShell(Tab active, const String& banner, const String& conten
   // a visual reinforcement of the confirm() dialogs those already have,
   // not a replacement for them.
   html += "button{font-family:inherit;font-size:14px;padding:7px 14px;border-radius:6px;"
-          "border:1px solid #2563eb;background:#2563eb;color:#fff;cursor:pointer;"
+          "border:1px solid var(--accent);background:var(--accent);color:var(--on-accent);cursor:pointer;"
           "transition:background .15s,border-color .15s;}";
-  html += "button:hover{background:#1d4ed8;border-color:#1d4ed8;}";
-  html += "button:active{background:#1e40af;border-color:#1e40af;}";
-  html += "button:disabled{background:#93c5fd;border-color:#93c5fd;cursor:not-allowed;}";
-  html += "button.danger{background:#dc2626;border-color:#dc2626;}";
-  html += "button.danger:hover{background:#b91c1c;border-color:#b91c1c;}";
-  html += "button.danger:active{background:#991b1b;border-color:#991b1b;}";
+  html += "button:hover{background:var(--accent-hover);border-color:var(--accent-hover);}";
+  html += "button:active{background:var(--accent-active);border-color:var(--accent-active);}";
+  html += "button:disabled{background:var(--accent-disabled);border-color:var(--accent-disabled);"
+          "cursor:not-allowed;}";
+  html += "button.danger{background:var(--danger);border-color:var(--danger);}";
+  html += "button.danger:hover{background:var(--danger-hover);border-color:var(--danger-hover);}";
+  html += "button.danger:active{background:var(--danger-active);border-color:var(--danger-active);}";
   // Plain/outlined look for a minor, frequently-clicked toggle (the
   // Preview flipbook's Play/Stop button) that shouldn't visually compete
   // with an actual primary action on the same page - replaces that
   // button's old ad hoc reuse of .hint (which only ever set text color,
   // fine when buttons were unstyled, not once the base button rule above
   // gives every button a filled blue background by default).
-  html += "button.secondary{background:#fff;color:#374151;border-color:#d1d5db;}";
-  html += "button.secondary:hover{background:#f3f4f6;border-color:#9ca3af;}";
+  html += "button.secondary{background:var(--panel);color:var(--secondary-text);"
+          "border-color:var(--secondary-border);}";
+  html += "button.secondary:hover{background:var(--secondary-hover);border-color:var(--secondary-hover-border);}";
   // Same secondary look, carrying its own full chrome instead of relying on
   // the button{...} element selector above - for the Edit forms' "Cancel"
   // link (an <a>, not a <button> - it's plain navigation, not a form
   // submit), which used to be an unstyled plain text link sitting right
   // next to the now fully-styled "Save changes" button.
   html += "a.secondary{display:inline-block;font-family:inherit;font-size:14px;padding:7px 14px;"
-          "border-radius:6px;text-decoration:none;cursor:pointer;background:#fff;color:#374151;"
-          "border:1px solid #d1d5db;}";
-  html += "a.secondary:hover{background:#f3f4f6;border-color:#9ca3af;}";
+          "border-radius:6px;text-decoration:none;cursor:pointer;background:var(--panel);"
+          "color:var(--secondary-text);border:1px solid var(--secondary-border);}";
+  html += "a.secondary:hover{background:var(--secondary-hover);border-color:var(--secondary-hover-border);}";
   // Small colored status pills - .badge-on (healthy/enabled, green),
   // .badge-warn (needs attention but not a hard failure - e.g. responding
   // but not subscribed, see telegram.cpp's checkSubscriptionHealth - amber),
   // .badge-offline (hard failure, red), .badge-off (a deliberate/intentional
   // state, not a problem - e.g. muted or disabled - neutral gray). Lets a
   // multi-camera table be scanned at a glance instead of reading a run-on
-  // status sentence per row.
+  // status sentence per row. Semantic pill colors, not overridden by
+  // [data-theme="dark"] above - a colored chip with white text stays
+  // readable against either page background, so it's deliberately kept
+  // out of that block rather than given dark-specific values it doesn't need.
   html += ".badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;"
           "font-weight:600;color:#fff;white-space:nowrap;}";
-  html += ".badge-on{background:#16a34a;}";
-  html += ".badge-warn{background:#d97706;}";
-  html += ".badge-offline{background:#dc2626;}";
-  html += ".badge-off{background:#6b7280;}";
+  html += ".badge-on{background:var(--badge-on);}";
+  html += ".badge-warn{background:var(--badge-warn);}";
+  html += ".badge-offline{background:var(--badge-offline);}";
+  html += ".badge-off{background:var(--badge-off);}";
   // Compact icon-only variant of the button rules above, for the
   // Edit/Delete pair every list row (Cameras, Telegram Users) ends with -
   // a row of "Edit  Delete" text links/buttons repeated down a long table
@@ -286,13 +338,15 @@ static String renderShell(Tab active, const String& banner, const String& conten
   // button{...} element selector above.
   html += ".icon-btn{display:inline-flex;align-items:center;justify-content:center;"
           "width:30px;height:30px;padding:0;font-size:15px;line-height:1;border-radius:6px;"
-          "border:1px solid #2563eb;background:#2563eb;color:#fff;cursor:pointer;"
+          "border:1px solid var(--accent);background:var(--accent);color:var(--on-accent);cursor:pointer;"
           "text-decoration:none;transition:background .15s,border-color .15s;}";
-  html += ".icon-btn:hover{background:#1d4ed8;border-color:#1d4ed8;}";
-  html += ".icon-btn.danger{background:#dc2626;border-color:#dc2626;}";
-  html += ".icon-btn.danger:hover{background:#b91c1c;border-color:#b91c1c;}";
-  html += ".icon-btn.secondary{background:#fff;color:#374151;border-color:#d1d5db;}";
-  html += ".icon-btn.secondary:hover{background:#f3f4f6;border-color:#9ca3af;}";
+  html += ".icon-btn:hover{background:var(--accent-hover);border-color:var(--accent-hover);}";
+  html += ".icon-btn.danger{background:var(--danger);border-color:var(--danger);}";
+  html += ".icon-btn.danger:hover{background:var(--danger-hover);border-color:var(--danger-hover);}";
+  html += ".icon-btn.secondary{background:var(--panel);color:var(--secondary-text);"
+          "border-color:var(--secondary-border);}";
+  html += ".icon-btn.secondary:hover{background:var(--secondary-hover);"
+          "border-color:var(--secondary-hover-border);}";
   html += ".row-actions{display:flex;gap:6px;}";
   html += "</style></head><body>";
 
@@ -340,10 +394,30 @@ static String renderShell(Tab active, const String& banner, const String& conten
   html += "<a href=\"/security\" class=\"";
   html += (active == Tab::Security) ? "active" : "";
   html += "\">Security</a>";
+
+  DashboardAuth currentAuth = loadDashboardAuth();
+  html += "<div class=\"sidebar-footer\">";
+  html += "<form method=\"POST\" action=\"/ui/theme/toggle\"><button type=\"submit\">";
+  html += darkMode ? "&#9728; Light mode" : "&#127769; Dark mode";
+  html += "</button></form>";
+  // Only shown once a password is actually enforced - matches the "no
+  // password set" banner's own condition below (inverted): with no login
+  // required, there's nothing to log out of. HTTP Basic Auth has no
+  // server-side session to invalidate (AuthenticationMiddleware::
+  // isAllowed() is stateless, re-checked per request) - the standard
+  // client-side trick instead: a same-origin fetch carrying deliberately
+  // wrong credentials overwrites what THIS browser has cached for this
+  // origin, so the very next protected request gets a real 401 and the
+  // browser re-prompts.
+  if (currentAuth.username.length() > 0 && currentAuth.password.length() > 0) {
+    html += "<a href=\"#\" onclick=\""
+            "fetch(location.origin,{headers:{Authorization:'Basic eDp4'}})"
+            ".catch(function(){}).then(function(){location.href='/';});return false;\">Logout</a>";
+  }
+  html += "</div>";
   html += "</nav>";
 
   html += "<main class=\"content\">";
-  DashboardAuth currentAuth = loadDashboardAuth();
   if (currentAuth.username.length() == 0 || currentAuth.password.length() == 0) {
     html += "<div class=\"banner-warn\">No dashboard password is set - anyone on your LAN can view "
             "and change everything here, including WiFi/camera credentials, the Firmware page, the "
@@ -436,6 +510,19 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
     String landing = "<h1>Camera Monitor v" + String(FIRMWARE_VERSION) +
                       "</h1><p class=\"hint\">Select a section from the left.</p>";
     return response->send(200, "text/html", renderShell(Tab::None, "", landing).c_str());
+  });
+
+  // Flips the persisted dark-mode preference and redirects back to whatever
+  // page the sidebar button was clicked from (the Referer header, when a
+  // browser sends one - "/" otherwise) so toggling the theme doesn't also
+  // navigate away from the page being looked at.
+  server.on("/ui/theme/toggle", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
+    UiSettings settings = loadUiSettings();
+    settings.darkMode = !settings.darkMode;
+    saveUiSettings(settings);
+    String redirectUrl = request->header("Referer");
+    if (redirectUrl.length() == 0) redirectUrl = "/";
+    return response->redirect(redirectUrl.c_str());
   });
 
   server.on("/network", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
