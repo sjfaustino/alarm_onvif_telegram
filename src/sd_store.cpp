@@ -432,7 +432,18 @@ SnapshotRetentionResult enforceSnapshotRetention(const std::vector<CameraConfig>
   time(&now);
 
   for (auto& cfg : cameras) {
-    uint16_t effectiveDays = cfg.retentionDays != 0 ? cfg.retentionDays : globalRetentionDays;
+    // Re-clamped here, at the point of use, not just at the dashboard form
+    // (parseCameraForm) - a config Import writes camera records straight
+    // to NVS via deserializeCamera/replaceAllCameras, bypassing that
+    // clamp entirely, so cfg.retentionDays can arrive as any uint16_t up
+    // to 65535. Without this, filesToExpire's cutoff computation
+    // ((time_t)retentionDays * 24 * 60 * 60, a 32-bit signed multiply)
+    // overflows for a large enough value - wrapping to an arbitrary
+    // cutoff instead of failing safe, in the worst case one that makes
+    // every stored file for that camera look expired at once.
+    uint16_t cameraRetentionDays = cfg.retentionDays;
+    if (cameraRetentionDays > SD_RETENTION_MAX_DAYS) cameraRetentionDays = SD_RETENTION_MAX_DAYS;
+    uint16_t effectiveDays = cameraRetentionDays != 0 ? cameraRetentionDays : globalRetentionDays;
     if (effectiveDays == 0) continue; // this camera's effective setting is "keep forever"
 
     String dirName = String(SNAPSHOTS_ROOT) + "/" + sanitizeCameraDirName(cfg.name);
