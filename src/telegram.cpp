@@ -681,8 +681,18 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st) {
       // read of lastMotionMs, no lock needed - see its own comment
       // (camera.h). Remove this if it turns out to be more log noise than
       // it's worth - it's diagnostic, nothing else depends on it.
-      logEvent(cfg.name + ": " + String(millis() - st.lastMotionMs) +
+      unsigned long latencyMs = millis() - st.lastMotionMs;
+      logEvent(cfg.name + ": " + String(latencyMs) +
                "ms from motion to first photo" + (jpg ? "" : " (fetch failed)"));
+      if (jpg) {
+        // Only recorded on an actual successful fetch - see
+        // CameraState::motionLatencyHistory's own comment (camera.h) for
+        // why a failed fetch's latency would skew the rollup.
+        CameraStateLock lock(st);
+        st.motionLatencyHistory[st.motionLatencyHistoryNext] = latencyMs;
+        st.motionLatencyHistoryNext = (st.motionLatencyHistoryNext + 1) % EVENT_HISTORY_RING_SIZE;
+        if (st.motionLatencyHistoryCount < EVENT_HISTORY_RING_SIZE) st.motionLatencyHistoryCount++;
+      }
     }
     if (!jpg) continue; // one bad shot in a burst shouldn't abort the rest
 

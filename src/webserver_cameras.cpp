@@ -166,6 +166,8 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
   String html = "<h1>Cameras</h1>";
   html += "<table><tr><th>Name</th><th>Device Service URL</th><th>Enabled</th>"
           "<th>Live Status</th><th>Last Alert</th><th>Preview</th><th>Notes</th><th></th></tr>";
+  size_t rowIdx = 0; // unique per-row DOM id source for the latency toggle below - findLiveCameraIndex's
+                      // own idx isn't usable for that (can be -1 for a camera not in liveCameras yet)
   for (auto& c : cams) {
     int idx = findLiveCameraIndex(liveCameras, c.name);
     String liveStatus;
@@ -189,6 +191,8 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
       bool revertToOn;
       size_t recentReconnects = 0; // how many of reconnectHistory's entries fall in the last 24h
       size_t recentOfflineEvents = 0; // same, for offlineHistory
+      size_t latencyCount = 0;
+      unsigned long latencySum = 0, latencyMin = 0, latencyMax = 0;
       unsigned long nowMs = millis();
       {
         CameraStateLock lock(st);
@@ -205,6 +209,13 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
         }
         for (size_t i = 0; i < st.offlineHistoryCount; i++) {
           if (nowMs - st.offlineHistory[i] < 24UL * 3600UL * 1000UL) recentOfflineEvents++;
+        }
+        latencyCount = st.motionLatencyHistoryCount;
+        for (size_t i = 0; i < latencyCount; i++) {
+          unsigned long v = st.motionLatencyHistory[i];
+          latencySum += v;
+          if (i == 0 || v < latencyMin) latencyMin = v;
+          if (v > latencyMax) latencyMax = v;
         }
       }
       liveStatus = subscribed ? "subscribed" : "not subscribed";
@@ -241,6 +252,25 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
           liveStatus += " (" + String((unsigned)recentReconnects) +
                         (recentReconnects == EVENT_HISTORY_RING_SIZE ? "+" : "") + " in the last 24h)";
         }
+      }
+      // Hidden behind a click, not shown inline like reconnect/offline
+      // counts above - unlike those, this is tuning-diagnostic detail most
+      // visits to this page don't need, and showing avg/min/max text mixed
+      // into every row's status by default would clutter more than it
+      // helps. Plain vanilla JS (no framework), same as the sidebar's own
+      // System-submenu toggle (webserver.cpp's renderShell) - toggles one
+      // row's own hidden <span>, id'd by rowIdx so every row's toggle is
+      // independent. See CameraState::motionLatencyHistory's own comment
+      // (camera.h) for what feeds this.
+      if (latencyCount > 0) {
+        unsigned long avgMs = latencySum / latencyCount;
+        String latencyId = "lat" + String((unsigned)rowIdx);
+        liveStatus += " <a href=\"#\" onclick=\"var d=document.getElementById('" + latencyId +
+                      "');d.style.display=(d.style.display==='inline')?'none':'inline';return false;\" "
+                      "title=\"Motion-to-photo latency\">&#9201;</a>";
+        liveStatus += "<span id=\"" + latencyId + "\" style=\"display:none;\"> - last " +
+                      String((unsigned)latencyCount) + ": avg " + String(avgMs) + "ms, min " +
+                      String(latencyMin) + "ms, max " + String(latencyMax) + "ms</span>";
       }
       if (hasAlerted) lastAlertStr = formatElapsedSince(lastAlert, millis());
 
@@ -301,6 +331,7 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
             lastAlertStr + "</td><td>" + previewCell + "</td><td>" +
             notesCell + "</td><td>";
     html += renderEditDeleteActions("/cameras/edit?name=", "/delete", c.name) + "</td></tr>";
+    rowIdx++;
   }
   html += "</table>";
 

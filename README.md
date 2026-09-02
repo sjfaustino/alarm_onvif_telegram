@@ -25,7 +25,11 @@ Arduino-ESP32/IDF releases.
   also logs how many milliseconds passed between the real motion signal and the
   first photo actually being in hand (Activity page) - a concrete number for
   judging whether a given camera's poll interval is worth lowering, instead of
-  eyeballing whether photos "look late."
+  eyeballing whether photos "look late." The last 10 of these latencies per
+  camera also roll up into a small average/min/max summary on the Cameras page
+  itself - hidden behind a &#9201; icon next to that camera's Live Status (click
+  to show/hide) rather than shown inline, so it's there when you're tuning
+  `pollIntervalMs` without cluttering the row the rest of the time.
 - Sends a Telegram alert on motion, tamper, and video signal-loss events, per-camera
   cooldown (one shared budget across all three) to avoid spam. Motion alerts include
   a photo, JPEG buffered once in PSRAM and resent to every Telegram user subscribed

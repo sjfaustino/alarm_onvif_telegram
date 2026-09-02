@@ -116,6 +116,21 @@ struct CameraState {
   size_t offlineHistoryNext = 0;
   size_t offlineHistoryCount = 0;
 
+  // Ring of the most recent motion-to-first-photo latencies, in
+  // milliseconds - values, not timestamps, unlike reconnectHistory/
+  // offlineHistory above, but the same ring mechanics (Next/Count).
+  // Pushed by triggerMotionAlert (telegram.cpp) once per motion alert,
+  // only on an actual successful fetch (a failed one doesn't represent
+  // "how long until a usable photo" and would skew the rollup toward a
+  // HTTP_TIMEOUT_MS-bounded failure instead). Lets the Cameras page show
+  // a rollup (webserver_cameras.cpp) as a concrete signal for whether a
+  // camera's pollIntervalMs is worth lowering, instead of only being
+  // visible as scattered Activity log lines. Lock-guarded, same reasoning
+  // as reconnectHistory/offlineHistory.
+  unsigned long motionLatencyHistory[EVENT_HISTORY_RING_SIZE] = {0};
+  size_t motionLatencyHistoryNext = 0;
+  size_t motionLatencyHistoryCount = 0;
+
   // Real motion detection timestamp (independent of mute/cooldown/quiet
   // hours) - the signal checkMotionWatchdog (camera.cpp) uses. Same-task-
   // only, no lock needed. Baselined to task-start time, not 0, so a camera
@@ -220,8 +235,8 @@ struct CameraState {
   // lastAlert, snapshotUri, user, pass, scheduledRevertDueMs,
   // scheduledRevertToOn, pendingConfig, stopRequested, snapshotInFlight,
   // snapshotHistory (+Next/Count), lastContactMs, totalReconnects,
-  // reconnectHistory (+Next/Count), and offlineHistory (+Next/Count) - the
-  // fields both written by this
+  // reconnectHistory (+Next/Count), offlineHistory (+Next/Count), and
+  // motionLatencyHistory (+Next/Count) - the fields both written by this
   // camera's own task and read/written from another task (webserver.cpp's
   // dashboard render and /cameras/snapshot route, main.cpp's heartbeat,
   // telegram.cpp's /on /off /snap handling, checkScheduledAlertReverts,
