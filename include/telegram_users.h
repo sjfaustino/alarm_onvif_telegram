@@ -31,6 +31,14 @@ struct TelegramUser {
   // has to be turned on deliberately from the dashboard even for the first
   // user, since it's disruptive rather than just informational/control.
   bool canReset = false;
+
+  // Enforced as a minimum gap between this user's commands
+  // (60000/maxCommandsPerMinute ms - see telegram.cpp's rate-limit check in
+  // handleTelegramCommand), not a true rolling-window count: O(1) in-RAM
+  // state per user (just a last-command timestamp), no ring buffer. 0 =
+  // unlimited (default) - most users never need this; it exists for a
+  // shared/less-trusted chat that could otherwise hammer the board.
+  uint16_t maxCommandsPerMinute = 0;
 };
 
 // True if this user should receive alerts for camera `cameraName`.

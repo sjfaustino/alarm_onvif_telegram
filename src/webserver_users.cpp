@@ -1,5 +1,6 @@
 #include "webserver_users.h"
 #include "camera_store.h"
+#include "config.h" // TELEGRAM_MAX_COMMANDS_PER_MINUTE_MAX
 #include "format_utils.h"
 #include "webserver_html.h"
 #include "telegram.h" // recentUnknownChats, sendTelegramMessage
@@ -48,6 +49,9 @@ static String renderTelegramUserForm(const TelegramUser& v, const std::vector<Ca
           String(v.canReset ? " checked" : "") +
           "> May send /reset (reboots the board immediately) - independent of the permissions "
           "above, off by default even for a new user</label>";
+  html += "<label>Max commands per minute (0 = unlimited)"
+          "<input type=\"text\" name=\"maxCommandsPerMinute\" value=\"" + String(v.maxCommandsPerMinute) +
+          "\"></label>";
   html += "<p><button type=\"submit\">" + String(isEdit ? "Save changes" : "Add user") + "</button>";
   if (isEdit) html += " <a href=\"/users\" class=\"secondary\">Cancel</a>";
   html += "</p></form></fieldset>";
@@ -203,6 +207,18 @@ TelegramUser parseUserForm(PsychicRequest* request) {
   u.canCommand     = request->hasParam("canCommand");
   u.canSnap        = request->hasParam("canSnap");
   u.canReset       = request->hasParam("canReset");
+
+  // 0 is the deliberate, meaningful "unlimited" value - never substitute
+  // it away, only clamp a negative (not reachable from a plain number
+  // input, but defensive) or oversized value, same reasoning as
+  // CameraConfig's motionWatchdogHours/timelapseIntervalMin fields.
+  long maxCommandsPerMinute = request->getParam("maxCommandsPerMinute", "0").toInt();
+  if (maxCommandsPerMinute < 0) maxCommandsPerMinute = 0;
+  if (maxCommandsPerMinute > (long)TELEGRAM_MAX_COMMANDS_PER_MINUTE_MAX) {
+    maxCommandsPerMinute = (long)TELEGRAM_MAX_COMMANDS_PER_MINUTE_MAX;
+  }
+  u.maxCommandsPerMinute = (uint16_t)maxCommandsPerMinute;
+
   u.name.trim();
   u.chatId.trim();
 

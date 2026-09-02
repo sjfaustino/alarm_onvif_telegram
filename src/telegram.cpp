@@ -1058,6 +1058,62 @@ std::vector<UnknownChatSighting> recentUnknownChats() {
   return result;
 }
 
+// ============================================================
+// Per-user Telegram command rate limiting - see TelegramUser::
+// maxCommandsPerMinute's own comment (telegram_users.h) for why this is
+// enforced as a minimum gap between commands rather than a true rolling-
+// window count: O(1) state per user (just a last-command timestamp), no
+// ring buffer. RAM-only, small fixed table, same exact-match-or-least-
+// recently-seen-eviction shape as g_unknownChats above and webserver.cpp's
+// RateLimitMiddleware::findOrCreate (unrelated tables, same small-fixed-
+// size-tracking problem).
+// ============================================================
+
+static const size_t COMMAND_RATE_TRACK_MAX = 16; // generous for any realistic configured-user count
+
+struct CommandRateSlot {
+  String chatId;
+  unsigned long lastCommandMs = 0;
+  bool used = false;
+};
+static CommandRateSlot g_commandRateTable[COMMAND_RATE_TRACK_MAX];
+static SemaphoreHandle_t g_commandRateMutex = xSemaphoreCreateMutex();
+
+// Only meaningful when maxCommandsPerMinute > 0 - callers gate on that
+// themselves rather than this function treating 0 as "unlimited", so it
+// stays a plain "check and record" primitive. Returns true (and records
+// this command's timestamp) if chatId may send a command right now; a
+// chat seen for the very first time is always allowed.
+static bool allowTelegramCommand(const String& chatId, uint16_t maxCommandsPerMinute) {
+  unsigned long minIntervalMs = 60000UL / maxCommandsPerMinute;
+  unsigned long now = millis();
+
+  xSemaphoreTake(g_commandRateMutex, portMAX_DELAY);
+  CommandRateSlot* slot = nullptr;
+  for (auto& e : g_commandRateTable) {
+    if (e.used && e.chatId == chatId) { slot = &e; break; }
+  }
+  if (!slot) {
+    slot = &g_commandRateTable[0];
+    for (auto& e : g_commandRateTable) {
+      if (!e.used) { slot = &e; break; }
+      if (e.lastCommandMs < slot->lastCommandMs) slot = &e;
+    }
+  }
+
+  // Same unsigned-subtraction wraparound-safe shape as beginCameraAlert's
+  // own cooldown check above - a never-before-seen slot has nothing to
+  // compare against, so it's always allowed.
+  bool allowed = !slot->used || (now - slot->lastCommandMs) >= minIntervalMs;
+  if (allowed) {
+    slot->chatId = chatId;
+    slot->lastCommandMs = now;
+    slot->used = true;
+  }
+  xSemaphoreGive(g_commandRateMutex);
+  return allowed;
+}
+
 static const char* ALERT_PREF_NAMESPACE = "camctl";
 
 bool loadAlertEnabledPref(size_t index) {
@@ -1313,6 +1369,13 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
     String name = commandDisplayName(parsed.command);
     Serial.printf("[Telegram] User \"%s\" not authorized for %s.\n", sender.name.c_str(), name.c_str());
     sendTelegramMessageTo(sender.chatId, "You're not authorized to use " + name + ".");
+    return;
+  }
+
+  if (sender.maxCommandsPerMinute > 0 && !allowTelegramCommand(sender.chatId, sender.maxCommandsPerMinute)) {
+    Serial.printf("[Telegram] User \"%s\" rate-limited (max %u command(s)/minute).\n", sender.name.c_str(),
+                  (unsigned)sender.maxCommandsPerMinute);
+    sendTelegramMessageTo(sender.chatId, "You're sending commands too quickly - wait a moment and try again.");
     return;
   }
 

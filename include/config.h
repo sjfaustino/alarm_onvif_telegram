@@ -242,6 +242,14 @@ static const unsigned long CAMERA_ALERT_COOLDOWN_MAX_MS = 86400000UL;    // 24h
 static const unsigned long CAMERA_OFFLINE_THRESHOLD_MAX_MS = 604800000UL; // 7 days
 static const unsigned int CAMERA_SNAPSHOT_BURST_MAX = 10;
 
+// Clamp for TelegramUser::maxCommandsPerMinute (Telegram Users page) - just
+// a sanity bound on the number field, same idea as CAMERA_SNAPSHOT_BURST_MAX
+// above. Not safety-critical the way the *_MAX_MS constants are (no
+// overflow-prone multiply downstream - see telegram.cpp's
+// allowTelegramCommand, a plain 60000/N division), just keeps the field
+// from holding an arbitrarily large, meaningless number.
+static const uint16_t TELEGRAM_MAX_COMMANDS_PER_MINUTE_MAX = 600;
+
 // Cap on /activity.log (sd_store.cpp's appendActivityLogLine) - the SD-
 // persisted mirror of the in-memory Activity log (event_log_store.h).
 // Once a line's append would push the file past this, it's deleted and

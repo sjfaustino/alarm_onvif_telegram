@@ -12,7 +12,7 @@
 // CAMERA_SCHEMA_VERSION comment for the full rationale. Bump this (and add
 // a new deserializeUser branch, never edit an existing one) any time
 // serializeUser()'s field layout changes.
-static const uint16_t TELEGRAM_USER_SCHEMA_VERSION = 2;
+static const uint16_t TELEGRAM_USER_SCHEMA_VERSION = 3;
 
 // Always writes TELEGRAM_USER_SCHEMA_VERSION's current field layout.
 String serializeUser(const TelegramUser& u);
