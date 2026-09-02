@@ -154,7 +154,7 @@ static String renderCameraForm(const CameraConfig& v, bool isEdit) {
   html += "<p><button type=\"submit\" formaction=\"/cameras/save\">" +
           String(isEdit ? "Save changes" : "Add camera") + "</button> ";
   html += "<button type=\"submit\" formaction=\"/cameras/test\">Test Connection</button>";
-  if (isEdit) html += " <a href=\"/cameras\">Cancel</a>";
+  if (isEdit) html += " <a href=\"/cameras\" class=\"secondary\">Cancel</a>";
   html += "</p></form></fieldset>";
   return html;
 }

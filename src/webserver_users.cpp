@@ -49,7 +49,7 @@ static String renderTelegramUserForm(const TelegramUser& v, const std::vector<Ca
           "> May send /reset (reboots the board immediately) - independent of the permissions "
           "above, off by default even for a new user</label>";
   html += "<p><button type=\"submit\">" + String(isEdit ? "Save changes" : "Add user") + "</button>";
-  if (isEdit) html += " <a href=\"/users\">Cancel</a>";
+  if (isEdit) html += " <a href=\"/users\" class=\"secondary\">Cancel</a>";
   html += "</p></form></fieldset>";
   return html;
 }

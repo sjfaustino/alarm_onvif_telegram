@@ -255,6 +255,15 @@ static String renderShell(Tab active, const String& banner, const String& conten
   // gives every button a filled blue background by default).
   html += "button.secondary{background:#fff;color:#374151;border-color:#d1d5db;}";
   html += "button.secondary:hover{background:#f3f4f6;border-color:#9ca3af;}";
+  // Same secondary look, carrying its own full chrome instead of relying on
+  // the button{...} element selector above - for the Edit forms' "Cancel"
+  // link (an <a>, not a <button> - it's plain navigation, not a form
+  // submit), which used to be an unstyled plain text link sitting right
+  // next to the now fully-styled "Save changes" button.
+  html += "a.secondary{display:inline-block;font-family:inherit;font-size:14px;padding:7px 14px;"
+          "border-radius:6px;text-decoration:none;cursor:pointer;background:#fff;color:#374151;"
+          "border:1px solid #d1d5db;}";
+  html += "a.secondary:hover{background:#f3f4f6;border-color:#9ca3af;}";
   // Small colored status pills - .badge-on (healthy/enabled, green),
   // .badge-warn (needs attention but not a hard failure - e.g. responding
   // but not subscribed, see telegram.cpp's checkSubscriptionHealth - amber),
