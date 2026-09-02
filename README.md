@@ -29,7 +29,9 @@ Arduino-ESP32/IDF releases.
   camera also roll up into a small average/min/max summary on the Cameras page
   itself - hidden behind a &#9201; icon next to that camera's Live Status (click
   to show/hide) rather than shown inline, so it's there when you're tuning
-  `pollIntervalMs` without cluttering the row the rest of the time.
+  `pollIntervalMs` without cluttering the row the rest of the time - shown
+  alongside that camera's own currently-configured poll interval, so the two
+  can be compared at a glance without opening the Edit form.
 - Sends a Telegram alert on motion, tamper, and video signal-loss events, per-camera
   cooldown (one shared budget across all three) to avoid spam. Motion alerts include
   a photo, JPEG buffered once in PSRAM and resent to every Telegram user subscribed

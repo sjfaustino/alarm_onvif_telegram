@@ -268,9 +268,16 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
         liveStatus += " <a href=\"#\" onclick=\"var d=document.getElementById('" + latencyId +
                       "');d.style.display=(d.style.display==='inline')?'none':'inline';return false;\" "
                       "title=\"Motion-to-photo latency\">&#9201;</a>";
+        // Poll interval shown alongside, not just the measured latency -
+        // lets the two be compared at a glance (is the actual latency
+        // roughly what this camera's own configured cadence would predict,
+        // or is something else - camera-side encode time, network - the
+        // bigger contributor) without opening the Edit form to check what's
+        // currently set.
         liveStatus += "<span id=\"" + latencyId + "\" style=\"display:none;\"> - last " +
                       String((unsigned)latencyCount) + ": avg " + String(avgMs) + "ms, min " +
-                      String(latencyMin) + "ms, max " + String(latencyMax) + "ms</span>";
+                      String(latencyMin) + "ms, max " + String(latencyMax) + "ms (poll interval " +
+                      String(c.pollIntervalMs) + "ms)</span>";
       }
       if (hasAlerted) lastAlertStr = formatElapsedSince(lastAlert, millis());
 
