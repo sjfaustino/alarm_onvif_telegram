@@ -672,6 +672,18 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st) {
   for (unsigned int i = 0; i < shots; i++) {
     size_t jpgLen = 0;
     uint8_t* jpg = fetchOneSnapshot(cfg, st, jpgLen);
+    if (i == 0) {
+      // How long from the real motion signal (camera.cpp's parseEvents
+      // setting lastMotionMs, independent of the cooldown/quiet-hours
+      // gating above) to this first photo actually being in hand - lets
+      // tuning CameraConfig::pollIntervalMs be judged by an actual number
+      // instead of eyeballing whether photos "look late." Same-task-only
+      // read of lastMotionMs, no lock needed - see its own comment
+      // (camera.h). Remove this if it turns out to be more log noise than
+      // it's worth - it's diagnostic, nothing else depends on it.
+      logEvent(cfg.name + ": " + String(millis() - st.lastMotionMs) +
+               "ms from motion to first photo" + (jpg ? "" : " (fetch failed)"));
+    }
     if (!jpg) continue; // one bad shot in a burst shouldn't abort the rest
 
     String caption = cfg.name + " - " + nowTimestampString();

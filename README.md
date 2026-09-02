@@ -21,7 +21,11 @@ Arduino-ESP32/IDF releases.
   capture, or an on-demand `/snap`) is in flight to a given camera, that camera's
   own task skips its next scheduled poll/renewal/resubscribe attempt rather than
   risk a second concurrent HTTP connection to the same device - some embedded
-  camera stacks only tolerate one or two connections at all.
+  camera stacks only tolerate one or two connections at all. Every motion alert
+  also logs how many milliseconds passed between the real motion signal and the
+  first photo actually being in hand (Activity page) - a concrete number for
+  judging whether a given camera's poll interval is worth lowering, instead of
+  eyeballing whether photos "look late."
 - Sends a Telegram alert on motion, tamper, and video signal-loss events, per-camera
   cooldown (one shared budget across all three) to avoid spam. Motion alerts include
   a photo, JPEG buffered once in PSRAM and resent to every Telegram user subscribed
