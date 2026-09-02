@@ -28,6 +28,15 @@ jobs:
       - name: Install PlatformIO
         run: pip install --upgrade platformio
 
+      - name: Stub out secrets
+        # secrets.h is gitignored (real credentials never live in the repo),
+        # but config.h (included by camera_store.h, which several test
+        # targets pull in transitively - camera_serialize, telegram_parse,
+        # config_import_parse) #includes it unconditionally. The example
+        # template compiles fine on its own for a test-only run - same as
+        # the build job below, which has needed this step all along.
+        run: cp include/secrets.h.example include/secrets.h
+
       - name: Run native unit tests
         run: pio test -e native
 
