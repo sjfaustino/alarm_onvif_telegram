@@ -46,3 +46,24 @@ struct SnapshotFileInfo {
 // write's own prune pass continues the job.
 std::vector<String> filesToPrune(const std::vector<SnapshotFileInfo>& filesOldestFirst,
                                   uint64_t bytesNeeded, size_t maxFiles);
+
+// Parses the "YYYYMMDD-HHMMSS" prefix sd_store.cpp's buildSnapshotFilename()
+// embeds in every snapshot filename (local time, matching that function's
+// own localtime_r) into an epoch time. Returns (time_t)-1 if filename
+// doesn't start with that exact 15-character shape (2 digits too short, a
+// non-digit where one's expected, etc.) - ESP32 SD.h doesn't reliably
+// expose file mtime, which is exactly why capture time was embedded in the
+// name in the first place; this is the one place that gets parsed back out.
+time_t parseSnapshotTimestamp(const String& filename);
+
+// Given a camera's own files and how many days old is too old, returns
+// which filenames are older than retentionDays days as of nowEpoch (a file
+// exactly retentionDays days old is NOT included - "older than", not
+// "at least"). retentionDays == 0 means "keep forever" - always returns
+// empty. A file whose name doesn't parse (parseSnapshotTimestamp returns
+// -1) is left alone rather than guessed at - unlike filesToPrune, order
+// doesn't affect the result (every file's age is independent), but the
+// caller already has files oldest-first from listing them, so this takes
+// the same shape for consistency.
+std::vector<String> filesToExpire(const std::vector<SnapshotFileInfo>& filesOldestFirst,
+                                   uint16_t retentionDays, time_t nowEpoch);

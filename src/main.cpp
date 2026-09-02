@@ -29,6 +29,7 @@ static WifiCredentials g_wifiCredentials;
 static unsigned long lastHeartbeatMs = 0;
 static unsigned long lastCommandPollMs = 0;
 static unsigned long lastSdCheckMs = 0;
+static unsigned long lastRetentionCheckMs = 0;
 static unsigned long lastNvsCheckMs = 0;
 // True once checkNvsUsage() has already alerted for the current high-usage
 // stretch - re-armed (set back false) once usage drops back under
@@ -540,6 +541,7 @@ static void startMonitoring() {
   // checkNewestSnapshots() call in initSdStorage() already just covered
   // the newest file in every camera directory.
   lastSdCheckMs = millis();
+  lastRetentionCheckMs = millis(); // first sweep fires SD_RETENTION_CHECK_INTERVAL_MS from now
   g_monitoringStarted = true;
 }
 
@@ -733,6 +735,22 @@ void loop() {
       millis() - lastSdCheckMs >= safeSdCheckHours * 3600000UL) {
     lastSdCheckMs = millis();
     checkSnapshotStorage();
+  }
+
+  // Snapshot retention sweep - runs on its own daily cadence, independent
+  // of the storage-check dial above (that one can legitimately be off
+  // while retention still needs to run). sdActive() gate matches every
+  // other SD operation here; enforceSnapshotRetention() itself no-ops the
+  // walk per camera whose effective retention is 0 ("keep forever").
+  if (sdActive() && millis() - lastRetentionCheckMs >= SD_RETENTION_CHECK_INTERVAL_MS) {
+    lastRetentionCheckMs = millis();
+    // Re-clamped here, at the point of use, not just at the dashboard save
+    // (which already clamps to SD_RETENTION_MAX_DAYS) - same "hand-edited/
+    // imported NVS blob bypasses the form entirely" reasoning as
+    // safeSdCheckHours above.
+    uint16_t safeRetentionDays = sdRetentionDays();
+    if (safeRetentionDays > SD_RETENTION_MAX_DAYS) safeRetentionDays = SD_RETENTION_MAX_DAYS;
+    enforceSnapshotRetention(g_cameras, safeRetentionDays);
   }
 
   // Every tick, not gated behind its own interval like the poll above -

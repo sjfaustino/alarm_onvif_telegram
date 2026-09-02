@@ -16,10 +16,12 @@
 static const char* NVS_NAMESPACE = "sdstore";
 static const char* NVS_KEY_ENABLED = "enabled";
 static const char* NVS_KEY_CHECK_HOURS = "checkHours"; // NVS keys are capped at 15 chars
+static const char* NVS_KEY_RETENTION_DAYS = "retDays";
 static const char* SNAPSHOTS_ROOT = "/snapshots"; // mount-relative - SD's FS methods prepend "/sd" internally
 
 static bool g_sdSettingEnabled = false;         // cached at boot, see initSdStorage()
 static uint32_t g_sdCheckIntervalHours = 0;      // cached, see sdCheckIntervalHours()
+static uint16_t g_sdRetentionDays = SD_RETENTION_DAYS_DEFAULT; // cached, see sdRetentionDays()
 static bool g_sdAvailable = false;              // see sdActive()'s comment
 static SemaphoreHandle_t g_sdMutex = xSemaphoreCreateMutex();
 static QuickSnapshotCheckResult g_lastBootCheckResult; // see lastBootCheckResult()'s own comment
@@ -31,6 +33,11 @@ SdSettings loadSdSettings() {
   SdSettings settings;
   settings.enabled = prefs.getBool(NVS_KEY_ENABLED, false);
   settings.checkIntervalHours = prefs.getUInt(NVS_KEY_CHECK_HOURS, 0);
+  // getUShort's own default (SD_RETENTION_DAYS_DEFAULT) is what makes this
+  // backward-compatible for free: an NVS blob saved before this field
+  // existed simply never wrote this key, so it reads back as the sensible
+  // default instead of 0 ("keep forever", which nothing chose on purpose).
+  settings.retentionDays = prefs.getUShort(NVS_KEY_RETENTION_DAYS, SD_RETENTION_DAYS_DEFAULT);
   prefs.end();
   return settings;
 }
@@ -39,17 +46,19 @@ bool saveSdSettings(const SdSettings& settings) {
   Preferences prefs;
   if (!prefs.begin(NVS_NAMESPACE, false)) return false;
   bool ok = prefs.putBool(NVS_KEY_ENABLED, settings.enabled) > 0 &&
-            prefs.putUInt(NVS_KEY_CHECK_HOURS, settings.checkIntervalHours) > 0;
+            prefs.putUInt(NVS_KEY_CHECK_HOURS, settings.checkIntervalHours) > 0 &&
+            prefs.putUShort(NVS_KEY_RETENTION_DAYS, settings.retentionDays) > 0;
   prefs.end();
   if (!ok) {
     Serial.println("[sd_store] ERROR: failed to persist the SD storage setting to NVS - it will "
                     "revert to the previous value on the next reboot.");
     return false;
   }
-  // checkIntervalHours needs no reboot to take effect (unlike `enabled` -
-  // see the struct's own comment) - update the cache main.cpp's loop()
-  // reads immediately, not just on the next boot.
+  // checkIntervalHours/retentionDays need no reboot to take effect (unlike
+  // `enabled` - see the struct's own comment) - update the caches
+  // main.cpp's loop() reads immediately, not just on the next boot.
   g_sdCheckIntervalHours = settings.checkIntervalHours;
+  g_sdRetentionDays = settings.retentionDays;
   return true;
 }
 
@@ -57,6 +66,7 @@ void initSdStorage() {
   SdSettings settings = loadSdSettings();
   g_sdSettingEnabled = settings.enabled;
   g_sdCheckIntervalHours = settings.checkIntervalHours;
+  g_sdRetentionDays = settings.retentionDays;
 
   if (!g_sdSettingEnabled) {
     Serial.println("[sd_store] SD card storage is disabled - snapshot history uses the PSRAM ring only.");
@@ -105,12 +115,14 @@ bool sdActive() {
 }
 
 uint32_t sdCheckIntervalHours() { return g_sdCheckIntervalHours; }
+uint16_t sdRetentionDays() { return g_sdRetentionDays; }
 
 SdStatus getSdStatus() {
   SdStatus status;
   status.settingEnabled = g_sdSettingEnabled;
   status.available = g_sdAvailable;
   status.checkIntervalHours = g_sdCheckIntervalHours;
+  status.retentionDays = g_sdRetentionDays;
   if (!g_sdAvailable) return status;
 
   xSemaphoreTake(g_sdMutex, portMAX_DELAY);
@@ -406,6 +418,51 @@ SnapshotStorageCheckResult checkSnapshotStorage() {
                          String((unsigned)result.unreadableFiles) + " unreadable file(s) out of " +
                          String((unsigned)result.filesChecked) +
                          " checked. See the dashboard's Storage page or Serial log for details.");
+  }
+  return result;
+}
+
+SnapshotRetentionResult enforceSnapshotRetention(const std::vector<CameraConfig>& cameras,
+                                                  uint16_t globalRetentionDays) {
+  SnapshotRetentionResult result;
+  if (!sdActive()) return result;
+  result.ranAtAll = true;
+
+  time_t now;
+  time(&now);
+
+  for (auto& cfg : cameras) {
+    uint16_t effectiveDays = cfg.retentionDays != 0 ? cfg.retentionDays : globalRetentionDays;
+    if (effectiveDays == 0) continue; // this camera's effective setting is "keep forever"
+
+    String dirName = String(SNAPSHOTS_ROOT) + "/" + sanitizeCameraDirName(cfg.name);
+    result.camerasSwept++;
+
+    xSemaphoreTake(g_sdMutex, portMAX_DELAY);
+    std::vector<SnapshotFileInfo> files = listDirFiles(dirName);
+    std::vector<String> toDelete = filesToExpire(files, effectiveDays, now);
+    for (auto& name : toDelete) {
+      if (SD.remove(dirName + "/" + name)) {
+        result.filesDeleted++;
+      } else {
+        Serial.printf("[sd_store] Retention: could not delete %s.\n", (dirName + "/" + name).c_str());
+      }
+      // Same defensive per-file watchdog reset as checkSnapshotStorage's
+      // own walk above - harmless no-op when called from a task never
+      // subscribed to the TWDT in the first place (see that function's
+      // comment); load-bearing when called from main.cpp's loop().
+      esp_task_wdt_reset();
+    }
+    xSemaphoreGive(g_sdMutex);
+  }
+
+  if (result.filesDeleted > 0) {
+    Serial.printf("[sd_store] Retention: deleted %u snapshot(s) across %u camera(s).\n",
+                  (unsigned)result.filesDeleted, (unsigned)result.camerasSwept);
+    // Activity log only, deliberately no Telegram push - routine
+    // housekeeping running on a schedule, not something needing attention.
+    logEvent("Retention: deleted " + String((unsigned)result.filesDeleted) +
+             " snapshot(s) older than the configured limit");
   }
   return result;
 }

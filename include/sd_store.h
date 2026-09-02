@@ -1,6 +1,8 @@
 #pragma once
 #include <Arduino.h>
+#include <vector>
 #include "camera_store.h" // CameraConfig
+#include "config.h" // SD_RETENTION_DAYS_DEFAULT
 
 // Optional SD-backed snapshot history - thread-safe global wrapper around
 // the SD/SPI mechanics (config.h's SD_* pin/tuning constants), entirely
@@ -23,6 +25,14 @@ struct SdSettings {
   // check on a large card. Unlike `enabled`, this takes effect
   // immediately on save - just a millis() gate in loop(), no SPI involved.
   uint32_t checkIntervalHours = 0;
+  // Auto-deletes a camera's own stored snapshots (see
+  // enforceSnapshotRetention below) once they're older than this many
+  // days - the global default, overridable per camera
+  // (CameraConfig::retentionDays). 0 = keep forever (no auto-delete).
+  // Defaults to SD_RETENTION_DAYS_DEFAULT (config.h) - see that constant's
+  // own comment for why 30 days. Takes effect immediately on save, same as
+  // checkIntervalHours above.
+  uint16_t retentionDays = SD_RETENTION_DAYS_DEFAULT;
 };
 SdSettings loadSdSettings();
 bool saveSdSettings(const SdSettings& settings);
@@ -53,6 +63,7 @@ struct SdStatus {
   uint64_t totalBytes = 0;  // 0 if not available
   uint64_t usedBytes = 0;   // 0 if not available
   uint32_t checkIntervalHours = 0; // persisted setting, reported regardless of `available`
+  uint16_t retentionDays = SD_RETENTION_DAYS_DEFAULT; // persisted setting, reported regardless of `available`
 };
 SdStatus getSdStatus();
 
@@ -61,6 +72,11 @@ SdStatus getSdStatus();
 // reads this every tick to decide whether to run checkSnapshotStorage().
 // 0 = disabled.
 uint32_t sdCheckIntervalHours();
+
+// The persisted global retention setting (SdSettings::retentionDays),
+// cached at boot and refreshed by saveSdSettings() - main.cpp's loop()
+// reads this to call enforceSnapshotRetention() below. 0 = keep forever.
+uint16_t sdRetentionDays();
 
 // Takes ownership of jpg (caller must not free() it) - writes it as this
 // camera's newest snapshot on SD, pruning its own oldest files first if
@@ -175,3 +191,29 @@ void appendActivityLogLine(const String& line);
 // the dashboard's download route. Returns false (outContent untouched) if
 // !sdActive() or the file doesn't exist/can't be opened.
 bool readActivityLogFile(String* outContent);
+
+// Result of enforceSnapshotRetention() below.
+struct SnapshotRetentionResult {
+  bool ranAtAll = false;
+  size_t camerasSwept = 0;
+  size_t filesDeleted = 0;
+};
+
+// Deletes each camera's own snapshots once they're older than its
+// effective retention (cfg.retentionDays if nonzero, else
+// globalRetentionDays - see CameraConfig::retentionDays's own comment) -
+// age comes from the timestamp embedded in each filename
+// (lib/snapshot_storage's parseSnapshotTimestamp), not filesystem mtime
+// (unreliable on ESP32 SD.h). A camera whose effective retention is 0
+// ("keep forever") is skipped entirely, not walked.
+//
+// Deliberately a separate, explicitly-named operation from
+// checkSnapshotStorage() above rather than folded into that walk - that
+// one is a read-only health check; this one deletes, so it stays visibly
+// its own thing rather than silently turning an existing "check" button/
+// timer destructive. Cost scales with total history stored, same
+// "unbounded by design" reasoning as checkSnapshotStorage - resets the
+// task watchdog per file for the same reason (see that function's own
+// comment).
+SnapshotRetentionResult enforceSnapshotRetention(const std::vector<CameraConfig>& cameras,
+                                                  uint16_t globalRetentionDays);

@@ -133,14 +133,15 @@ std::vector<CameraConfig> loadCameras() {
         } else {
           droppedRecords++;
           // Expected count per schema version - see camera_serialize.cpp's
-          // deserializeCameraV0..V3 for what each one actually requires;
+          // deserializeCameraV0..V4 for what each one actually requires;
           // kept in sync here by hand since cameraRecordFieldCount() only
           // reports what a record actually has, not what its own version
           // expected it to have.
-          const char* expected = "exactly 20";
+          const char* expected = "exactly 22";
           if (storedVersion == 0) expected = "11-14";
           else if (storedVersion == 1) expected = "exactly 14";
           else if (storedVersion == 2) expected = "exactly 19";
+          else if (storedVersion == 3) expected = "exactly 20";
           Serial.printf("[camera_store] WARNING: dropped a camera record that failed to parse under "
                         "schema %u (found %u field(s), expected %s).\n", (unsigned)storedVersion,
                         (unsigned)cameraRecordFieldCount(record), expected);

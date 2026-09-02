@@ -717,6 +717,39 @@ void triggerTimelapseCapture(const CameraConfig& cfg, CameraState& st) {
   size_t jpgLen = 0;
   uint8_t* jpg = fetchOneSnapshot(cfg, st, jpgLen);
   if (!jpg) return; // logged by fetchOneSnapshot itself
+
+  // Opt-in delivery to Telegram - most cameras with a timelapse interval
+  // just want it stored (the original, still-default behavior below).
+  // Deliberately does NOT go through beginCameraAlert (unlike
+  // triggerTamperAlert/triggerSignalLossAlert): that helper's cooldown/
+  // hasAlerted bookkeeping is motion-alert throttling state, unrelated to
+  // (and must not be perturbed by) a schedule this feature already owns
+  // via its own interval - a timelapse capture should send every time its
+  // own timer fires, not be throttled or recorded as if it were a motion
+  // alert. Still respects the mute toggle (st.alertsEnabled): muting a
+  // camera is a blanket "no messages from this camera" expectation, not
+  // motion-alerts-only.
+  if (cfg.timelapseSendToTelegram) {
+    bool alertsEnabled;
+    { CameraStateLock lock(st); alertsEnabled = st.alertsEnabled; }
+    if (alertsEnabled) {
+      std::vector<String> recipients;
+      for (auto& u : loadTelegramUsers()) {
+        if (telegramUserWantsCamera(u, cfg.name)) recipients.push_back(u.chatId);
+      }
+      // Deliberately distinct wording from a motion-alert caption (no
+      // warning glyph, "scheduled" spelled out) - a recipient should never
+      // mistake a routine timelapse photo for something that needs
+      // attention.
+      String caption = "\xF0\x9F\x95\x92 " + cfg.name + " - scheduled snapshot - " + nowTimestampString();
+      for (auto& chatId : recipients) {
+        if (!sendTelegramPhotoWithRetry(jpg, jpgLen, caption, chatId)) {
+          Serial.printf("[%s] Scheduled snapshot send to chat %s failed.\n", cfg.name.c_str(), chatId.c_str());
+        }
+      }
+    }
+  }
+
   pushCameraSnapshot(cfg, st, jpg, jpgLen); // takes ownership - do not free(jpg) here
 }
 

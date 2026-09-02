@@ -877,8 +877,22 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
     if (intervalHours < 0) intervalHours = 0;
     if (intervalHours > (long)SD_CHECK_INTERVAL_MAX_HOURS) intervalHours = (long)SD_CHECK_INTERVAL_MAX_HOURS;
     settings.checkIntervalHours = (uint32_t)intervalHours;
+    // Clamped here, at the point of use (main.cpp's loop() reads
+    // sdRetentionDays() directly), not just here at the form boundary -
+    // same "hand-edited/imported NVS blob bypasses the form entirely"
+    // reasoning as every other clamp in this project.
+    // "30" literal (not a String(SD_RETENTION_DAYS_DEFAULT) - getParam's
+    // default overload takes a const char*, not a String) matches
+    // SD_RETENTION_DAYS_DEFAULT - only reached if the field is missing from
+    // the POST entirely, which the real form never does (it always renders
+    // a value).
+    long retentionDays = request->getParam("retentionDays", "30").toInt();
+    if (retentionDays < 0) retentionDays = 0;
+    if (retentionDays > (long)SD_RETENTION_MAX_DAYS) retentionDays = (long)SD_RETENTION_MAX_DAYS;
+    settings.retentionDays = (uint16_t)retentionDays;
     String banner = saveSdSettings(settings)
-        ? "Saved - the enable/disable setting needs a reboot to apply; the check interval is active immediately."
+        ? "Saved - the enable/disable setting needs a reboot to apply; the check interval and "
+          "retention setting are active immediately."
         : "Failed to save - NVS write error (see Serial log). Setting was NOT changed.";
     return response->send(200, "text/html", renderShell(Tab::Storage, banner, renderStoragePanel()).c_str());
   });

@@ -72,9 +72,26 @@ struct CameraConfig {
   uint16_t motionWatchdogHours = 0;
 
   // Captures one snapshot on this interval regardless of motion, stored
-  // the same way as an alert snapshot (SD if active, RAM ring otherwise) -
-  // never sent to Telegram. 0 = off (default).
+  // the same way as an alert snapshot (SD if active, RAM ring otherwise).
+  // 0 = off (default). By default never sent to Telegram - see
+  // timelapseSendToTelegram below to also deliver these captures.
   uint16_t timelapseIntervalMin = 0;
+
+  // If true, each timelapse capture above is also sent to Telegram (same
+  // recipient filtering as a motion alert - telegramUserWantsCamera), with
+  // a caption that reads as routine rather than an alert. Ignored while
+  // timelapseIntervalMin is 0. Default off - most cameras that want a
+  // periodic capture just want it stored, not pushed as a notification.
+  bool timelapseSendToTelegram = false;
+
+  // Auto-deletes this camera's own stored snapshots (SD only - see
+  // sd_store.h's enforceSnapshotRetention) once they're older than this
+  // many days. 0 = use the Storage page's global SdSettings.retentionDays
+  // instead of a per-camera value - the normal case. A nonzero value here
+  // is for the exceptional camera that needs a different retention window
+  // than everything else (e.g. longer, to preserve evidence for a specific
+  // ongoing concern).
+  uint16_t retentionDays = 0;
 
   // How often this camera's own task asks "anything new?" via ONVIF
   // PullMessages (camera.cpp's cameraTaskFn) - lower means motion is

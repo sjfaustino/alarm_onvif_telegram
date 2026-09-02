@@ -36,6 +36,10 @@ String renderStoragePanel() {
   html += "<p><label>Automatic full storage check every "
           "<input type=\"number\" name=\"checkIntervalHours\" min=\"0\" max=\"720\" style=\"width:5em\" "
           "value=\"" + String((unsigned)status.checkIntervalHours) + "\"> hour(s) (0 = off)</label></p>";
+  html += "<p><label>Delete snapshots older than "
+          "<input type=\"number\" name=\"retentionDays\" min=\"0\" max=\"" + String((unsigned)SD_RETENTION_MAX_DAYS) +
+          "\" style=\"width:5em\" value=\"" + String((unsigned)status.retentionDays) +
+          "\"> day(s) (0 = keep forever)</label></p>";
   html += "<p><button type=\"submit\">Save</button></p></form>";
   html += "<p class=\"hint\">The enable checkbox takes effect after a reboot - toggling it doesn't "
           "touch the SPI bus live while a camera task might be mid-write, and these modules aren't "

@@ -199,6 +199,27 @@ static const unsigned long SD_IDLE_WAIT_TIMEOUT_MS = 10000UL;
 // 720h = 30 days.
 static const uint32_t SD_CHECK_INTERVAL_MAX_HOURS = 720;
 
+// Default for SdSettings::retentionDays (Storage page's global snapshot
+// retention setting) and the ceiling both it and CameraConfig::retentionDays
+// (a per-camera override) are clamped to. 30 days out of the box - not an
+// arbitrary number: several jurisdictions' general rule for private CCTV
+// footage (Portugal's data protection guidance among them) is "no longer
+// than necessary, 30 days as the common default absent a specific reason
+// to keep longer" - a sensible default for anyone running this
+// unmodified, not a compliance guarantee for any specific jurisdiction.
+// The per-camera override exists precisely for "a specific reason to keep
+// longer" (e.g. an ongoing concern about one particular camera). 0 (either
+// the global setting or a per-camera override) means "keep forever - never
+// auto-delete," a deliberate opt-out, not the default.
+static const uint16_t SD_RETENTION_DAYS_DEFAULT = 30;
+static const uint16_t SD_RETENTION_MAX_DAYS = 3650; // ~10 years
+
+// How often main.cpp's loop() runs enforceSnapshotRetention() (sd_store.h) -
+// independent of SdSettings::checkIntervalHours (that dial can legitimately
+// be "off" while retention still needs to run on its own schedule). Once a
+// day is plenty for a days-scale setting; no reason to check more often.
+static const unsigned long SD_RETENTION_CHECK_INTERVAL_MS = 24UL * 60UL * 60UL * 1000UL;
+
 // Clamp for the dashboard's NTP resync interval (WifiCredentials::
 // ntpSyncIntervalMs, Network page) - webserver_network.cpp's
 // handleSaveNetwork clamps user input to this, and main.cpp's setupTime

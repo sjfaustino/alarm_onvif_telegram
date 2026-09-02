@@ -147,9 +147,15 @@ static String renderCameraForm(const CameraConfig& v, bool isEdit) {
     }
   }
   html += "<label>Timelapse capture, minutes (0 = off) - stores a snapshot on this interval "
-          "regardless of motion (never sent to Telegram, just kept in history/SD)"
+          "regardless of motion, kept in history/SD"
           "<input type=\"text\" name=\"timelapseIntervalMin\" value=\"" + String(v.timelapseIntervalMin) +
           "\"></label>";
+  html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"timelapseSendToTelegram\"" +
+          String(v.timelapseSendToTelegram ? " checked" : "") +
+          "> Also send these scheduled snapshots to Telegram (in addition to storing them) - "
+          "ignored while the interval above is 0</label>";
+  html += "<label>Snapshot retention override, days (0 = use the Storage page's global setting)"
+          "<input type=\"text\" name=\"retentionDays\" value=\"" + String(v.retentionDays) + "\"></label>";
   html += "<label>Notes<input type=\"text\" name=\"notes\" value=\"" + htmlEscape(v.notes) + "\"></label>";
   html += "<p><button type=\"submit\" formaction=\"/cameras/save\">" +
           String(isEdit ? "Save changes" : "Add camera") + "</button> ";
@@ -349,8 +355,16 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
     html += "<tr><td>" + htmlEscape(c.name) + "</td><td>" + htmlEscape(c.deviceServiceUrl) +
             "</td><td>" + enabledBadge + "</td><td>" + liveStatus + "</td><td>" +
             lastAlertStr + "</td><td>" + previewCell + "</td><td>" +
-            notesCell + "</td><td>";
-    html += renderEditDeleteActions("/cameras/edit?name=", "/delete", c.name) + "</td></tr>";
+            notesCell + "</td><td><div class=\"row-actions\">";
+    // Best-effort convenience link to the camera's own web UI (its plain
+    // http:// root, not the ONVIF service path) - deviceServiceUrl is the
+    // only address on record for it, so this is a guess, not a guarantee
+    // every camera actually serves a UI there; opens in a new tab so a dead
+    // link doesn't navigate the dashboard away.
+    html += "<a class=\"icon-btn secondary\" href=\"http://" + extractHost(c.deviceServiceUrl) +
+            "/\" target=\"_blank\" title=\"Open camera's web UI\" aria-label=\"Open camera's web UI\">"
+            "&#8599;</a>";
+    html += renderEditDeleteActions("/cameras/edit?name=", "/delete", c.name) + "</div></td></tr>";
     rowIdx++;
   }
   html += "</table>";
@@ -512,6 +526,15 @@ CameraConfig parseCameraForm(PsychicRequest* request) {
   if (timelapseMin < 0) timelapseMin = 0;
   if (timelapseMin > 1440) timelapseMin = 1440; // 24h
   c.timelapseIntervalMin = (uint16_t)timelapseMin;
+  c.timelapseSendToTelegram = request->hasParam("timelapseSendToTelegram");
+
+  // 0 is the deliberate, meaningful "use the global Storage-page setting"
+  // value here - same "never substitute it away, only clamp the ceiling"
+  // reasoning as motionWatchdogHours/timelapseIntervalMin above.
+  long retentionDays = request->getParam("retentionDays", "0").toInt();
+  if (retentionDays < 0) retentionDays = 0;
+  if (retentionDays > (long)SD_RETENTION_MAX_DAYS) retentionDays = (long)SD_RETENTION_MAX_DAYS;
+  c.retentionDays = (uint16_t)retentionDays;
 
   // A blank/zero/negative field shouldn't produce a near-0 interval that
   // hammers the camera (see CAMERA_POLL_INTERVAL_MIN_MS's own comment,

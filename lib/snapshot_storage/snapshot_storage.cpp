@@ -1,6 +1,7 @@
 #include "snapshot_storage.h"
 #include <cctype>
 #include <cstdio>
+#include <ctime>
 
 static String sanitizeToAlnumHyphen(const String& s) {
   String out;
@@ -39,6 +40,41 @@ std::vector<String> filesToPrune(const std::vector<SnapshotFileInfo>& filesOldes
   for (size_t i = 0; i < filesOldestFirst.size() && result.size() < maxFiles && reclaimed < bytesNeeded; i++) {
     result.push_back(filesOldestFirst[i].name);
     reclaimed += filesOldestFirst[i].size;
+  }
+  return result;
+}
+
+time_t parseSnapshotTimestamp(const String& filename) {
+  if (filename.length() < 15) return (time_t)-1;
+  for (int i = 0; i < 8; i++) {
+    if (!isdigit((unsigned char)filename[i])) return (time_t)-1;
+  }
+  if (filename[8] != '-') return (time_t)-1;
+  for (int i = 9; i < 15; i++) {
+    if (!isdigit((unsigned char)filename[i])) return (time_t)-1;
+  }
+
+  struct tm tmStruct = {};
+  tmStruct.tm_year = filename.substring(0, 4).toInt() - 1900;
+  tmStruct.tm_mon  = filename.substring(4, 6).toInt() - 1;
+  tmStruct.tm_mday = filename.substring(6, 8).toInt();
+  tmStruct.tm_hour = filename.substring(9, 11).toInt();
+  tmStruct.tm_min  = filename.substring(11, 13).toInt();
+  tmStruct.tm_sec  = filename.substring(13, 15).toInt();
+  tmStruct.tm_isdst = -1; // let mktime figure out DST, same as the localtime_r that wrote it
+  return mktime(&tmStruct); // -1 on failure too - already our own "unparseable" sentinel
+}
+
+std::vector<String> filesToExpire(const std::vector<SnapshotFileInfo>& filesOldestFirst,
+                                   uint16_t retentionDays, time_t nowEpoch) {
+  std::vector<String> result;
+  if (retentionDays == 0) return result; // keep forever
+
+  time_t cutoff = nowEpoch - (time_t)retentionDays * 24 * 60 * 60;
+  for (auto& f : filesOldestFirst) {
+    time_t ts = parseSnapshotTimestamp(f.name);
+    if (ts == (time_t)-1) continue; // can't determine age - leave it alone, don't guess
+    if (ts < cutoff) result.push_back(f.name);
   }
   return result;
 }
