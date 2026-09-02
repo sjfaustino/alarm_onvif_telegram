@@ -185,12 +185,7 @@ static String renderShell(Tab active, const String& banner, const String& conten
   String html;
   html += "<!DOCTYPE html><html><head><meta charset=\"utf-8\">";
   html += "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">";
-  // Auto-reload every 2s while this tab has a background job running,
-  // instead of making the user manually reload to see when it's done - see
-  // tabHasActiveBackgroundJob above. No client-side JS needed for this one.
-  if (tabHasActiveBackgroundJob(active)) {
-    html += "<meta http-equiv=\"refresh\" content=\"2\">";
-  }
+  bool autoRefresh = tabHasActiveBackgroundJob(active);
   // Inline base64 SVG data URI - a small camera-lens glyph in the same
   // blue (#2563eb) as the sidebar/buttons, so browser tabs get a real icon
   // instead of the default blank/globe placeholder. No separate asset file
@@ -348,6 +343,20 @@ static String renderShell(Tab active, const String& banner, const String& conten
   }
   if (banner.length() > 0) html += "<div class=\"banner\">" + banner + "</div>";
   html += contentHtml;
+  // A background job (started above via tabHasActiveBackgroundJob) is still
+  // running - poll for it to finish instead of leaving the user to manually
+  // reload. A plain <meta http-equiv="refresh"> would fire unconditionally,
+  // wiping out anything being typed into this same page's Add/Edit form
+  // (every tab this applies to - Cameras, Users, Network, Storage - has
+  // one) the instant 2s elapses, even mid-keystroke. This skips the reload
+  // while any input/textarea/select has focus, checking again next tick
+  // instead of losing the poll entirely.
+  if (autoRefresh) {
+    html += "<script>setInterval(function(){"
+            "var t=document.activeElement&&document.activeElement.tagName;"
+            "if(t!=='INPUT'&&t!=='TEXTAREA'&&t!=='SELECT')location.reload();"
+            "},2000);</script>";
+  }
   html += "</main></body></html>";
   return html;
 }
