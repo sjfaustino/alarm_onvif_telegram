@@ -1298,12 +1298,16 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
         bool alertsEnabled, offline;
         unsigned long revertDueMs;
         bool revertToOn;
+        size_t latencyCount = 0;
+        unsigned long latencySum = 0;
         {
           CameraStateLock lock(states[i]);
           alertsEnabled = states[i].alertsEnabled;
           offline = states[i].isOffline;
           revertDueMs = states[i].scheduledRevertDueMs;
           revertToOn = states[i].scheduledRevertToOn;
+          latencyCount = states[i].motionLatencyHistoryCount;
+          for (size_t j = 0; j < latencyCount; j++) latencySum += states[i].motionLatencyHistory[j];
         }
         msg += String(cameras[i].name) + ": " + (alertsEnabled ? "ON" : "OFF");
         if (offline) msg += " - OFFLINE";
@@ -1311,6 +1315,11 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
           msg += " (auto " + String(revertToOn ? "ON" : "OFF") + " in " +
                  formatUptime(revertDueMs - millis()) + ")";
         }
+        // Condensed on purpose - just the average, not min/max/count (see
+        // the Cameras page's own click-to-reveal rollup for the full
+        // breakdown) - /status is meant to stay a compact, phone-readable
+        // per-camera list, not a diagnostics dump.
+        if (latencyCount > 0) msg += " ~" + String(latencySum / latencyCount) + "ms";
         msg += "\n";
       }
       Serial.printf("[Telegram] Replying to user \"%s\" with camera status.\n", sender.name.c_str());

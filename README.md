@@ -266,7 +266,11 @@ Arduino-ESP32/IDF releases.
   that time has already passed today) - after which the camera automatically
   reverts to the opposite state; omitted entirely is permanent, as before.
   `/status` reports each
-  camera's ON/OFF state plus OFFLINE and any pending timer. `/health` reports
+  camera's ON/OFF state plus OFFLINE, any pending timer, and (once that camera
+  has sent at least one photo) its average motion-to-photo latency - just the
+  average, condensed for a compact phone-readable list; the Cameras page's own
+  click-to-reveal rollup has the full average/min/max/poll-interval breakdown.
+  `/health` reports
   board uptime, free heap (current and worst-case-ever), free PSRAM, NVS usage,
   WiFi signal strength, and SD storage status in one message - a quick "is
   the board OK" check without opening the dashboard. `/log [N]` replies with the
