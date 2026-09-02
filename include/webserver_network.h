@@ -46,3 +46,8 @@ BackgroundJobStartOutcome startWifiScanAsync();
 // or "" if no scan has run yet this boot. Safe to call from any task
 // (internally locked) - renderNetworkPanel calls this itself.
 String renderWifiScanStatus();
+
+// True while the WiFi scan job above is running - lets renderShell()
+// (webserver.cpp) decide whether to auto-refresh the Network page instead
+// of leaving the user to manually reload.
+bool networkJobsInProgress();

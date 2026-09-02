@@ -165,10 +165,32 @@ static RateLimitMiddleware g_rateLimitMiddleware;
 
 enum class Tab { None, Network, Cameras, Users, Activity, Gallery, Firmware, Maintenance, Storage, Security };
 
+// Whether the tab currently being rendered has a background job in
+// progress (a camera connection test, a WS-Discovery search, a WiFi scan,
+// an SD storage check/erase, a Telegram test message) - every such job's
+// "in progress" hint used to say "reload this page" with no way to do
+// that automatically. Checked fresh on every render (not cached) so a GET
+// reload picks up a job that just finished, same as the hint text itself.
+static bool tabHasActiveBackgroundJob(Tab active) {
+  switch (active) {
+    case Tab::Cameras: return cameraJobsInProgress();
+    case Tab::Users:   return userJobsInProgress();
+    case Tab::Network: return networkJobsInProgress();
+    case Tab::Storage: return storageJobsInProgress();
+    default:           return false;
+  }
+}
+
 static String renderShell(Tab active, const String& banner, const String& contentHtml) {
   String html;
   html += "<!DOCTYPE html><html><head><meta charset=\"utf-8\">";
   html += "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">";
+  // Auto-reload every 2s while this tab has a background job running,
+  // instead of making the user manually reload to see when it's done - see
+  // tabHasActiveBackgroundJob above. No client-side JS needed for this one.
+  if (tabHasActiveBackgroundJob(active)) {
+    html += "<meta http-equiv=\"refresh\" content=\"2\">";
+  }
   // Inline base64 SVG data URI - a small camera-lens glyph in the same
   // blue (#2563eb) as the sidebar/buttons, so browser tabs get a real icon
   // instead of the default blank/globe placeholder. No separate asset file

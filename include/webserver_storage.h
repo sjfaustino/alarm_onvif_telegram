@@ -59,3 +59,8 @@ BackgroundJobStartOutcome startEraseAllAsync();
 // if no erase has ever run this boot. Safe to call from any task
 // (internally locked) - renderStoragePanel calls this itself.
 String renderEraseAllStatus();
+
+// True while either background job above (check, erase) is running - lets
+// renderShell() (webserver.cpp) decide whether to auto-refresh the Storage
+// page instead of leaving the user to manually reload.
+bool storageJobsInProgress();

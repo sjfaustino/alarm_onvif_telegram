@@ -46,3 +46,8 @@ BackgroundJobStartOutcome startTestMessageAsync();
 // shows up on a normal page load too, not just right after clicking the
 // button.
 String renderTestMessageStatus();
+
+// True while the test message job above is running - lets renderShell()
+// (webserver.cpp) decide whether to auto-refresh the Users page instead of
+// leaving the user to manually reload.
+bool userJobsInProgress();

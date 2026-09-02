@@ -174,3 +174,9 @@ BackgroundJobStartOutcome startCameraDiscoveryAsync();
 // or "" if no search has run yet this boot. Safe to call from any task
 // (internally locked) - renderCamerasPanel calls this itself.
 String renderCameraDiscoveryStatus();
+
+// True while any of the three background jobs above (test connection, test
+// all, discovery) is running - lets renderShell() (webserver.cpp) decide
+// whether to auto-refresh the Cameras page instead of leaving the user to
+// manually reload.
+bool cameraJobsInProgress();

@@ -329,3 +329,7 @@ String renderWifiScanStatus() {
   }
   return "<p>Networks found:</p>" + renderDiscoveryResultsTable({"SSID", "Signal", "Security"}, "/network", rows);
 }
+
+bool networkJobsInProgress() {
+  return g_wifiScanJob.status().inProgress;
+}

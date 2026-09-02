@@ -165,3 +165,7 @@ String renderEraseAllStatus() {
   return st.result ? "<p class=\"hint\">All snapshot history erased.</p>"
                     : "<p class=\"hint\">Erase completed with errors - see Serial log.</p>";
 }
+
+bool storageJobsInProgress() {
+  return g_storageCheckJob.status().inProgress || g_eraseAllJob.status().inProgress;
+}

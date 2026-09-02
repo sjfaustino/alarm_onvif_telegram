@@ -190,6 +190,10 @@ String renderTestMessageStatus() {
         "TELEGRAM_ROOT_CA in telegram_ca.h still being the placeholder, are the usual causes).</p>";
 }
 
+bool userJobsInProgress() {
+  return g_testMessageJob.status().inProgress;
+}
+
 TelegramUser parseUserForm(PsychicRequest* request) {
   TelegramUser u;
   u.name           = request->getParam("name", "");

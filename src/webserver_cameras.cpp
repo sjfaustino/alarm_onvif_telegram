@@ -1057,3 +1057,8 @@ String renderCameraDiscoveryStatus() {
   return "<p>Cameras found on the network:</p>" +
          renderDiscoveryResultsTable({"Address", "Name hint"}, "/cameras", rows);
 }
+
+bool cameraJobsInProgress() {
+  return g_testConnectionJob.status().inProgress || g_testAllJob.status().inProgress ||
+         g_discoveryJob.status().inProgress;
+}
