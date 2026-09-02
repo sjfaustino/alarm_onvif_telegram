@@ -7,7 +7,7 @@ void tearDown(void) {}
 
 void test_renderEditDeleteActions_edit_link_uses_route_base_and_encoded_name(void) {
   String html = renderEditDeleteActions("/cameras/edit?name=", "/delete", "D01-FrontDoor");
-  TEST_ASSERT_TRUE(html.indexOf("<a href=\"/cameras/edit?name=D01-FrontDoor\">Edit</a>") >= 0);
+  TEST_ASSERT_TRUE(html.indexOf("<a class=\"icon-btn secondary\" href=\"/cameras/edit?name=D01-FrontDoor\"") >= 0);
 }
 
 void test_renderEditDeleteActions_percent_encodes_special_characters_in_edit_link(void) {

@@ -2,12 +2,14 @@
 #include "format_utils.h"
 
 String renderEditDeleteActions(const String& editRouteBase, const String& deleteRoute, const String& itemName) {
-  String html;
-  html += "<a href=\"" + editRouteBase + urlEncode(itemName) + "\">Edit</a> ";
+  String html = "<div class=\"row-actions\">";
+  html += "<a class=\"icon-btn secondary\" href=\"" + editRouteBase + urlEncode(itemName) +
+          "\" title=\"Edit\" aria-label=\"Edit\">&#9998;</a>";
   html += "<form class=\"inline\" method=\"POST\" action=\"" + deleteRoute + "\" "
           "onsubmit=\"return confirm('Delete " + htmlEscape(itemName) + "?');\">";
   html += "<input type=\"hidden\" name=\"name\" value=\"" + htmlEscape(itemName) + "\">";
-  html += "<button type=\"submit\" class=\"danger\">Delete</button></form>";
+  html += "<button type=\"submit\" class=\"danger icon-btn\" title=\"Delete\" aria-label=\"Delete\">&#128465;</button></form>";
+  html += "</div>";
   return html;
 }
 

@@ -251,6 +251,23 @@ static String renderShell(Tab active, const String& banner, const String& conten
   html += ".badge-warn{background:#d97706;}";
   html += ".badge-offline{background:#dc2626;}";
   html += ".badge-off{background:#6b7280;}";
+  // Compact icon-only variant of the button rules above, for the
+  // Edit/Delete pair every list row (Cameras, Telegram Users) ends with -
+  // a row of "Edit  Delete" text links/buttons repeated down a long table
+  // reads noisier and scans slower than two small glyphs. Works on both
+  // <a> (Edit, a plain navigation link) and <button> (Delete, a form
+  // submit) since it carries its own chrome instead of relying on the
+  // button{...} element selector above.
+  html += ".icon-btn{display:inline-flex;align-items:center;justify-content:center;"
+          "width:30px;height:30px;padding:0;font-size:15px;line-height:1;border-radius:6px;"
+          "border:1px solid #2563eb;background:#2563eb;color:#fff;cursor:pointer;"
+          "text-decoration:none;transition:background .15s,border-color .15s;}";
+  html += ".icon-btn:hover{background:#1d4ed8;border-color:#1d4ed8;}";
+  html += ".icon-btn.danger{background:#dc2626;border-color:#dc2626;}";
+  html += ".icon-btn.danger:hover{background:#b91c1c;border-color:#b91c1c;}";
+  html += ".icon-btn.secondary{background:#fff;color:#374151;border-color:#d1d5db;}";
+  html += ".icon-btn.secondary:hover{background:#f3f4f6;border-color:#9ca3af;}";
+  html += ".row-actions{display:flex;gap:6px;}";
   html += "</style></head><body>";
 
   // System submenu (Firmware/Maintenance) starts expanded whenever either
