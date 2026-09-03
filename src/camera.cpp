@@ -172,13 +172,20 @@ bool cameraFetchProfileAndSnapshotUri(const CameraConfig& cfg, CameraState& st) 
     // firmwares want ?loginuse=...&loginpas=...) without a credential
     // landing in a committed file.
     String resolved = cfg.snapshotUriOverride;
+    String user;
     {
       CameraStateLock lock(st);
+      user = st.user;
       resolved.replace("{USER}", st.user);
       resolved.replace("{PASS}", st.pass);
       st.snapshotUri = resolved;
     }
-    String logUri = cfg.snapshotUriOverride; // log the un-substituted form - avoids echoing st.pass to serial
+    // {USER} substituted for real (a username isn't sensitive, and showing
+    // it makes this line actually useful for confirming what URL gets
+    // requested) - {PASS} stays masked, the whole reason this doesn't just
+    // log `resolved` directly.
+    String logUri = cfg.snapshotUriOverride;
+    logUri.replace("{USER}", user);
     logUri.replace("{PASS}", "***");
     Serial.printf("[%s] Using configured snapshot override: %s\n", cfg.name.c_str(), logUri.c_str());
     return true;
