@@ -9,6 +9,21 @@
 #include <freertos/FreeRTOS.h>
 #include <cctype>
 
+// IP/MAC/signal/gateway/subnet/DNS rows for whichever network is currently
+// connected - shared by both the Primary and Backup fieldsets below rather
+// than duplicated, since exactly one (or neither) of them is ever true at
+// once.
+static String renderLiveConnectionRows() {
+  String html;
+  html += "<tr><th>IP address</th><td>" + WiFi.localIP().toString() + "</td></tr>";
+  html += "<tr><th>MAC address</th><td>" + WiFi.macAddress() + "</td></tr>";
+  html += "<tr><th>Signal (RSSI)</th><td>" + String(WiFi.RSSI()) + " dBm</td></tr>";
+  html += "<tr><th>Gateway</th><td>" + WiFi.gatewayIP().toString() + "</td></tr>";
+  html += "<tr><th>Subnet mask</th><td>" + WiFi.subnetMask().toString() + "</td></tr>";
+  html += "<tr><th>DNS server</th><td>" + WiFi.dnsIP().toString() + "</td></tr>";
+  return html;
+}
+
 String renderNetworkPanel(const String& prefillSsid) {
   WifiCredentials creds = loadWifiCredentials();
 
@@ -26,10 +41,20 @@ String renderNetworkPanel(const String& prefillSsid) {
 
   String html = "<h1>Network</h1>";
 
+  // Live connection details (IP/MAC/signal/gateway/etc.) only mean anything
+  // for whichever network is ACTUALLY connected right now - WiFi.localIP()
+  // and friends reflect the one active radio connection, not a property of
+  // either SSID individually, so they're rendered under whichever fieldset
+  // is currently connected rather than in a separate block that didn't say
+  // which network it was describing. The MAC address is the board's own
+  // interface (same regardless of which network it joins), shown alongside
+  // the rest for convenience, not because it's specific to that network.
   html += "<fieldset><legend>Primary</legend><table>";
   html += "<tr><th>SSID</th><td>" + htmlEscape(creds.primary.ssid) + "</td></tr>";
   html += "<tr><th>Status</th><td>" + String(primaryConnected ? "Connected" : "Not currently connected") +
-          "</td></tr></table></fieldset>";
+          "</td></tr>";
+  if (primaryConnected) html += renderLiveConnectionRows();
+  html += "</table></fieldset>";
 
   html += "<fieldset><legend>Backup</legend>";
   if (creds.backup.ssid.length() == 0) {
@@ -37,14 +62,13 @@ String renderNetworkPanel(const String& prefillSsid) {
   } else {
     html += "<table><tr><th>SSID</th><td>" + htmlEscape(creds.backup.ssid) + "</td></tr>";
     html += "<tr><th>Status</th><td>" + String(backupConnected ? "Connected" : "Not currently connected") +
-            "</td></tr></table>";
+            "</td></tr>";
+    if (backupConnected) html += renderLiveConnectionRows();
+    html += "</table>";
   }
   html += "</fieldset>";
 
   html += "<table>";
-  html += "<tr><th>IP address</th><td>" + WiFi.localIP().toString() + "</td></tr>";
-  html += "<tr><th>MAC address</th><td>" + WiFi.macAddress() + "</td></tr>";
-  html += "<tr><th>Signal (RSSI)</th><td>" + String(WiFi.RSSI()) + " dBm</td></tr>";
   html += "<tr><th>mDNS address</th><td>http://" + htmlEscape(creds.hostname) + ".local/</td></tr>";
   html += "<tr><th>Uptime</th><td>" + formatUptime(millis()) + "</td></tr>";
   html += "</table>";
