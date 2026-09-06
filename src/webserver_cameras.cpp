@@ -156,6 +156,13 @@ static String renderCameraForm(const CameraConfig& v, bool isEdit) {
           "ignored while the interval above is 0</label>";
   html += "<label>Snapshot retention override, days (0 = use the Storage page's global setting)"
           "<input type=\"text\" name=\"retentionDays\" value=\"" + String(v.retentionDays) + "\"></label>";
+  html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"petAlertsEnabled\"" +
+          String(v.petAlertsEnabled ? " checked" : "") +
+          "> Alert on pet (dog/cat) detection too - off by default, since a person/vehicle-only "
+          "camera would otherwise page you for your own pet</label>";
+  html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"petAlertsTextOnly\"" +
+          String(v.petAlertsTextOnly ? " checked" : "") +
+          "> Send pet alerts as text only, no photo - ignored unless pet alerts above are on</label>";
   html += "<label>Notes<input type=\"text\" name=\"notes\" value=\"" + htmlEscape(v.notes) + "\"></label>";
   html += "<p><button type=\"submit\" formaction=\"/cameras/save\">" +
           String(isEdit ? "Save changes" : "Add camera") + "</button> ";
@@ -535,6 +542,9 @@ CameraConfig parseCameraForm(PsychicRequest* request) {
   if (retentionDays < 0) retentionDays = 0;
   if (retentionDays > (long)SD_RETENTION_MAX_DAYS) retentionDays = (long)SD_RETENTION_MAX_DAYS;
   c.retentionDays = (uint16_t)retentionDays;
+
+  c.petAlertsEnabled = request->hasParam("petAlertsEnabled");
+  c.petAlertsTextOnly = request->hasParam("petAlertsTextOnly");
 
   // A blank/zero/negative field shouldn't produce a near-0 interval that
   // hammers the camera (see CAMERA_POLL_INTERVAL_MIN_MS's own comment,

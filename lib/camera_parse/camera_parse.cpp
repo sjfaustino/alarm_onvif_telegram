@@ -112,7 +112,8 @@ bool motionEventFired(const String& xml, const CameraEventClassification& ev) {
   if (ev.cellMotion && topicReportedTrue(xml, "CellMotionDetector")) return true;
   if (ev.peopleDetect && topicReportedTrue(xml, "PeopleDetect")) return true;
   if (ev.vehicleDetect && topicReportedTrue(xml, "VehicleDetect")) return true;
-  if (ev.dogCatDetect && topicReportedTrue(xml, "DogCatDetect")) return true;
+  // DogCatDetect deliberately excluded - see its own comment in
+  // camera_parse.h. Gated per-camera by camera.cpp's parseEvents instead.
   return false;
 }
 

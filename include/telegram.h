@@ -7,7 +7,15 @@
 // Sends cfg.snapshotBurstCount snapshot(s), captioned "<camera name> -
 // <UTC timestamp>" (plus "(n/N)"), to every subscribed user, subject to
 // cfg's alert cooldown. Safe to call on every motion event.
-void triggerMotionAlert(const CameraConfig& cfg, CameraState& st);
+//
+// isPetEvent (default false) marks this as a DogCatDetect-only event
+// (camera.cpp's parseEvents - caller already checked
+// CameraConfig::petAlertsEnabled before calling this at all) - shares the
+// exact same mute/cooldown/quiet-hours/recipient gating as a real motion
+// alert, just with pet-specific wording, and skips the photo entirely
+// (sending a single text message instead) when cfg.petAlertsTextOnly is
+// also set.
+void triggerMotionAlert(const CameraConfig& cfg, CameraState& st, bool isPetEvent = false);
 
 // Tamper/signal-loss alerts, gated by the same alertsEnabled/cooldown
 // subscribed-recipients rules triggerMotionAlert uses (one shared

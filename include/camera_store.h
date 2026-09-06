@@ -93,6 +93,21 @@ struct CameraConfig {
   // ongoing concern).
   uint16_t retentionDays = 0;
 
+  // If true, a DogCatDetect event (camera_parse.h) also triggers an alert,
+  // same as PeopleDetect/VehicleDetect. Off by default - unlike person/
+  // vehicle detection, many users' own pets would otherwise trigger an
+  // alert on every ordinary trip through the yard, defeating the point of
+  // a camera's AI-detection filtering in the first place. See camera.cpp's
+  // parseEvents for how this gates a pet event separately from real motion.
+  bool petAlertsEnabled = false;
+
+  // When a pet alert fires (petAlertsEnabled must also be true), send a
+  // single text-only message instead of the usual snapshot-burst photo
+  // alert - a lower-priority "FYI" notification for someone who wants to
+  // know their pet was seen without a photo each time. Ignored while
+  // petAlertsEnabled is false.
+  bool petAlertsTextOnly = false;
+
   // How often this camera's own task asks "anything new?" via ONVIF
   // PullMessages (camera.cpp's cameraTaskFn) - lower means motion is
   // noticed sooner (PullMessages' own PT1S long-poll is designed for

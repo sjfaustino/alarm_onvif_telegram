@@ -242,11 +242,16 @@ void test_motionEventFired_true_for_vehicle_detect_reporting_true(void) {
   TEST_ASSERT_TRUE(motionEventFired(xml, ev));
 }
 
-void test_motionEventFired_true_for_dog_cat_detect_reporting_true(void) {
+// Unlike PeopleDetect/VehicleDetect, DogCatDetect must NOT make
+// motionEventFired true on its own - a pet event is gated separately, per
+// camera, by CameraConfig::petAlertsEnabled (camera.cpp's parseEvents),
+// not treated as unconditional motion the way person/vehicle detection is.
+void test_motionEventFired_false_for_dog_cat_detect_alone(void) {
   String xml = "<wsnt:NotificationMessage><tt:Topic>tns1:RuleEngine/MyRuleDetector/DogCatDetect"
                "</tt:Topic><tt:SimpleItem Name=\"State\" Value=\"true\"/></wsnt:NotificationMessage>";
   auto ev = classifyCameraEvent(xml);
-  TEST_ASSERT_TRUE(motionEventFired(xml, ev));
+  TEST_ASSERT_TRUE(ev.dogCatDetect); // sanity: classification itself still recognizes the topic
+  TEST_ASSERT_FALSE(motionEventFired(xml, ev));
 }
 
 // No motion-relevant topic present at all (only Tamper) - never fires,
@@ -330,7 +335,7 @@ int main(int argc, char** argv) {
   RUN_TEST(test_motionEventFired_true_for_motion_alarm_reporting_true);
   RUN_TEST(test_motionEventFired_true_for_people_detect_reporting_true);
   RUN_TEST(test_motionEventFired_true_for_vehicle_detect_reporting_true);
-  RUN_TEST(test_motionEventFired_true_for_dog_cat_detect_reporting_true);
+  RUN_TEST(test_motionEventFired_false_for_dog_cat_detect_alone);
   RUN_TEST(test_motionEventFired_false_when_only_an_unrelated_topic_is_true);
   RUN_TEST(test_motionEventFired_true_when_motion_topic_itself_is_true_alongside_another);
   RUN_TEST(test_motionEventFired_false_when_no_motion_topic_present);

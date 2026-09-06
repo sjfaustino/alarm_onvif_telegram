@@ -294,8 +294,8 @@ static void printEventState(const CameraConfig& cfg, const String& xml, const St
 static void parseEvents(const CameraConfig& cfg, CameraState& st, const String& xml) {
   CameraEventClassification ev = classifyCameraEvent(xml);
   if (!ev.anyTrue && !VERBOSE_SOAP_LOG) return;
-  if (!ev.motionAlarm && !ev.cellMotion && !ev.peopleDetect && !ev.vehicleDetect && !ev.signalLoss &&
-      !ev.tamper) {
+  if (!ev.motionAlarm && !ev.cellMotion && !ev.peopleDetect && !ev.vehicleDetect && !ev.dogCatDetect &&
+      !ev.signalLoss && !ev.tamper) {
     // A real notification arrived (not just an empty/heartbeat-ish
     // PullMessagesResponse - see the anyTrue/VERBOSE_SOAP_LOG guard above)
     // but none of the topics this project knows about were in it - e.g. a
@@ -316,6 +316,7 @@ static void parseEvents(const CameraConfig& cfg, CameraState& st, const String& 
   if (ev.cellMotion)   { Serial.printf("[%s] CELL MOTION EVENT\n", cfg.name.c_str());   printEventState(cfg, xml, "CellMotionDetector"); }
   if (ev.peopleDetect)  { Serial.printf("[%s] PEOPLE DETECT EVENT\n", cfg.name.c_str());  printEventState(cfg, xml, "PeopleDetect"); }
   if (ev.vehicleDetect) { Serial.printf("[%s] VEHICLE DETECT EVENT\n", cfg.name.c_str()); printEventState(cfg, xml, "VehicleDetect"); }
+  if (ev.dogCatDetect) { Serial.printf("[%s] DOG/CAT DETECT EVENT\n", cfg.name.c_str());  printEventState(cfg, xml, "DogCatDetect"); }
   if (ev.signalLoss)    { Serial.printf("[%s] SIGNAL LOSS EVENT\n", cfg.name.c_str());    printEventState(cfg, xml, "SignalLoss"); }
   if (ev.tamper)       { Serial.printf("[%s] TAMPER EVENT\n", cfg.name.c_str());        printEventState(cfg, xml, "TamperDetector"); }
 
@@ -328,6 +329,20 @@ static void parseEvents(const CameraConfig& cfg, CameraState& st, const String& 
   if (motionEventFired(xml, ev)) {
     st.lastMotionMs = millis(); // real motion signal, independent of mute/cooldown/quiet hours - see checkMotionWatchdog
     triggerMotionAlert(cfg, st);
+  } else if (ev.dogCatDetect && topicReportedTrue(xml, "DogCatDetect")) {
+    // Pet-only event (no person/vehicle/motion topic also fired in this
+    // same batch - motionEventFired above would have already handled it
+    // if one had) - gated per-camera via CameraConfig::petAlertsEnabled,
+    // unlike person/vehicle detection, since many users' own pets would
+    // otherwise trigger the same alert a real intruder would. Still a real
+    // motion signal for the watchdog either way - a pet event proves the
+    // detection pipeline is alive even when its alert is switched off.
+    st.lastMotionMs = millis();
+    if (cfg.petAlertsEnabled) {
+      triggerMotionAlert(cfg, st, true);
+    } else {
+      logEvent(cfg.name + ": pet detected (alerts off)");
+    }
   }
   if (ev.tamper && topicReportedTrue(xml, "TamperDetector")) {
     triggerTamperAlert(cfg, st);

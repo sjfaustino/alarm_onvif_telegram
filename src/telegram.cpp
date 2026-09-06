@@ -586,7 +586,7 @@ static unsigned int safeSnapshotBurstCount(const CameraConfig& cfg) {
   return shots;
 }
 
-void triggerMotionAlert(const CameraConfig& cfg, CameraState& st) {
+void triggerMotionAlert(const CameraConfig& cfg, CameraState& st, bool isPetEvent) {
   // alertsEnabled is written by loop()'s task (pollTelegramCommands'
   // /on//off), this function runs on the camera's own task - cross-task
   // read, needs CameraStateLock. See CameraState::stateMutex.
@@ -640,6 +640,20 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st) {
     return;
   }
 
+  // Pet alert, text-only mode: no photo involved at all, so none of the
+  // snapshotUri/fetch/burst machinery below applies - just spend the
+  // cooldown (same shared cooldown a photo alert would spend) and send one
+  // message per recipient.
+  if (isPetEvent && cfg.petAlertsTextOnly) {
+    { CameraStateLock lock(st); st.lastAlert = nowMs; st.hasAlerted = true; }
+    st.digestArmed = true;
+    st.suppressedMotionCount = 0;
+    String msg = "\xF0\x9F\x90\xBE " + cfg.name + " - pet detected - " + nowTimestampString();
+    for (auto& chatId : recipients) sendTelegramMessageTo(chatId, msg);
+    logEvent(cfg.name + ": pet alert (text) to " + String(recipients.size()) + " recipient(s)");
+    return;
+  }
+
   // snapshotUri is written only by this camera's own task too (camera.cpp),
   // same-task self-read, no lock needed here either.
   if (st.snapshotUri.length() == 0) {
@@ -661,7 +675,7 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st) {
   st.suppressedMotionCount = 0;
 
   unsigned int shots = safeSnapshotBurstCount(cfg);
-  logEvent(cfg.name + ": motion alert, " + String(shots) + " shot(s) to " +
+  logEvent(cfg.name + ": " + (isPetEvent ? "pet" : "motion") + " alert, " + String(shots) + " shot(s) to " +
            String(recipients.size()) + " recipient(s)");
 
   // Each shot is its own fetch (re-fetching is what makes consecutive
@@ -696,7 +710,8 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st) {
     }
     if (!jpg) continue; // one bad shot in a burst shouldn't abort the rest
 
-    String caption = cfg.name + " - " + nowTimestampString();
+    String caption = (isPetEvent ? "\xF0\x9F\x90\xBE " + cfg.name + " - pet detected - "
+                                 : cfg.name + " - ") + nowTimestampString();
     if (shots > 1) caption += " (" + String(i + 1) + "/" + String(shots) + ")";
 
     for (auto& chatId : recipients) {

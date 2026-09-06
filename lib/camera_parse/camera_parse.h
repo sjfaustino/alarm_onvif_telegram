@@ -54,7 +54,13 @@ struct CameraEventClassification {
   bool vehicleDetect = false;
   // Same idea again, for that RuleEngine's pet-detection cell
   // ("tns1:RuleEngine/MyRuleDetector/DogCatDetect") - seen from the same
-  // camera in the field alongside PeopleDetect/VehicleDetect.
+  // camera in the field alongside PeopleDetect/VehicleDetect. Deliberately
+  // NOT included in motionEventFired() below, unlike peopleDetect/
+  // vehicleDetect - a pet event is gated per-camera by
+  // CameraConfig::petAlertsEnabled (camera.cpp's parseEvents checks this
+  // field directly, since motionEventFired has no access to per-camera
+  // config), off by default so a user's own pet doesn't trigger the same
+  // alert a person/vehicle would.
   bool dogCatDetect = false;
   bool signalLoss = false;
   bool tamper = false;
@@ -70,7 +76,8 @@ CameraEventClassification classifyCameraEvent(const String& xml);
 bool topicReportedTrue(const String& xml, const String& topicKeyword);
 
 // Whether a motion-relevant topic (MotionAlarm, CellMotionDetector,
-// PeopleDetect, VehicleDetect, or DogCatDetect) that classifyCameraEvent found present in
+// PeopleDetect, or VehicleDetect - NOT DogCatDetect, see its own comment
+// above) that classifyCameraEvent found present in
 // this batch *itself* reported State/IsMotion="true" - NOT ev.anyTrue,
 // which is a body-wide flag that a
 // same-batch, unrelated topic (SignalLoss, TamperDetector) can set to true
