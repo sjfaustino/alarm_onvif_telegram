@@ -158,6 +158,25 @@ void test_timeGmUtc_time_of_day_offset(void) {
   TEST_ASSERT_EQUAL_INT64(14L * 3600L + 30L * 60L + 22L, (int64_t)diffSeconds);
 }
 
+// ---- ds3231OscillatorStopped ----
+
+void test_ds3231OscillatorStopped_true_when_bit_set(void) {
+  TEST_ASSERT_TRUE(ds3231OscillatorStopped(0x80));
+}
+
+void test_ds3231OscillatorStopped_false_when_bit_clear(void) {
+  TEST_ASSERT_FALSE(ds3231OscillatorStopped(0x00));
+}
+
+// The flag must be checked as its own bit, not by comparing the whole
+// byte - other status register bits (alarm flags, 32kHz output enable,
+// etc.) can legitimately be set alongside a clear OSF bit, and must not
+// produce a false positive.
+void test_ds3231OscillatorStopped_ignores_other_bits(void) {
+  TEST_ASSERT_FALSE(ds3231OscillatorStopped(0x0F)); // every other low bit set, OSF clear
+  TEST_ASSERT_TRUE(ds3231OscillatorStopped(0x8F));  // same, but OSF also set
+}
+
 int main(int argc, char** argv) {
   UNITY_BEGIN();
   RUN_TEST(test_round_trip_ordinary_date);
@@ -175,5 +194,8 @@ int main(int argc, char** argv) {
   RUN_TEST(test_timeGmUtc_known_reference_date);
   RUN_TEST(test_timeGmUtc_accounts_for_leap_years);
   RUN_TEST(test_timeGmUtc_time_of_day_offset);
+  RUN_TEST(test_ds3231OscillatorStopped_true_when_bit_set);
+  RUN_TEST(test_ds3231OscillatorStopped_false_when_bit_clear);
+  RUN_TEST(test_ds3231OscillatorStopped_ignores_other_bits);
   return UNITY_END();
 }

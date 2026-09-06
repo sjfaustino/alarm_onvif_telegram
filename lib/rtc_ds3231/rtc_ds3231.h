@@ -46,3 +46,19 @@ struct tm decodeDs3231(const Ds3231Registers& regs);
 // will ever produce (see encodeDs3231/decodeDs3231's own "2000+" comment);
 // behavior outside that range is not a contract of this function.
 time_t timeGmUtc(const struct tm& t);
+
+// DS3231 status register address (0x0F) and its Oscillator Stop Flag bit
+// (bit 7) - set by the chip itself whenever its oscillator has stopped at
+// some point since the flag was last cleared. Per the datasheet, this
+// typically means the backup battery was dead or missing during a power
+// loss - the chip's reported clock registers may still look like a
+// plausible date/time, but are not trustworthy until a known-good time is
+// written and this flag cleared. rtc_store.cpp's readRtcTime() checks this
+// before trusting a read; writeRtcTime() clears it after a successful
+// NTP-sourced correction.
+static const uint8_t DS3231_STATUS_REG = 0x0F;
+static const uint8_t DS3231_OSF_BIT = 0x80;
+
+// True if statusRegisterByte (as read from DS3231_STATUS_REG) has the
+// Oscillator Stop Flag set.
+bool ds3231OscillatorStopped(uint8_t statusRegisterByte);

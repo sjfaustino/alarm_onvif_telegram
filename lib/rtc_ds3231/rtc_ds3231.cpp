@@ -46,6 +46,10 @@ time_t timeGmUtc(const struct tm& t) {
   return (time_t)days * 86400 + t.tm_hour * 3600 + t.tm_min * 60 + t.tm_sec;
 }
 
+bool ds3231OscillatorStopped(uint8_t statusRegisterByte) {
+  return (statusRegisterByte & DS3231_OSF_BIT) != 0;
+}
+
 struct tm decodeDs3231(const Ds3231Registers& regs) {
   struct tm result = {};
   result.tm_sec  = bcdToDec(regs.bytes[0] & 0x7F);

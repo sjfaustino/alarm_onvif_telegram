@@ -32,13 +32,20 @@ bool rtcActive();
 
 // Reads the chip's current time into *out (a UTC struct tm - this
 // project's system clock and everything stored on the chip are always
-// UTC). False (out left untouched) if !rtcActive() or the I2C read fails.
+// UTC). False (out left untouched) if !rtcActive(), the I2C read fails, OR
+// the chip's Oscillator Stop Flag is set (lib/rtc_ds3231's
+// ds3231OscillatorStopped) - a set flag means a past power loss (dead/
+// missing backup battery) makes the reported time untrustworthy, even
+// though it may still look like a plausible date, so this treats that
+// case the same as a read failure rather than trusting it.
 bool readRtcTime(struct tm* out);
 
 // Writes t (UTC) to the chip. False if !rtcActive() or the I2C write
 // fails. Call this right after a successful NTP sync (main.cpp's
 // setupTime()) to keep the RTC corrected for the next boot - not meant to
-// be called on every loop tick, just once per real sync.
+// be called on every loop tick, just once per real sync. Also clears the
+// Oscillator Stop Flag (best-effort - doesn't affect this function's
+// return value), since this write just established a known-good time.
 bool writeRtcTime(const struct tm& t);
 
 // Status for the dashboard (Network page) - reflects initRtc()'s outcome,
