@@ -604,7 +604,14 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st, bool isPetEven
     // that branch below), so motion suppressed during a quiet stretch
     // doesn't get reported as "since the snapshot" when no snapshot was
     // actually sent to anyone. See checkPendingMotionDigest for the flush.
-    if (st.digestArmed) {
+    // A suppressed PET event is deliberately never counted here - this
+    // counter's own contract (CameraState::suppressedMotionCount) and the
+    // digest message it feeds ("motion continued - N more event(s)") are
+    // both specifically about motion, and a cat wandering by during the
+    // cooldown isn't what either one is claiming happened. It's simply
+    // dropped, silently, consistent with pet alerts being the
+    // lower-priority notification type by design.
+    if (st.digestArmed && !isPetEvent) {
       st.suppressedMotionCount++;
       st.lastSuppressedMotionMs = nowMs; // when THIS event happened, not when the digest will flush
     }
