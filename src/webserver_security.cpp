@@ -348,11 +348,17 @@ String buildConfigExport() {
   out += "SD card storage: " + String(sdSettings.enabled ? "enabled" : "disabled") + "\n";
   out += "SD automatic full check interval: " +
          (sdSettings.checkIntervalHours > 0 ? String(sdSettings.checkIntervalHours) + "h" : String("off")) + "\n";
+  out += "SD snapshot retention: " +
+         (sdSettings.retentionDays > 0 ? String(sdSettings.retentionDays) + " day(s)" : String("keep forever")) + "\n";
   // No dedicated serializer - see config_import_parse.cpp's own comment on
-  // why this stays a tiny inline "enabled\x1FcheckIntervalHours" line
-  // rather than a whole schema-versioned lib module for 2 primitive fields.
-  out += "### SDSETTINGS v1\n";
-  out += String(sdSettings.enabled ? "1" : "0") + "\x1F" + String(sdSettings.checkIntervalHours) + "\n";
+  // why this stays a tiny inline parser rather than a whole schema-
+  // versioned lib module for a few primitive fields. v2 (retentionDays
+  // appended) - v1 (2 fields, no retentionDays) is a permanent, never-
+  // edited historical branch in config_import_parse.cpp, same discipline
+  // as the schema-versioned serializers' own old branches.
+  out += "### SDSETTINGS v2\n";
+  out += String(sdSettings.enabled ? "1" : "0") + "\x1F" + String(sdSettings.checkIntervalHours) +
+         "\x1F" + String(sdSettings.retentionDays) + "\n";
 
   return out;
 }

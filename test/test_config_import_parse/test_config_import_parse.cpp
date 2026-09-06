@@ -47,8 +47,8 @@ static String fullExportText() {
   text += "### NETWORK v" + String(NETWORK_SCHEMA_VERSION) + "\n";
   text += serializeNetworkConfig(sampleNetwork()) + "\n";
   text += "\n--- Storage ---\n[prose omitted]\n";
-  text += "### SDSETTINGS v1\n";
-  text += "1" + String((char)0x1F) + "168\n";
+  text += "### SDSETTINGS v2\n";
+  text += "1" + String((char)0x1F) + "168" + String((char)0x1F) + "45\n";
   return text;
 }
 
@@ -73,6 +73,38 @@ void test_full_export_all_sections_found_and_parsed(void) {
   TEST_ASSERT_TRUE(r.sdSettingsFound);
   TEST_ASSERT_TRUE(r.sdSettings.enabled);
   TEST_ASSERT_EQUAL_UINT32(168, r.sdSettings.checkIntervalHours);
+  TEST_ASSERT_EQUAL_UINT32(45, r.sdSettings.retentionDays);
+}
+
+// An SDSETTINGS export taken before retentionDays existed on SdSettings
+// (the 2-field v1 line) must still import correctly today, defaulting
+// retentionDays to SdSettings' own struct default rather than silently
+// leaving it uninitialized or zero (0 would mean "keep forever," which
+// nobody chose - see SD_RETENTION_DAYS_DEFAULT's own comment, config.h).
+void test_sdsettings_v1_import_defaults_retention(void) {
+  ConfigImportResult r = parseConfigImport("### SDSETTINGS v1\n1\x1F""168\n");
+  TEST_ASSERT_TRUE(r.sdSettingsFound);
+  TEST_ASSERT_TRUE(r.sdSettings.enabled);
+  TEST_ASSERT_EQUAL_UINT32(168, r.sdSettings.checkIntervalHours);
+  TEST_ASSERT_EQUAL_UINT32(SD_RETENTION_DAYS_DEFAULT, r.sdSettings.retentionDays);
+}
+
+// The bug this exists to catch: importing an export taken under the
+// current version must not silently reset retentionDays to the default -
+// SDSETTINGS_SCHEMA_VERSION_CURRENT's own 3-field line, with a real
+// nonzero retentionDays, has to actually come through.
+void test_sdsettings_v2_import_preserves_nonzero_retention(void) {
+  ConfigImportResult r = parseConfigImport("### SDSETTINGS v2\n1\x1F""24\x1F""90\n");
+  TEST_ASSERT_TRUE(r.sdSettingsFound);
+  TEST_ASSERT_EQUAL_UINT32(90, r.sdSettings.retentionDays);
+}
+
+// retentionDays == 0 is a deliberate, meaningful "keep forever" choice,
+// not something to bounce back to the default - must round-trip as 0.
+void test_sdsettings_v2_import_preserves_zero_retention(void) {
+  ConfigImportResult r = parseConfigImport("### SDSETTINGS v2\n1\x1F""24\x1F""0\n");
+  TEST_ASSERT_TRUE(r.sdSettingsFound);
+  TEST_ASSERT_EQUAL_UINT32(0, r.sdSettings.retentionDays);
 }
 
 // A file with only a Cameras section (e.g. hand-trimmed, or a future
@@ -229,6 +261,9 @@ int main(int argc, char** argv) {
   RUN_TEST(test_users_with_duplicate_chat_id_are_rejected);
   RUN_TEST(test_malformed_network_line_is_not_found);
   RUN_TEST(test_malformed_sdsettings_line_is_not_found);
+  RUN_TEST(test_sdsettings_v1_import_defaults_retention);
+  RUN_TEST(test_sdsettings_v2_import_preserves_nonzero_retention);
+  RUN_TEST(test_sdsettings_v2_import_preserves_zero_retention);
   RUN_TEST(test_older_schema_version_still_parses);
   RUN_TEST(test_crlf_line_endings_tolerated);
   return UNITY_END();

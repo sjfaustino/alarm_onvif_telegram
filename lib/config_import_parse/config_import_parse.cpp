@@ -33,11 +33,14 @@ static bool usersHaveDuplicateIdentity(const std::vector<TelegramUser>& users) {
 }
 
 // Same separator config_export's SDSETTINGS line uses (webserver_security.cpp) -
-// only 2 fields, no realistic future reordering risk, so this stays a tiny
-// inline parser rather than its own schema-versioned lib module the way
-// cameras/users/network (all string-bearing) warrant.
+// few enough primitive fields that this stays a tiny inline parser rather
+// than its own schema-versioned lib module the way cameras/users/network
+// (all string-bearing) warrant - but still version-tagged, same discipline,
+// since "no realistic future reordering risk" already turned out wrong
+// once (retentionDays was added to SdSettings after this format existed,
+// silently dropped by every import until v2 below).
 static const char SD_FIELD_SEP = '\x1F';
-static const uint16_t SDSETTINGS_SCHEMA_VERSION_KNOWN = 1;
+static const uint16_t SDSETTINGS_SCHEMA_VERSION_CURRENT = 2;
 
 static std::vector<String> splitLines(const String& text) {
   std::vector<String> lines;
@@ -84,10 +87,14 @@ static SectionMarker parseMarkerLine(const String& line) {
   return m;
 }
 
-// SDSETTINGS' one data line: "<enabled 0/1>\x1F<checkIntervalHours>". No
-// dedicated serializer (see this file's own comment) - built/parsed here
-// directly. Returns false (settings untouched) if malformed.
-static bool parseSdSettingsLine(const String& line, SdSettings& out) {
+// Version 1 (superseded): "<enabled 0/1>\x1F<checkIntervalHours>" -
+// retentionDays didn't exist on SdSettings yet when this line format was
+// first written. Kept exactly as it was, never edited, so an export taken
+// before retention existed still imports correctly - out.retentionDays
+// simply stays at SdSettings' own struct default (SD_RETENTION_DAYS_DEFAULT)
+// for a line in this shape, same "old record, current default for the
+// field it doesn't mention" pattern camera_serialize.cpp's V0 branch uses.
+static bool parseSdSettingsLineV1(const String& line, SdSettings& out) {
   int sep = line.indexOf(SD_FIELD_SEP);
   if (sep < 0) return false;
   String enabledField = line.substring(0, sep);
@@ -95,6 +102,23 @@ static bool parseSdSettingsLine(const String& line, SdSettings& out) {
   if (enabledField.length() == 0) return false;
   out.enabled = enabledField == "1";
   out.checkIntervalHours = (uint32_t)hoursField.toInt();
+  return true;
+}
+
+// Version 2 (SDSETTINGS_SCHEMA_VERSION_CURRENT): V1's 2 fields plus
+// retentionDays, appended - "<enabled 0/1>\x1F<checkIntervalHours>\x1F<retentionDays>".
+static bool parseSdSettingsLineV2(const String& line, SdSettings& out) {
+  int sep1 = line.indexOf(SD_FIELD_SEP);
+  if (sep1 < 0) return false;
+  int sep2 = line.indexOf(SD_FIELD_SEP, sep1 + 1);
+  if (sep2 < 0) return false;
+  String enabledField = line.substring(0, sep1);
+  String hoursField = line.substring(sep1 + 1, sep2);
+  String retentionField = line.substring(sep2 + 1);
+  if (enabledField.length() == 0) return false;
+  out.enabled = enabledField == "1";
+  out.checkIntervalHours = (uint32_t)hoursField.toInt();
+  if (retentionField.length() > 0) out.retentionDays = (uint16_t)retentionField.toInt();
   return true;
 }
 
@@ -146,10 +170,10 @@ ConfigImportResult parseConfigImport(const String& text) {
       for (auto& l : sectionLines) {
         if (l.length() == 0) continue;
         SdSettings s;
-        // Only one schema so far - kept as an explicit check (not just
-        // "parse whatever's there") so a future v2 has a clear place to
-        // branch, same discipline as the schema-versioned serializers.
-        if (currentVersion == SDSETTINGS_SCHEMA_VERSION_KNOWN && parseSdSettingsLine(l, s)) {
+        bool parsed = false;
+        if (currentVersion == 1) parsed = parseSdSettingsLineV1(l, s);
+        else if (currentVersion == SDSETTINGS_SCHEMA_VERSION_CURRENT) parsed = parseSdSettingsLineV2(l, s);
+        if (parsed) {
           result.sdSettings = s;
           result.sdSettingsFound = true;
         }
