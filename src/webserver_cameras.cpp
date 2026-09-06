@@ -378,7 +378,15 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
     String hostOnly = extractHost(c.deviceServiceUrl);
     int portSep = hostOnly.indexOf(':');
     if (portSep >= 0) hostOnly = hostOnly.substring(0, portSep);
-    html += "<a class=\"icon-btn secondary\" href=\"http://" + hostOnly +
+    // htmlEscape() here is load-bearing, not defensive boilerplate:
+    // deviceServiceUrl is attacker-controllable two ways that bypass any
+    // admin typing entirely - a rogue camera's WS-Discovery ProbeMatch
+    // reply (renderCameraDiscoveryStatus, this file) feeds it directly,
+    // and Import (webserver_security.cpp's applyConfigImport) writes it
+    // from an uploaded file with only a non-empty check. Unescaped, either
+    // one plants a stored XSS payload that fires in the admin's own
+    // session on every future page load.
+    html += "<a class=\"icon-btn secondary\" href=\"http://" + htmlEscape(hostOnly) +
             "/\" target=\"_blank\" title=\"Open camera's web UI\" aria-label=\"Open camera's web UI\">"
             "&#8599;</a>";
     html += renderEditDeleteActions("/cameras/edit?name=", "/delete", c.name) + "</div></td></tr>";
