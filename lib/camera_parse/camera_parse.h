@@ -52,6 +52,10 @@ struct CameraEventClassification {
   // ("tns1:RuleEngine/MyRuleDetector/VehicleDetect") - seen from the same
   // camera in the field alongside PeopleDetect.
   bool vehicleDetect = false;
+  // Same idea again, for that RuleEngine's pet-detection cell
+  // ("tns1:RuleEngine/MyRuleDetector/DogCatDetect") - seen from the same
+  // camera in the field alongside PeopleDetect/VehicleDetect.
+  bool dogCatDetect = false;
   bool signalLoss = false;
   bool tamper = false;
 };
@@ -66,7 +70,7 @@ CameraEventClassification classifyCameraEvent(const String& xml);
 bool topicReportedTrue(const String& xml, const String& topicKeyword);
 
 // Whether a motion-relevant topic (MotionAlarm, CellMotionDetector,
-// PeopleDetect, or VehicleDetect) that classifyCameraEvent found present in
+// PeopleDetect, VehicleDetect, or DogCatDetect) that classifyCameraEvent found present in
 // this batch *itself* reported State/IsMotion="true" - NOT ev.anyTrue,
 // which is a body-wide flag that a
 // same-batch, unrelated topic (SignalLoss, TamperDetector) can set to true

@@ -97,6 +97,7 @@ CameraEventClassification classifyCameraEvent(const String& xml) {
   ev.cellMotion    = xml.indexOf("CellMotionDetector") >= 0;
   ev.peopleDetect  = xml.indexOf("PeopleDetect") >= 0;
   ev.vehicleDetect = xml.indexOf("VehicleDetect") >= 0;
+  ev.dogCatDetect  = xml.indexOf("DogCatDetect") >= 0;
   ev.signalLoss    = xml.indexOf("SignalLoss") >= 0;
   ev.tamper        = xml.indexOf("TamperDetector") >= 0;
   return ev;
@@ -111,6 +112,7 @@ bool motionEventFired(const String& xml, const CameraEventClassification& ev) {
   if (ev.cellMotion && topicReportedTrue(xml, "CellMotionDetector")) return true;
   if (ev.peopleDetect && topicReportedTrue(xml, "PeopleDetect")) return true;
   if (ev.vehicleDetect && topicReportedTrue(xml, "VehicleDetect")) return true;
+  if (ev.dogCatDetect && topicReportedTrue(xml, "DogCatDetect")) return true;
   return false;
 }
 

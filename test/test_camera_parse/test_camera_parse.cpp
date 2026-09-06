@@ -165,12 +165,24 @@ void test_classifyCameraEvent_detects_vehicle_detect(void) {
   TEST_ASSERT_FALSE(ev.peopleDetect);
 }
 
+// Same vendor's RuleEngine, its pet-detection cell - seen from the same
+// camera in the field alongside PeopleDetect/VehicleDetect.
+void test_classifyCameraEvent_detects_dog_cat_detect(void) {
+  String xml = "<wsnt:NotificationMessage><tt:Topic>tns1:RuleEngine/MyRuleDetector/DogCatDetect"
+               "</tt:Topic><tt:SimpleItem Name=\"State\" Value=\"true\"/></wsnt:NotificationMessage>";
+  auto ev = classifyCameraEvent(xml);
+  TEST_ASSERT_TRUE(ev.dogCatDetect);
+  TEST_ASSERT_TRUE(ev.anyTrue);
+  TEST_ASSERT_FALSE(ev.vehicleDetect);
+}
+
 void test_classifyCameraEvent_no_recognized_topic(void) {
   auto ev = classifyCameraEvent("<a>SomeOtherTopic Value=\"true\"</a>");
   TEST_ASSERT_FALSE(ev.motionAlarm);
   TEST_ASSERT_FALSE(ev.cellMotion);
   TEST_ASSERT_FALSE(ev.peopleDetect);
   TEST_ASSERT_FALSE(ev.vehicleDetect);
+  TEST_ASSERT_FALSE(ev.dogCatDetect);
   TEST_ASSERT_FALSE(ev.signalLoss);
   TEST_ASSERT_FALSE(ev.tamper);
 }
@@ -225,6 +237,13 @@ void test_motionEventFired_true_for_people_detect_reporting_true(void) {
 
 void test_motionEventFired_true_for_vehicle_detect_reporting_true(void) {
   String xml = "<wsnt:NotificationMessage><tt:Topic>tns1:RuleEngine/MyRuleDetector/VehicleDetect"
+               "</tt:Topic><tt:SimpleItem Name=\"State\" Value=\"true\"/></wsnt:NotificationMessage>";
+  auto ev = classifyCameraEvent(xml);
+  TEST_ASSERT_TRUE(motionEventFired(xml, ev));
+}
+
+void test_motionEventFired_true_for_dog_cat_detect_reporting_true(void) {
+  String xml = "<wsnt:NotificationMessage><tt:Topic>tns1:RuleEngine/MyRuleDetector/DogCatDetect"
                "</tt:Topic><tt:SimpleItem Name=\"State\" Value=\"true\"/></wsnt:NotificationMessage>";
   auto ev = classifyCameraEvent(xml);
   TEST_ASSERT_TRUE(motionEventFired(xml, ev));
@@ -306,10 +325,12 @@ int main(int argc, char** argv) {
   RUN_TEST(test_classifyCameraEvent_value_false_is_not_anyTrue);
   RUN_TEST(test_classifyCameraEvent_detects_people_detect);
   RUN_TEST(test_classifyCameraEvent_detects_vehicle_detect);
+  RUN_TEST(test_classifyCameraEvent_detects_dog_cat_detect);
   RUN_TEST(test_classifyCameraEvent_no_recognized_topic);
   RUN_TEST(test_motionEventFired_true_for_motion_alarm_reporting_true);
   RUN_TEST(test_motionEventFired_true_for_people_detect_reporting_true);
   RUN_TEST(test_motionEventFired_true_for_vehicle_detect_reporting_true);
+  RUN_TEST(test_motionEventFired_true_for_dog_cat_detect_reporting_true);
   RUN_TEST(test_motionEventFired_false_when_only_an_unrelated_topic_is_true);
   RUN_TEST(test_motionEventFired_true_when_motion_topic_itself_is_true_alongside_another);
   RUN_TEST(test_motionEventFired_false_when_no_motion_topic_present);
