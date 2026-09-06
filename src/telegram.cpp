@@ -630,6 +630,21 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st, bool isPetEven
     // rule below - nothing to capture yet if the snapshot URI hasn't
     // resolved, so don't burn the cooldown window on nothing.
     if (st.snapshotUri.length() == 0) return;
+    // digestArmed/suppressedMotionCount MUST be cleared here, not just
+    // left alone - this branch resets lastAlert same as a real send does,
+    // but unlike a real send it's the ONLY other place lastAlert moves.
+    // Without this, a digest already armed by an earlier real alert (still
+    // mid-cooldown, with a nonzero suppressedMotionCount) would survive
+    // into this new cycle with its old count and old lastSuppressedMotionMs
+    // intact, while lastAlert jumps to nowMs - checkPendingMotionDigest's
+    // later flush then computes lastSuppressedMotionMs - st.lastAlert with
+    // a lastSuppressedMotionMs from BEFORE the new (larger) lastAlert,
+    // underflowing that unsigned subtraction into a nonsensical multi-
+    // billion-second digest message. The comment below this function's
+    // cooldown check ("digestArmed stays false through a quiet-hours
+    // cycle") was already assuming this - it just wasn't actually enforced.
+    st.digestArmed = false;
+    st.suppressedMotionCount = 0;
     { CameraStateLock lock(st); st.lastAlert = nowMs; st.hasAlerted = true; }
     logEvent(cfg.name + ": " + (isPetEvent ? "pet" : "motion") + " detected (quiet hours - no Telegram alert)");
     size_t jpgLen = 0;
