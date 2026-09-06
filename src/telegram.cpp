@@ -729,7 +729,15 @@ void triggerTimelapseCapture(const CameraConfig& cfg, CameraState& st) {
   // alert. Still respects the mute toggle (st.alertsEnabled): muting a
   // camera is a blanket "no messages from this camera" expectation, not
   // motion-alerts-only.
-  if (cfg.timelapseSendToTelegram) {
+  // Same quiet-hours scoping as triggerMotionAlert above: suppresses the
+  // Telegram send only, not the capture/storage itself (still pushed to
+  // history below regardless) - a routine scheduled snapshot at 3am is, if
+  // anything, a worse fit for quiet hours than a real motion event would
+  // be, since it isn't even responding to anything happening.
+  bool quiet = cfg.quietHoursEnabled && localClockSynced() &&
+               isWithinQuietHours(currentLocalMinuteOfDay(), cfg.quietStartMinute, cfg.quietEndMinute);
+
+  if (cfg.timelapseSendToTelegram && !quiet) {
     bool alertsEnabled;
     { CameraStateLock lock(st); alertsEnabled = st.alertsEnabled; }
     if (alertsEnabled) {
