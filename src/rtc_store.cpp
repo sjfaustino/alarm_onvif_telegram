@@ -3,6 +3,8 @@
 #include "config.h" // RTC_SDA_PIN/RTC_SCL_PIN/DS3231_I2C_ADDR
 #include <Preferences.h>
 #include <Wire.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
 static const char* NVS_NAMESPACE = "rtcstore";
 static const char* NVS_KEY_ENABLED = "enabled";
@@ -10,6 +12,17 @@ static const uint8_t DS3231_REG_SECONDS = 0x00; // first of the 7 contiguous clo
 
 static bool g_rtcSettingEnabled = false; // cached at boot, see initRtc()
 static bool g_rtcAvailable = false;      // see rtcActive()'s comment
+// Guards every I2C transaction against the DS3231 - readRtcTime() can run
+// on a PsychicHttp request task (the Network page reads it directly) at
+// the same moment writeRtcTime() runs on loop()'s task (setupTime()'s
+// post-NTP-sync writeback, on a WiFi reconnect) - Wire's multi-call
+// transaction sequence (beginTransmission/write/endTransmission/
+// requestFrom/read) isn't atomic across tasks on its own, so an
+// overlapping read and write could otherwise interleave and corrupt each
+// other. Same reasoning as sd_store.cpp's g_sdMutex/telegram.cpp's
+// g_telegramNetMutex - a shared hardware peripheral touched from more
+// than one task needs a lock around each transaction.
+static SemaphoreHandle_t g_rtcMutex = xSemaphoreCreateMutex();
 
 RtcSettings loadRtcSettings() {
   Preferences prefs;
@@ -43,8 +56,10 @@ void initRtc() {
   }
 
   Wire.begin(RTC_SDA_PIN, RTC_SCL_PIN);
+  xSemaphoreTake(g_rtcMutex, portMAX_DELAY);
   Wire.beginTransmission(DS3231_I2C_ADDR);
   uint8_t probeResult = Wire.endTransmission();
+  xSemaphoreGive(g_rtcMutex);
   if (probeResult != 0) {
     Serial.println("[rtc_store] RTC is enabled, but no chip ACKed at the configured I2C pins/address "
                     "- check wiring and RTC_SDA_PIN/RTC_SCL_PIN in config.h. Falling back to NTP only.");
@@ -62,13 +77,21 @@ bool rtcActive() {
 bool readRtcTime(struct tm* out) {
   if (!rtcActive()) return false;
 
+  xSemaphoreTake(g_rtcMutex, portMAX_DELAY);
   Wire.beginTransmission(DS3231_I2C_ADDR);
   Wire.write(DS3231_REG_SECONDS);
-  if (Wire.endTransmission(false) != 0) return false; // repeated start, keep the bus for the read below
+  if (Wire.endTransmission(false) != 0) { // repeated start, keep the bus for the read below
+    xSemaphoreGive(g_rtcMutex);
+    return false;
+  }
 
-  if (Wire.requestFrom((int)DS3231_I2C_ADDR, 7) != 7) return false;
+  if (Wire.requestFrom((int)DS3231_I2C_ADDR, 7) != 7) {
+    xSemaphoreGive(g_rtcMutex);
+    return false;
+  }
   Ds3231Registers regs;
   for (auto& b : regs.bytes) b = (uint8_t)Wire.read();
+  xSemaphoreGive(g_rtcMutex);
 
   *out = decodeDs3231(regs);
   return true;
@@ -78,10 +101,13 @@ bool writeRtcTime(const struct tm& t) {
   if (!rtcActive()) return false;
 
   Ds3231Registers regs = encodeDs3231(t);
+  xSemaphoreTake(g_rtcMutex, portMAX_DELAY);
   Wire.beginTransmission(DS3231_I2C_ADDR);
   Wire.write(DS3231_REG_SECONDS);
   for (uint8_t b : regs.bytes) Wire.write(b);
-  return Wire.endTransmission() == 0;
+  bool ok = Wire.endTransmission() == 0;
+  xSemaphoreGive(g_rtcMutex);
+  return ok;
 }
 
 RtcStatus getRtcStatus() {
