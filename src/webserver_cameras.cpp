@@ -364,11 +364,21 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
             lastAlertStr + "</td><td>" + previewCell + "</td><td>" +
             notesCell + "</td><td><div class=\"row-actions\">";
     // Best-effort convenience link to the camera's own web UI (its plain
-    // http:// root, not the ONVIF service path) - deviceServiceUrl is the
-    // only address on record for it, so this is a guess, not a guarantee
-    // every camera actually serves a UI there; opens in a new tab so a dead
-    // link doesn't navigate the dashboard away.
-    html += "<a class=\"icon-btn secondary\" href=\"http://" + extractHost(c.deviceServiceUrl) +
+    // http:// root on the default port, not the ONVIF service path/port) -
+    // deviceServiceUrl is the only address on record for it, so this is a
+    // guess, not a guarantee every camera actually serves a UI there.
+    // Deliberately drops any port from deviceServiceUrl rather than
+    // reusing it: several real cameras in the field expose ONVIF on a
+    // non-standard port specifically because it's a bolted-on service
+    // (e.g. Vstarcam's onvif_support_enable on :10080) while their actual
+    // embedded admin UI stays on the standard port 80 - reusing the ONVIF
+    // port would link to a dead/wrong port far more often than defaulting
+    // to 80 does. Opens in a new tab so a dead link doesn't navigate the
+    // dashboard away.
+    String hostOnly = extractHost(c.deviceServiceUrl);
+    int portSep = hostOnly.indexOf(':');
+    if (portSep >= 0) hostOnly = hostOnly.substring(0, portSep);
+    html += "<a class=\"icon-btn secondary\" href=\"http://" + hostOnly +
             "/\" target=\"_blank\" title=\"Open camera's web UI\" aria-label=\"Open camera's web UI\">"
             "&#8599;</a>";
     html += renderEditDeleteActions("/cameras/edit?name=", "/delete", c.name) + "</div></td></tr>";
