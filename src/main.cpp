@@ -9,6 +9,8 @@
 #include <nvs_flash.h>    // nvs_get_stats() - checkNvsUsage()
 #include <nvs.h>
 #include <cstdlib>
+#include <time.h>      // timegm/gmtime_r - seedSystemClockFromRtc/setupTime's RTC writeback
+#include <sys/time.h>  // settimeofday - seedSystemClockFromRtc
 #include "config.h"
 #include "build_version.h"
 #include "camera.h"
@@ -21,6 +23,8 @@
 #include "event_log_store.h"
 #include "camera_tasks.h"
 #include "sd_store.h"
+#include "rtc_store.h"
+#include "rtc_ds3231.h" // timeGmUtc - seedSystemClockFromRtc
 #include "heap_health.h"
 
 static std::vector<CameraConfig> g_cameras;
@@ -230,6 +234,31 @@ static void connectWiFi() {
                   String(g_wifiCredentials.backup.ssid.length() > 0 ? " and backup" : "") + ").");
 }
 
+// Called from setup(), before WiFi/NTP have had any chance to run - see
+// rtc_store.h's own comment for why. No-op if the RTC isn't enabled/found
+// (initRtc() must already have run). readRtcTime() gives back a UTC struct
+// tm (this project's system clock is always UTC - see setupTime()'s own
+// comment below), so timeGmUtc() (lib/rtc_ds3231 - a portable replacement
+// for the standard timegm(), which this platform's libc doesn't provide;
+// mktime() would be wrong here regardless, since it interprets its input
+// as LOCAL time and the TZ env var hasn't even been set yet at this point
+// in boot) is the correct conversion to an epoch value here.
+static void seedSystemClockFromRtc() {
+  if (!rtcActive()) return;
+
+  struct tm rtcTime;
+  if (!readRtcTime(&rtcTime)) {
+    Serial.println("[rtc_store] RTC found but reading its time failed - system clock not seeded from it.");
+    return;
+  }
+
+  struct timeval tv = { timeGmUtc(rtcTime), 0 };
+  settimeofday(&tv, nullptr);
+  char buf[25];
+  strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &rtcTime);
+  Serial.printf("[rtc_store] Seeded system clock from RTC: %s UTC (NTP will refine this once WiFi connects)\n", buf);
+}
+
 static void setupTime() {
   Serial.printf("Synchronizing UTC time from %s...\n", g_wifiCredentials.ntpServer.c_str());
   configTime(0, 0, g_wifiCredentials.ntpServer.c_str());
@@ -270,6 +299,23 @@ static void setupTime() {
       char buf[25];
       strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &timeinfo);
       Serial.printf("NTP time synchronized: %s\n", buf);
+
+      // Keeps the RTC corrected for the next boot - once per real sync,
+      // not continuously. timeinfo above may be LOCAL time (posixTz-
+      // adjusted) if a TZ is configured, so this reads UTC fresh via
+      // gmtime_r rather than reusing it - the RTC always stores UTC (see
+      // rtc_store.h's own comment).
+      if (rtcActive()) {
+        time_t now;
+        time(&now);
+        struct tm utcTime;
+        gmtime_r(&now, &utcTime);
+        if (writeRtcTime(utcTime)) {
+          Serial.println("[rtc_store] RTC corrected from this NTP sync.");
+        } else {
+          Serial.println("[rtc_store] WARNING: failed to write corrected time to the RTC.");
+        }
+      }
       return;
     }
     Serial.print(".");
@@ -590,6 +636,14 @@ void setup() {
   // since sdActive() needs to be settled before the first snapshot could
   // possibly be pushed.
   initSdStorage();
+
+  // Optional - does nothing at all unless the Network page's RTC setting
+  // is enabled (see rtc_store.h). Runs, and seeds the system clock, before
+  // connectWiFi()/setupTime() below - the whole reason for an external RTC
+  // is having a roughly-correct clock available even before WiFi/NTP have
+  // had any chance to run (e.g. an extended WiFi outage after boot).
+  initRtc();
+  seedSystemClockFromRtc();
 
   g_wifiCredentials = loadWifiCredentials();
 

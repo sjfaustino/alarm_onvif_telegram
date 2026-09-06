@@ -5,9 +5,11 @@
 #include "wifi_scan.h"
 #include "webserver_html.h" // DiscoveryResultRow, renderDiscoveryResultsTable
 #include "background_job.h" // BackgroundJob<T>
+#include "rtc_store.h"
 #include <WiFi.h>
 #include <freertos/FreeRTOS.h>
 #include <cctype>
+#include <time.h>
 
 // IP/MAC/signal/gateway/subnet/DNS rows for whichever network is currently
 // connected - shared by both the Primary and Backup fieldsets below rather
@@ -21,6 +23,55 @@ static String renderLiveConnectionRows() {
   html += "<tr><th>Gateway</th><td>" + WiFi.gatewayIP().toString() + "</td></tr>";
   html += "<tr><th>Subnet mask</th><td>" + WiFi.subnetMask().toString() + "</td></tr>";
   html += "<tr><th>DNS server</th><td>" + WiFi.dnsIP().toString() + "</td></tr>";
+  return html;
+}
+
+// External battery-backed RTC (DS3231, I2C) - optional, off by default,
+// same "enable checkbox needs a reboot, status reflects what actually
+// happened at boot" shape as the Storage page's SD card section. Grouped
+// with the other clock-related settings on this page (NTP/TZ below)
+// rather than a whole new tab, since it answers the same underlying
+// question: what does this board think time is.
+static String renderRtcFieldset() {
+  RtcStatus status = getRtcStatus();
+
+  String html = "<fieldset><legend>External RTC</legend>";
+  if (!status.settingEnabled) {
+    html += "<p class=\"hint\">No external RTC configured - the system clock relies on NTP only, "
+            "which means it has no accurate time at all until WiFi connects and a sync completes. "
+            "An optional DS3231 module (wired to RTC_SDA_PIN/RTC_SCL_PIN in config.h) lets the board "
+            "seed a roughly-correct clock immediately at boot instead.</p>";
+  } else if (!status.available) {
+    html += "<p class=\"hint\">External RTC is enabled, but no chip ACKed at boot on the configured "
+            "I2C pins - check the wiring and RTC_SDA_PIN/RTC_SCL_PIN/DS3231_I2C_ADDR in "
+            "<code>config.h</code>, then reboot. The system clock is relying on NTP only in the "
+            "meantime.</p>";
+  } else {
+    struct tm rtcTime;
+    if (readRtcTime(&rtcTime)) {
+      char buf[25];
+      strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &rtcTime);
+      time_t now = time(nullptr);
+      struct tm systemTime;
+      gmtime_r(&now, &systemTime);
+      char sysBuf[25];
+      strftime(sysBuf, sizeof(sysBuf), "%Y-%m-%d %H:%M:%S", &systemTime);
+      html += "<table>";
+      html += "<tr><th>RTC reading</th><td>" + String(buf) + " UTC</td></tr>";
+      html += "<tr><th>System clock</th><td>" + String(sysBuf) + " UTC</td></tr>";
+      html += "</table>";
+    } else {
+      html += "<p class=\"hint\">External RTC is active, but reading its current time just failed - "
+              "see the Serial log.</p>";
+    }
+  }
+
+  html += "<form method=\"POST\" action=\"/network/rtc/save\">";
+  html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"enabled\"" +
+          String(status.settingEnabled ? " checked" : "") + "> Use an external RTC module</label>";
+  html += "<p><button type=\"submit\">Save</button></p></form>";
+  html += "<p class=\"hint\">Takes effect after a reboot.</p>";
+  html += "</fieldset>";
   return html;
 }
 
@@ -153,6 +204,8 @@ String renderNetworkPanel(const String& prefillSsid) {
   html += "<p class=\"hint\">Saving updates storage immediately, but only takes effect after "
           "the board reboots - a live change could drop it off the network with no way back to "
           "this page if the new credentials are wrong.</p>";
+
+  html += renderRtcFieldset();
   return html;
 }
 

@@ -332,6 +332,16 @@ larger, reboot-persistent snapshot history (see Features above). Nothing else in
 this project uses SPI. Entirely optional - everything works exactly as it always
 has, on the PSRAM-only ring, without one.
 
+**An external RTC (DS3231) is optional.** A generic I2C breakout module wired to
+`RTC_SDA_PIN`/`RTC_SCL_PIN` in `include/config.h` (**verify and adjust these for
+your actual wiring before flashing**; they're common ESP32-S3 default I2C pins,
+not guaranteed for your specific board) and enabled on the Network dashboard page
+seeds the system clock at boot before WiFi/NTP have had any chance to run, and is
+kept corrected from NTP after every real sync. Without one, the board behaves
+exactly as it always has - NTP is the only clock source, with no accurate time at
+all until WiFi connects and a sync completes. This is this project's only I2C
+peripheral.
+
 ## Setup
 
 1. **Clone and copy the templates:**

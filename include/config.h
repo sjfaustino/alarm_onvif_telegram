@@ -265,3 +265,20 @@ static const size_t ACTIVITY_LOG_MAX_BYTES = 65536; // 64KB
 // SD directory listing (see that file's own comment on the accepted
 // cost), so this also bounds how many times that happens per load.
 static const size_t GALLERY_PAGE_SIZE = 30;
+
+// ============================================================
+// Optional external RTC (rtc_store.h/.cpp) - a DS3231 breakout module over
+// I2C, entirely optional and off by default (see RtcSettings::enabled,
+// Network page). This board's only other clock source is NTP, which only
+// runs once WiFi connects - a DS3231 lets the system clock be seeded with
+// a roughly-correct time immediately at boot, before WiFi/NTP have had any
+// chance to run. If disabled, or enabled but the chip doesn't ACK at boot,
+// the board behaves exactly as it already does today (NTP-only).
+//
+// *** VERIFY AND ADJUST these for your actual wiring before flashing ***
+// Common ESP32-S3 default I2C pins, not guaranteed for your specific dev
+// board - check your board's pinout/datasheet. This is the only I2C
+// peripheral this project uses, so any two free GPIOs work.
+static const int RTC_SDA_PIN = 8;
+static const int RTC_SCL_PIN = 9;
+static const uint8_t DS3231_I2C_ADDR = 0x68; // fixed by the chip itself, not configurable

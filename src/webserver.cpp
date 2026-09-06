@@ -11,6 +11,7 @@
 #include "webserver_gallery.h"
 #include "webserver_storage.h"
 #include "ui_settings.h"
+#include "rtc_store.h"
 #include "event_log_store.h"
 #include "snapshot_history.h"
 #include "sd_store.h"
@@ -538,6 +539,15 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
   server.on("/network/save", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
     String banner;
     handleSaveNetwork(request, banner);
+    return response->send(200, "text/html", renderShell(Tab::Network, banner, renderNetworkPanel()).c_str());
+  });
+
+  server.on("/network/rtc/save", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
+    RtcSettings settings;
+    settings.enabled = request->hasParam("enabled");
+    String banner = saveRtcSettings(settings)
+        ? "Saved - reboot the board to apply."
+        : "Failed to save - NVS write error (see Serial log). Setting was NOT changed.";
     return response->send(200, "text/html", renderShell(Tab::Network, banner, renderNetworkPanel()).c_str());
   });
 
