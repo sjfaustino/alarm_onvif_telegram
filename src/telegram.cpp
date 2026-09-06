@@ -640,10 +640,14 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st, bool isPetEven
     return;
   }
 
-  // Pet alert, text-only mode: no photo involved at all, so none of the
-  // snapshotUri/fetch/burst machinery below applies - just spend the
-  // cooldown (same shared cooldown a photo alert would spend) and send one
-  // message per recipient.
+  // Pet alert, text-only mode: no photo in the Telegram message itself,
+  // but the snapshot is still captured and pushed to history same as every
+  // other alert path here (triggerTimelapseCapture always stores
+  // regardless of its own Telegram opt-in; a regular motion alert during
+  // quiet hours always stores despite suppressing the send) - "text only"
+  // means the message, not "never capture a photo of this at all." None of
+  // the burst-loop/latency-tracking machinery below applies since there's
+  // only ever one shot and no photo to attach.
   if (isPetEvent && cfg.petAlertsTextOnly) {
     { CameraStateLock lock(st); st.lastAlert = nowMs; st.hasAlerted = true; }
     st.digestArmed = true;
@@ -651,6 +655,11 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st, bool isPetEven
     String msg = "\xF0\x9F\x90\xBE " + cfg.name + " - pet detected - " + nowTimestampString();
     for (auto& chatId : recipients) sendTelegramMessageTo(chatId, msg);
     logEvent(cfg.name + ": pet alert (text) to " + String(recipients.size()) + " recipient(s)");
+    if (st.snapshotUri.length() > 0) {
+      size_t jpgLen = 0;
+      uint8_t* jpg = fetchOneSnapshot(cfg, st, jpgLen);
+      if (jpg) pushCameraSnapshot(cfg, st, jpg, jpgLen); // takes ownership - do not free(jpg) here
+    }
     return;
   }
 
