@@ -132,6 +132,19 @@ void test_classifyCameraEvent_detects_motion_alarm(void) {
   TEST_ASSERT_FALSE(ev.tamper);
 }
 
+// The exact bug this test exists to catch: a camera quoting its Value
+// attribute with single quotes (a real, already-documented quirk in this
+// project's fleet - see xml_helpers.h) must still register as anyTrue.
+// camera.cpp's parseEvents returns immediately when anyTrue is false, so
+// missing this quote style would make motion detection silently, totally
+// dead for that camera.
+void test_classifyCameraEvent_detects_anyTrue_with_single_quoted_value(void) {
+  String xml = "<a>MotionAlarm<tt:SimpleItem Name='State' Value='true'/></a>";
+  auto ev = classifyCameraEvent(xml);
+  TEST_ASSERT_TRUE(ev.motionAlarm);
+  TEST_ASSERT_TRUE(ev.anyTrue);
+}
+
 // A batch that mentions a topic but reports it going back to false is not
 // "any true" - triggerMotionAlert must not fire on this.
 void test_classifyCameraEvent_value_false_is_not_anyTrue(void) {
@@ -327,6 +340,7 @@ int main(int argc, char** argv) {
   RUN_TEST(test_extractEventStateValue_all_blocks_false_stays_false);
   RUN_TEST(test_extractEventStateValue_missing_topic_returns_empty);
   RUN_TEST(test_classifyCameraEvent_detects_motion_alarm);
+  RUN_TEST(test_classifyCameraEvent_detects_anyTrue_with_single_quoted_value);
   RUN_TEST(test_classifyCameraEvent_value_false_is_not_anyTrue);
   RUN_TEST(test_classifyCameraEvent_detects_people_detect);
   RUN_TEST(test_classifyCameraEvent_detects_vehicle_detect);

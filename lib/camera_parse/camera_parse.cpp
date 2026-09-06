@@ -92,7 +92,16 @@ String extractEventStateValue(const String& xml, const String& topicKeyword) {
 
 CameraEventClassification classifyCameraEvent(const String& xml) {
   CameraEventClassification ev;
-  ev.anyTrue = xml.indexOf("Value=\"true\"") >= 0;
+  // Both quote styles, not just double - extractEventStateValue below
+  // already tolerates either (xml_helpers.h documents inconsistent
+  // attribute quoting as a real quirk already seen in this project's own
+  // camera fleet). Missing the single-quoted form here would make anyTrue
+  // false for every event a Value='true'-quoting camera ever sends -
+  // parseEvents (camera.cpp) returns immediately whenever anyTrue is
+  // false, so that single missed case means motion/tamper/signal-loss
+  // detection is silently, completely dead for that camera, with no log
+  // line anywhere to explain why.
+  ev.anyTrue = xml.indexOf("Value=\"true\"") >= 0 || xml.indexOf("Value='true'") >= 0;
   ev.motionAlarm   = xml.indexOf("MotionAlarm") >= 0;
   ev.cellMotion    = xml.indexOf("CellMotionDetector") >= 0;
   ev.peopleDetect  = xml.indexOf("PeopleDetect") >= 0;
