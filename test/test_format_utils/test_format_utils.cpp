@@ -92,6 +92,38 @@ void test_extractHost_no_scheme(void) {
   TEST_ASSERT_EQUAL_STRING("cam.local", extractHost("cam.local/x").c_str());
 }
 
+// ---- jsSingleQuoteEscape ----
+
+void test_jsSingleQuoteEscape_leaves_plain_text_untouched(void) {
+  TEST_ASSERT_EQUAL_STRING("192.168.1.1", jsSingleQuoteEscape("192.168.1.1").c_str());
+}
+
+// The actual vulnerability this exists to close: an unescaped single quote
+// would terminate the surrounding 'VALUE' JS string literal early, letting
+// whatever follows run as arbitrary script.
+void test_jsSingleQuoteEscape_escapes_single_quote(void) {
+  String escaped = jsSingleQuoteEscape("x'};alert(1);var y={z:'");
+  TEST_ASSERT_TRUE(escaped.indexOf("\\'") >= 0);
+  TEST_ASSERT_TRUE(escaped.indexOf("x\\'}") >= 0); // the quote right after x is escaped, not left raw
+}
+
+// Backslash must be escaped too, and specifically BEFORE the single-quote
+// pass runs - otherwise a raw backslash sitting just before a quote this
+// function itself inserts (\') would combine into \\' , which a JS parser
+// reads as an escaped backslash followed by an UNescaped, string-
+// terminating quote - reintroducing the exact breakout this function
+// exists to prevent.
+void test_jsSingleQuoteEscape_escapes_backslash_before_quote_pass(void) {
+  String escaped = jsSingleQuoteEscape("a\\'b");
+  TEST_ASSERT_EQUAL_STRING("a\\\\\\'b", escaped.c_str());
+}
+
+void test_jsSingleQuoteEscape_escapes_newlines(void) {
+  String escaped = jsSingleQuoteEscape("line1\nline2");
+  TEST_ASSERT_TRUE(escaped.indexOf('\n') < 0); // no raw newline left in the output
+  TEST_ASSERT_TRUE(escaped.indexOf("\\n") >= 0);
+}
+
 int main(int argc, char** argv) {
   UNITY_BEGIN();
   RUN_TEST(test_formatUptime_omits_days_when_zero);
@@ -109,5 +141,9 @@ int main(int argc, char** argv) {
   RUN_TEST(test_extractHost_strips_scheme_and_path);
   RUN_TEST(test_extractHost_no_path);
   RUN_TEST(test_extractHost_no_scheme);
+  RUN_TEST(test_jsSingleQuoteEscape_leaves_plain_text_untouched);
+  RUN_TEST(test_jsSingleQuoteEscape_escapes_single_quote);
+  RUN_TEST(test_jsSingleQuoteEscape_escapes_backslash_before_quote_pass);
+  RUN_TEST(test_jsSingleQuoteEscape_escapes_newlines);
   return UNITY_END();
 }

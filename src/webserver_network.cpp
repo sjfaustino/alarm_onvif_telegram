@@ -168,10 +168,21 @@ String renderNetworkPanel(const String& prefillSsid) {
   // stored values, editable. Disabled inputs don't submit, so switching to
   // DHCP and saving correctly leaves the stored static values untouched.
   html += "<script>";
+  // netLive comes straight from the ESP32 WiFi stack (IPAddress::toString()
+  // only ever produces digits and dots) - safe by construction, no escaping
+  // needed. netStatic's fields are jsSingleQuoteEscape()d, not just relying
+  // on handleSaveNetwork's IPAddress::fromString() validation below: config
+  // Import (webserver_security.cpp -> network_serialize.cpp) writes
+  // WifiCredentials' static-IP fields straight from an uploaded file with
+  // no format validation at all, bypassing that check entirely - an
+  // imported non-IP value here would otherwise break out of this
+  // single-quoted JS string and inject arbitrary script into every future
+  // load of this page.
   html += "var netLive={ip:'" + WiFi.localIP().toString() + "',subnet:'" + WiFi.subnetMask().toString() +
           "',gateway:'" + WiFi.gatewayIP().toString() + "',dns:'" + WiFi.dnsIP().toString() + "'};";
-  html += "var netStatic={ip:'" + creds.staticIP + "',subnet:'" + creds.staticSubnet +
-          "',gateway:'" + creds.staticGateway + "',dns:'" + creds.staticDNS + "'};";
+  html += "var netStatic={ip:'" + jsSingleQuoteEscape(creds.staticIP) + "',subnet:'" +
+          jsSingleQuoteEscape(creds.staticSubnet) + "',gateway:'" + jsSingleQuoteEscape(creds.staticGateway) +
+          "',dns:'" + jsSingleQuoteEscape(creds.staticDNS) + "'};";
   html += "var netFieldIds={ip:'staticIP',subnet:'staticSubnet',gateway:'staticGateway',dns:'staticDNS'};"
           "function applyIpMode(){"
           "var isStatic=document.getElementById('ipModeStatic').checked;"

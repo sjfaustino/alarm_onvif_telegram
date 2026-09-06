@@ -67,3 +67,12 @@ String extractHost(const String& url) {
   int end = (pathStart >= 0) ? pathStart : (int)url.length();
   return url.substring(start, end);
 }
+
+String jsSingleQuoteEscape(const String& s) {
+  String out = s;
+  out.replace("\\", "\\\\"); // must run first - otherwise this would double-escape the backslashes just inserted below
+  out.replace("'", "\\'");
+  out.replace("\n", "\\n");
+  out.replace("\r", "\\r");
+  return out;
+}
