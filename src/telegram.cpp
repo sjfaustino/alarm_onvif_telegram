@@ -631,7 +631,7 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st, bool isPetEven
     // resolved, so don't burn the cooldown window on nothing.
     if (st.snapshotUri.length() == 0) return;
     { CameraStateLock lock(st); st.lastAlert = nowMs; st.hasAlerted = true; }
-    logEvent(cfg.name + ": motion detected (quiet hours - no Telegram alert)");
+    logEvent(cfg.name + ": " + (isPetEvent ? "pet" : "motion") + " detected (quiet hours - no Telegram alert)");
     size_t jpgLen = 0;
     uint8_t* jpg = fetchOneSnapshot(cfg, st, jpgLen);
     if (jpg) pushCameraSnapshot(cfg, st, jpg, jpgLen); // takes ownership - do not free(jpg) here
