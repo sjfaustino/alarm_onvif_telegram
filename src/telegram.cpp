@@ -324,6 +324,21 @@ static int currentLocalMinuteOfDay() {
   return tmStruct.tm_hour * 60 + tmStruct.tm_min;
 }
 
+String formatLocalClockTime(unsigned long dueMs) {
+  if (!localClockSynced()) return "";
+  // dueMs and millis() share the same monotonic clock, so their
+  // difference is a real elapsed duration regardless of what wall-clock
+  // time happens to be right now - added onto the current epoch time to
+  // get the epoch dueMs actually corresponds to.
+  long offsetSec = (long)(dueMs - millis()) / 1000;
+  time_t now; time(&now);
+  time_t due = now + offsetSec;
+  struct tm tmStruct; localtime_r(&due, &tmStruct);
+  String hh = String(tmStruct.tm_hour); if (hh.length() < 2) hh = "0" + hh;
+  String mm = String(tmStruct.tm_min);  if (mm.length() < 2) mm = "0" + mm;
+  return hh + ":" + mm;
+}
+
 // Shared outbound JSON-POST mechanics for every Telegram Bot API method
 // this project calls with a JSON body - sendMessage (plain or with an
 // inline keyboard) and answerCallbackQuery. `method` is the API method

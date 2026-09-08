@@ -352,15 +352,32 @@ static void sendHeartbeat() {
   // see CameraState::stateMutex.
   for (size_t i = 0; i < g_cameras.size(); i++) {
     if (!g_cameras[i].enabled) continue;
-    bool subscribed, offline, alertsEnabled;
+    bool subscribed, offline, alertsEnabled, revertToOn;
+    unsigned long revertDueMs;
     {
       CameraStateLock lock(g_cameraStates[i]);
       subscribed = g_cameraStates[i].subscriptionActive;
       offline = g_cameraStates[i].isOffline;
       alertsEnabled = g_cameraStates[i].alertsEnabled;
+      revertDueMs = g_cameraStates[i].scheduledRevertDueMs;
+      revertToOn = g_cameraStates[i].scheduledRevertToOn;
+    }
+    // A pending timed /on or /off (see checkScheduledAlertReverts) says
+    // WHEN it'll flip back, not just that it will - "alerts OFF" alone
+    // looks identical whether that's permanent or about to auto-resume in
+    // a minute, which is exactly the ambiguity worth resolving in a
+    // heartbeat someone might only glance at.
+    bool revertPending = revertDueMs != 0 && (long)(millis() - revertDueMs) < 0;
+    String untilTime = revertPending ? formatLocalClockTime(revertDueMs) : "";
+    String alertsNote;
+    if (!alertsEnabled) {
+      alertsNote = (revertPending && revertToOn && untilTime.length() > 0)
+          ? " (alerts OFF until " + untilTime + ")" : " (alerts OFF)";
+    } else if (revertPending && !revertToOn && untilTime.length() > 0) {
+      alertsNote = " (alerts ON until " + untilTime + ")";
     }
     msg += g_cameras[i].name + ": " + (subscribed ? "subscribed" : "NOT subscribed") +
-           (offline ? " (OFFLINE)" : "") + (alertsEnabled ? "" : " (alerts OFF)") + "\n";
+           (offline ? " (OFFLINE)" : "") + alertsNote + "\n";
   }
   if (!sendTelegramMessage(msg)) {
     Serial.println("Heartbeat: Telegram send failed.");

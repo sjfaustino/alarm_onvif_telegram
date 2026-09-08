@@ -156,3 +156,12 @@ void pollTelegramCommands(const CameraConfig cameras[], CameraState states[], si
 // per loop() tick (main.cpp), same cadence as pollTelegramCommands itself.
 // Cheap when nothing's due: just a millis() comparison per camera.
 void checkScheduledAlertReverts(const CameraConfig cameras[], CameraState states[], size_t numCameras);
+
+// Formats a future millis()-timestamp (e.g. CameraState::scheduledRevertDueMs)
+// as a local "HH:MM" wall-clock string, for showing WHEN a timed /on or
+// /off will revert rather than just how long from now (main.cpp's
+// heartbeat: "D07: subscribed (alerts OFF until 06:21)"). Returns "" if
+// the system clock isn't synced yet (same check quiet hours uses) - a
+// clock time computed against a near-epoch, unsynced clock would be
+// actively misleading, unlike a plain countdown duration.
+String formatLocalClockTime(unsigned long dueMs);
