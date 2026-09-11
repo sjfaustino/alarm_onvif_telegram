@@ -105,6 +105,22 @@ void test_outageThresholdReached_survives_millis_wraparound(void) {
   TEST_ASSERT_FALSE(outageThresholdReached(firstFailureMs, nowMs, 40));
 }
 
+// ---- watchdogPinsConflict ----
+
+void test_watchdogPinsConflict_true_when_both_enabled_same_pin(void) {
+  TEST_ASSERT_TRUE(watchdogPinsConflict(true, 5, true, 5));
+}
+
+void test_watchdogPinsConflict_false_when_either_disabled(void) {
+  TEST_ASSERT_FALSE(watchdogPinsConflict(false, 5, true, 5));
+  TEST_ASSERT_FALSE(watchdogPinsConflict(true, 5, false, 5));
+  TEST_ASSERT_FALSE(watchdogPinsConflict(false, 5, false, 5));
+}
+
+void test_watchdogPinsConflict_false_when_pins_differ(void) {
+  TEST_ASSERT_FALSE(watchdogPinsConflict(true, 4, true, 5));
+}
+
 int main(int argc, char** argv) {
   UNITY_BEGIN();
   RUN_TEST(test_isReservedOrUnsafePin_rejects_sd_pins);
@@ -119,5 +135,8 @@ int main(int argc, char** argv) {
   RUN_TEST(test_outageThresholdReached_true_exactly_at_threshold);
   RUN_TEST(test_outageThresholdReached_true_above_threshold);
   RUN_TEST(test_outageThresholdReached_survives_millis_wraparound);
+  RUN_TEST(test_watchdogPinsConflict_true_when_both_enabled_same_pin);
+  RUN_TEST(test_watchdogPinsConflict_false_when_either_disabled);
+  RUN_TEST(test_watchdogPinsConflict_false_when_pins_differ);
   return UNITY_END();
 }

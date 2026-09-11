@@ -39,3 +39,7 @@ bool isReservedOrUnsafePin(int pin) {
 bool outageThresholdReached(unsigned long firstFailureMs, unsigned long nowMs, uint32_t thresholdMs) {
   return (nowMs - firstFailureMs) >= thresholdMs;
 }
+
+bool watchdogPinsConflict(bool enabledA, int pinA, bool enabledB, int pinB) {
+  return enabledA && enabledB && pinA == pinB;
+}

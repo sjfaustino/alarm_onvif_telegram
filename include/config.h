@@ -314,3 +314,25 @@ static const unsigned long NET_WATCHDOG_CHECK_INTERVAL_MS = 30UL * 1000UL;
 // TWDT timeout.
 static const uint32_t NET_WATCHDOG_PULSE_MAX_MS = 60UL * 1000UL;      // 60s
 static const uint32_t NET_WATCHDOG_THRESHOLD_MAX_MS = 60UL * 60UL * 1000UL; // 1h
+
+// Camera bridge watchdog (bridge_watchdog.h/.cpp) - same relay-power-cycle
+// idea as the Internet Watchdog above, but for a local wireless bridge
+// carrying two specific cameras rather than the board's own WAN link: if
+// BOTH configured cameras have been CameraState::isOffline for longer than
+// a threshold, that's the bridge itself down (a single camera going
+// offline is far more likely to be that one camera's own problem), so a
+// relay wired to the bridge's power gets pulsed. A second, independent,
+// dashboard-configurable pin - see watchdogPinsConflict (lib/
+// net_watchdog_logic) for why the two watchdogs' pins are cross-checked
+// against each other at save time.
+//
+// *** VERIFY this pin is actually free on your board before enabling ***
+// Deliberately a different default than NET_WATCHDOG_PIN_DEFAULT - both
+// can be enabled at once, on two different relays.
+static const int BRIDGE_WATCHDOG_PIN_DEFAULT = 5;
+
+static const unsigned long BRIDGE_WATCHDOG_CHECK_INTERVAL_MS = 30UL * 1000UL;
+
+// Same reasoning as NET_WATCHDOG_PULSE_MAX_MS/THRESHOLD_MAX_MS above.
+static const uint32_t BRIDGE_WATCHDOG_PULSE_MAX_MS = 60UL * 1000UL;      // 60s
+static const uint32_t BRIDGE_WATCHDOG_THRESHOLD_MAX_MS = 60UL * 60UL * 1000UL; // 1h

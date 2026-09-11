@@ -28,3 +28,15 @@ bool isReservedOrUnsafePin(int pin);
 // for millis() wraparound safety - correct even if nowMs has wrapped past
 // firstFailureMs, same reasoning as every other due-timestamp check here.
 bool outageThresholdReached(unsigned long firstFailureMs, unsigned long nowMs, uint32_t thresholdMs);
+
+// True if two independently-configurable relay watchdogs (net_watchdog.h,
+// bridge_watchdog.h) would drive the same physical GPIO pin at once - a
+// config mistake with no existing precedent to catch it, since this
+// project had exactly zero dashboard-configurable pins before this
+// codebase's first one (net_watchdog). Only a conflict when BOTH are
+// actually enabled on the same pin; either being disabled, or the pins
+// simply differing, is fine. Checked both ways at each watchdog's own
+// save route (webserver.cpp) - this alone doesn't know which watchdog is
+// "new" - plus once more, defensively, by each watchdog's own init() at
+// boot in case a hand-edited/imported NVS record bypassed both routes.
+bool watchdogPinsConflict(bool enabledA, int pinA, bool enabledB, int pinB);

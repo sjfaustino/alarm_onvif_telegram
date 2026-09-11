@@ -13,7 +13,8 @@
 #include "ui_settings.h"
 #include "rtc_store.h"
 #include "net_watchdog.h"
-#include "net_watchdog_logic.h" // isReservedOrUnsafePin
+#include "bridge_watchdog.h"
+#include "net_watchdog_logic.h" // isReservedOrUnsafePin, watchdogPinsConflict
 #include "event_log_store.h"
 #include "snapshot_history.h"
 #include "sd_store.h"
@@ -945,7 +946,8 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
   server.on("/firmware/update", HTTP_POST, otaHandler);
 
   server.on("/maintenance", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
-    return response->send(200, "text/html", renderShell(Tab::Maintenance, "", renderMaintenancePanel()).c_str());
+    return response->send(200, "text/html",
+                           renderShell(Tab::Maintenance, "", renderMaintenancePanel(g_liveCameras)).c_str());
   });
 
   server.on("/maintenance/reboot", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) -> esp_err_t {
@@ -953,7 +955,7 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
     esp_err_t result = response->send(
         200, "text/html",
         renderShell(Tab::Maintenance, "Rebooting now - reconnect in about 15-20 seconds.",
-                    renderMaintenancePanel())
+                    renderMaintenancePanel(g_liveCameras))
             .c_str());
     // See the OTA reboot handler's own comment above (/firmware/update) -
     // same failure mode, no user-facing recovery possible once the
@@ -993,16 +995,71 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
     settings.pulseDurationMs = pulseMs;
 
     String banner;
+    BridgeWatchdogSettings bridgeSettings = loadBridgeWatchdogSettings();
     if (settings.enabled && isReservedOrUnsafePin(settings.pin)) {
       banner = "Pin " + String(settings.pin) + " is reserved by another peripheral on this board or "
                "unsafe to use for general GPIO - pick a different one. Not saved.";
+    } else if (watchdogPinsConflict(settings.enabled, settings.pin, bridgeSettings.enabled, bridgeSettings.pin)) {
+      banner = "Pin " + String(settings.pin) + " is already used by the Camera Bridge Watchdog - pick "
+               "a different one. Not saved.";
     } else {
       banner = saveNetWatchdogSettings(settings)
           ? "Saved - the enable checkbox and pin need a reboot to apply; the threshold and pulse "
             "duration are active immediately."
           : "Failed to save - NVS write error (see Serial log). Setting was NOT changed.";
     }
-    return response->send(200, "text/html", renderShell(Tab::Maintenance, banner, renderMaintenancePanel()).c_str());
+    return response->send(200, "text/html",
+                           renderShell(Tab::Maintenance, banner, renderMaintenancePanel(g_liveCameras)).c_str());
+  });
+
+  server.on("/maintenance/bridge-watchdog/save", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
+    BridgeWatchdogSettings settings;
+    settings.enabled = request->hasParam("enabled");
+    settings.activeLow = request->hasParam("activeLow");
+    settings.cameraA = request->getParam("cameraA", "");
+    settings.cameraB = request->getParam("cameraB", "");
+
+    // "5" literal (not String(BRIDGE_WATCHDOG_PIN_DEFAULT) - getParam's
+    // default overload takes a const char*, not a String) matches
+    // BRIDGE_WATCHDOG_PIN_DEFAULT - only reached if the field is missing
+    // from the POST entirely, which the real form never does.
+    settings.pin = request->getParam("pin", "5").toInt();
+
+    // Clamped here at the form boundary; enforceSnapshotRetention-style
+    // point-of-use re-clamp also lives in bridge_watchdog.cpp itself -
+    // same reasoning as net_watchdog's own save route.
+    long thresholdMinutes = request->getParam("outageThresholdMinutes", "5").toInt();
+    if (thresholdMinutes < 1) thresholdMinutes = 1;
+    unsigned long thresholdMs = (unsigned long)thresholdMinutes * 60000UL;
+    if (thresholdMs > BRIDGE_WATCHDOG_THRESHOLD_MAX_MS) thresholdMs = BRIDGE_WATCHDOG_THRESHOLD_MAX_MS;
+    settings.outageThresholdMs = thresholdMs;
+
+    long pulseSeconds = request->getParam("pulseSeconds", "10").toInt();
+    if (pulseSeconds < 1) pulseSeconds = 1;
+    unsigned long pulseMs = (unsigned long)pulseSeconds * 1000UL;
+    if (pulseMs > BRIDGE_WATCHDOG_PULSE_MAX_MS) pulseMs = BRIDGE_WATCHDOG_PULSE_MAX_MS;
+    settings.pulseDurationMs = pulseMs;
+
+    String banner;
+    NetWatchdogSettings netSettings = loadNetWatchdogSettings();
+    if (settings.enabled && (settings.cameraA.length() == 0 || settings.cameraB.length() == 0)) {
+      banner = "Both Camera A and Camera B must be selected. Not saved.";
+    } else if (settings.enabled && settings.cameraA.equalsIgnoreCase(settings.cameraB)) {
+      banner = "Camera A and Camera B must be two different cameras. Not saved.";
+    } else if (settings.enabled && isReservedOrUnsafePin(settings.pin)) {
+      banner = "Pin " + String(settings.pin) + " is reserved by another peripheral on this board or "
+               "unsafe to use for general GPIO - pick a different one. Not saved.";
+    } else if (watchdogPinsConflict(settings.enabled, settings.pin, netSettings.enabled, netSettings.pin)) {
+      banner = "Pin " + String(settings.pin) + " is already used by the Internet Watchdog - pick a "
+               "different one. Not saved.";
+    } else {
+      banner = saveBridgeWatchdogSettings(settings)
+          ? "Saved - the enable checkbox, cameras, and pin need a reboot to apply; the threshold and "
+            "pulse duration are active immediately."
+          : "Failed to save - NVS write error (see Serial log). Setting was NOT changed.";
+    }
+    return response->send(200, "text/html",
+                           renderShell(Tab::Maintenance, banner, renderMaintenancePanel(g_liveCameras)).c_str());
   });
 
   server.on("/storage", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {

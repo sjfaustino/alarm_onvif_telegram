@@ -349,11 +349,25 @@ while the board's own WiFi link to it stays up the whole time, so
 power, enabled and configured (GPIO pin, active-high/low, outage threshold,
 pulse duration) on the Maintenance dashboard page, gets pulsed to force a
 power-cycle once a real WAN-reachability probe (not just the WiFi link) has
-failed for longer than the threshold - then a Telegram alert goes out. The pin
-is the only *dashboard*-configurable GPIO in this project; picking one already
-used by the SD card or RTC above, or an ESP32-S3 strapping/flash/PSRAM pin, is
-rejected rather than applied. Without one, the board behaves exactly as it
-always has - no connectivity monitoring past the WiFi link itself.
+failed for longer than the threshold - then a Telegram alert goes out. Picking
+a pin already used by the SD card or RTC above, or an ESP32-S3
+strapping/flash/PSRAM pin, is rejected rather than applied. Without one, the
+board behaves exactly as it always has - no connectivity monitoring past the
+WiFi link itself.
+
+**A relay-based camera bridge watchdog is optional.** Same idea as the
+internet watchdog above, on a second independent relay, for two specific
+cameras that sit behind a local wireless bridge that occasionally drops and
+needs a physical power reset to come back. Enabled and configured (which two
+cameras, GPIO pin, active-high/low, outage threshold, pulse duration) on the
+Maintenance dashboard page, the relay gets pulsed once *both* configured
+cameras have been reported OFFLINE for longer than the threshold - a single
+camera going offline is far more likely to be that camera's own problem than
+the bridge, so the trigger deliberately requires both. These are the only two
+*dashboard*-configurable GPIOs in this project; each is validated the same
+way as the internet watchdog's own pin, and the two watchdogs are also
+cross-checked against each other so they can't be pointed at the same pin.
+Without this enabled, the board behaves exactly as it always has.
 
 ## Setup
 

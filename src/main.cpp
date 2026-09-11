@@ -26,6 +26,7 @@
 #include "rtc_store.h"
 #include "rtc_ds3231.h" // timeGmUtc - seedSystemClockFromRtc
 #include "net_watchdog.h"
+#include "bridge_watchdog.h"
 #include "heap_health.h"
 
 static std::vector<CameraConfig> g_cameras;
@@ -47,6 +48,7 @@ static unsigned long lastWifiRssiCheckMs = 0;
 // for checkWifiSignal() instead of checkNvsUsage().
 static bool g_wifiRssiWeakAlerted = false;
 static unsigned long lastNetWatchdogCheckMs = 0;
+static unsigned long lastBridgeWatchdogCheckMs = 0;
 
 // checkHeapHealth()'s own state - see evaluateHeapHealth's own comment
 // (lib/heap_health) for why this never re-arms (a lifetime-low watermark
@@ -670,6 +672,11 @@ void setup() {
   // it should never sit in the "just pulsed" state across a reboot.
   initNetWatchdog();
 
+  // Same idea, second independent relay - see bridge_watchdog.h. Called
+  // after initNetWatchdog() so its own pin-conflict check sees the
+  // Internet Watchdog's already-loaded settings.
+  initBridgeWatchdog();
+
   g_wifiCredentials = loadWifiCredentials();
 
   // One-time recovery for cameras lost to the NVS migration bug fixed in
@@ -803,6 +810,20 @@ void loop() {
     lastNetWatchdogCheckMs = millis();
     if (checkInternetAndMaybePulseRelay()) {
       sendTelegramMessage("\xE2\x9A\xA0\xEF\xB8\x8F Internet outage detected - power-cycled the router.");
+    }
+    esp_task_wdt_reset();
+  }
+
+  // Same relay-power-cycle idea, different failure signal: two specific
+  // configured cameras (Maintenance page) both offline for too long points
+  // at the local wireless bridge carrying them, not either camera itself -
+  // see bridge_watchdog.h. WiFi.status() gate kept for consistency with
+  // every other periodic block here, even though the offline check itself
+  // doesn't need WAN - sendTelegramMessage does.
+  if (WiFi.status() == WL_CONNECTED && millis() - lastBridgeWatchdogCheckMs >= BRIDGE_WATCHDOG_CHECK_INTERVAL_MS) {
+    lastBridgeWatchdogCheckMs = millis();
+    if (checkBridgeCamerasAndMaybePulseRelay(g_cameras.data(), g_cameraStates.data(), g_cameras.size())) {
+      sendTelegramMessage("\xE2\x9A\xA0\xEF\xB8\x8F Camera bridge outage detected - power-cycled the bridge relay.");
     }
     esp_task_wdt_reset();
   }
