@@ -12,6 +12,8 @@
 #include "webserver_storage.h"
 #include "ui_settings.h"
 #include "rtc_store.h"
+#include "net_watchdog.h"
+#include "net_watchdog_logic.h" // isReservedOrUnsafePin
 #include "event_log_store.h"
 #include "snapshot_history.h"
 #include "sd_store.h"
@@ -961,6 +963,46 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
                       "board will NOT reboot. Try again once memory frees up, or power-cycle manually.");
     }
     return result;
+  });
+
+  server.on("/maintenance/net-watchdog/save", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
+    NetWatchdogSettings settings;
+    settings.enabled = request->hasParam("enabled");
+    settings.activeLow = request->hasParam("activeLow");
+
+    // "4" literal (not String(NET_WATCHDOG_PIN_DEFAULT) - getParam's
+    // default overload takes a const char*, not a String) matches
+    // NET_WATCHDOG_PIN_DEFAULT - only reached if the field is missing from
+    // the POST entirely, which the real form never does.
+    settings.pin = request->getParam("pin", "4").toInt();
+
+    // Clamped here at the form boundary; enforceSnapshotRetention-style
+    // point-of-use re-clamp also lives in net_watchdog.cpp itself, since
+    // config Import/a hand-edited NVS blob bypasses this form entirely -
+    // same reasoning as every other clamp in this project.
+    long thresholdMinutes = request->getParam("outageThresholdMinutes", "5").toInt();
+    if (thresholdMinutes < 1) thresholdMinutes = 1;
+    unsigned long thresholdMs = (unsigned long)thresholdMinutes * 60000UL;
+    if (thresholdMs > NET_WATCHDOG_THRESHOLD_MAX_MS) thresholdMs = NET_WATCHDOG_THRESHOLD_MAX_MS;
+    settings.outageThresholdMs = thresholdMs;
+
+    long pulseSeconds = request->getParam("pulseSeconds", "10").toInt();
+    if (pulseSeconds < 1) pulseSeconds = 1;
+    unsigned long pulseMs = (unsigned long)pulseSeconds * 1000UL;
+    if (pulseMs > NET_WATCHDOG_PULSE_MAX_MS) pulseMs = NET_WATCHDOG_PULSE_MAX_MS;
+    settings.pulseDurationMs = pulseMs;
+
+    String banner;
+    if (settings.enabled && isReservedOrUnsafePin(settings.pin)) {
+      banner = "Pin " + String(settings.pin) + " is reserved by another peripheral on this board or "
+               "unsafe to use for general GPIO - pick a different one. Not saved.";
+    } else {
+      banner = saveNetWatchdogSettings(settings)
+          ? "Saved - the enable checkbox and pin need a reboot to apply; the threshold and pulse "
+            "duration are active immediately."
+          : "Failed to save - NVS write error (see Serial log). Setting was NOT changed.";
+    }
+    return response->send(200, "text/html", renderShell(Tab::Maintenance, banner, renderMaintenancePanel()).c_str());
   });
 
   server.on("/storage", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {

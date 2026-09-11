@@ -25,6 +25,7 @@
 #include "sd_store.h"
 #include "rtc_store.h"
 #include "rtc_ds3231.h" // timeGmUtc - seedSystemClockFromRtc
+#include "net_watchdog.h"
 #include "heap_health.h"
 
 static std::vector<CameraConfig> g_cameras;
@@ -45,6 +46,7 @@ static unsigned long lastWifiRssiCheckMs = 0;
 // Same alert-once-per-transition/re-arm shape as g_nvsUsageAlerted above,
 // for checkWifiSignal() instead of checkNvsUsage().
 static bool g_wifiRssiWeakAlerted = false;
+static unsigned long lastNetWatchdogCheckMs = 0;
 
 // checkHeapHealth()'s own state - see evaluateHeapHealth's own comment
 // (lib/heap_health) for why this never re-arms (a lifetime-low watermark
@@ -662,6 +664,12 @@ void setup() {
   initRtc();
   seedSystemClockFromRtc();
 
+  // Optional - does nothing at all unless the Maintenance page's setting
+  // is enabled (see net_watchdog.h). Sets the relay to its resting
+  // ("router powered") state immediately, before WiFi/monitoring start -
+  // it should never sit in the "just pulsed" state across a reboot.
+  initNetWatchdog();
+
   g_wifiCredentials = loadWifiCredentials();
 
   // One-time recovery for cameras lost to the NVS migration bug fixed in
@@ -780,6 +788,22 @@ void loop() {
   if (WiFi.status() == WL_CONNECTED && millis() - lastWifiRssiCheckMs >= WIFI_RSSI_CHECK_INTERVAL_MS) {
     lastWifiRssiCheckMs = millis();
     checkWifiSignal();
+    esp_task_wdt_reset();
+  }
+
+  // WiFi.status()==WL_CONNECTED only confirms the board's own link to the
+  // router - this goes one hop further (real WAN reachability), which is
+  // the whole point for a board sitting behind a 4G/LTE router that can
+  // lose its uplink while that local link stays up the whole time. Gated
+  // the same way as every other WiFi-dependent check here; the relay
+  // pulse (when it happens) blocks for up to NET_WATCHDOG_PULSE_MAX_MS, so
+  // the watchdog reset matters here too, same reasoning as the comment
+  // above checkNvsUsage's own call site.
+  if (WiFi.status() == WL_CONNECTED && millis() - lastNetWatchdogCheckMs >= NET_WATCHDOG_CHECK_INTERVAL_MS) {
+    lastNetWatchdogCheckMs = millis();
+    if (checkInternetAndMaybePulseRelay()) {
+      sendTelegramMessage("\xE2\x9A\xA0\xEF\xB8\x8F Internet outage detected - power-cycled the router.");
+    }
     esp_task_wdt_reset();
   }
 

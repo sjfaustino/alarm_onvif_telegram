@@ -282,3 +282,35 @@ static const size_t GALLERY_PAGE_SIZE = 30;
 static const int RTC_SDA_PIN = 8;
 static const int RTC_SCL_PIN = 9;
 static const uint8_t DS3231_I2C_ADDR = 0x68; // fixed by the chip itself, not configurable
+
+// ============================================================
+// Optional internet-connectivity watchdog (net_watchdog.h/.cpp) - for a
+// board sitting behind a 4G/LTE router that sometimes loses its uplink
+// and doesn't recover on its own, while the board's own WiFi-to-router
+// link stays up the whole time (WiFi.status()==WL_CONNECTED never
+// notices). A relay wired in series with the router's own power gets
+// pulsed to force a power-cycle once the outage has lasted longer than a
+// configurable threshold. Entirely optional and off by default (see
+// NetWatchdogSettings::enabled, Maintenance page).
+//
+// *** VERIFY this pin is actually free on your board before enabling ***
+// Just a sane prefill for the Maintenance page's pin field - unlike every
+// other pin in this file, this one is meant to be changed from the
+// dashboard (isReservedOrUnsafePin, lib/net_watchdog_logic, rejects an
+// unsafe choice there), not by editing this constant.
+static const int NET_WATCHDOG_PIN_DEFAULT = 4;
+
+// How often the periodic check actually probes WAN reachability - not
+// dashboard-configurable (the user-facing dial is the outage *threshold*
+// below, which this interval must stay well under to measure with
+// reasonable granularity).
+static const unsigned long NET_WATCHDOG_CHECK_INTERVAL_MS = 30UL * 1000UL;
+
+// Clamp ceilings for NetWatchdogSettings::pulseDurationMs/outageThresholdMs -
+// same "hand-edited/imported NVS blob bypasses the dashboard form
+// entirely" reasoning as every other clamped field in this project.
+// PULSE_MAX in particular keeps the relay-pulse delay (loop()'s own task,
+// the only one subscribed to the task watchdog) comfortably under the 90s
+// TWDT timeout.
+static const uint32_t NET_WATCHDOG_PULSE_MAX_MS = 60UL * 1000UL;      // 60s
+static const uint32_t NET_WATCHDOG_THRESHOLD_MAX_MS = 60UL * 60UL * 1000UL; // 1h

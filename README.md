@@ -342,6 +342,19 @@ exactly as it always has - NTP is the only clock source, with no accurate time a
 all until WiFi connects and a sync completes. This is this project's only I2C
 peripheral.
 
+**A relay-based internet watchdog is optional.** For a board sitting behind a
+4G/LTE router that sometimes loses its uplink and doesn't recover on its own -
+while the board's own WiFi link to it stays up the whole time, so
+`WiFi.status()` never notices. A relay wired in series with the router's own
+power, enabled and configured (GPIO pin, active-high/low, outage threshold,
+pulse duration) on the Maintenance dashboard page, gets pulsed to force a
+power-cycle once a real WAN-reachability probe (not just the WiFi link) has
+failed for longer than the threshold - then a Telegram alert goes out. The pin
+is the only *dashboard*-configurable GPIO in this project; picking one already
+used by the SD card or RTC above, or an ESP32-S3 strapping/flash/PSRAM pin, is
+rejected rather than applied. Without one, the board behaves exactly as it
+always has - no connectivity monitoring past the WiFi link itself.
+
 ## Setup
 
 1. **Clone and copy the templates:**
