@@ -130,9 +130,9 @@ static String renderBridgeWatchdogFieldset(const std::vector<CameraConfig>* live
           "<input type=\"text\" name=\"pulseSeconds\" value=\"" +
           String(settings.pulseDurationMs / 1000UL) + "\"></label>";
   html += "<p><button type=\"submit\">Save</button></p></form>";
-  html += "<p class=\"hint\">The enable checkbox, cameras, and pin need a reboot to apply (pinMode() "
-          "is only set up at boot) - the threshold and pulse duration take effect on the very next "
-          "check.</p>";
+  html += "<p class=\"hint\">The enable checkbox and pin need a reboot to apply (pinMode() is only "
+          "set up at boot) - which cameras to watch, the threshold, and the pulse duration all take "
+          "effect on the very next check.</p>";
   html += "</fieldset>";
   return html;
 }
