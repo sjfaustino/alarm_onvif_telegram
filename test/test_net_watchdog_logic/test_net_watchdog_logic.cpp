@@ -1,5 +1,6 @@
 #include <unity.h>
 #include <Arduino.h>
+#include <climits> // ULONG_MAX
 #include "net_watchdog_logic.h"
 
 void setUp(void) {}
@@ -88,11 +89,18 @@ void test_outageThresholdReached_true_above_threshold(void) {
 
 // millis() wraparound: nowMs has rolled over past firstFailureMs - the
 // unsigned subtraction must still produce the correct real elapsed
-// duration, not treat this as "no time has passed" or crash.
+// duration, not treat this as "no time has passed" or crash. Expressed
+// relative to ULONG_MAX rather than a hardcoded 32-bit literal
+// (0xFFFFFFF0) on purpose - `unsigned long` is 32-bit on Windows/ESP32
+// but 64-bit on Linux (LP64), so a fixed 32-bit-max-adjacent constant
+// would only actually sit "just before wraparound" on some platforms and
+// silently stop testing anything meaningful (or fail outright) on
+// others - exactly what broke this test the first time, passing locally
+// on Windows but failing on Linux CI.
 void test_outageThresholdReached_survives_millis_wraparound(void) {
-  unsigned long firstFailureMs = 0xFFFFFFF0UL; // 16ms before wraparound
-  unsigned long nowMs = 20UL;                  // 20ms after wraparound
-  // Real elapsed time: 16ms (to wrap) + 20ms (past it) = 36ms.
+  unsigned long firstFailureMs = ULONG_MAX - 15UL; // 16 values before wraparound, whatever width unsigned long has here
+  unsigned long nowMs = 20UL;                       // 20 past wraparound
+  // Real elapsed time: 16 (to reach the wrap point, inclusive) + 20 (past it) = 36.
   TEST_ASSERT_TRUE(outageThresholdReached(firstFailureMs, nowMs, 30));
   TEST_ASSERT_FALSE(outageThresholdReached(firstFailureMs, nowMs, 40));
 }
