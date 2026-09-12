@@ -27,6 +27,7 @@
 #include "rtc_ds3231.h" // timeGmUtc - seedSystemClockFromRtc
 #include "net_watchdog.h"
 #include "bridge_watchdog.h"
+#include "power_monitor.h"
 #include "heap_health.h"
 #include "telegram_i18n.h"
 
@@ -50,6 +51,7 @@ static unsigned long lastWifiRssiCheckMs = 0;
 static bool g_wifiRssiWeakAlerted = false;
 static unsigned long lastNetWatchdogCheckMs = 0;
 static unsigned long lastBridgeWatchdogCheckMs = 0;
+static unsigned long lastPowerMonitorCheckMs = 0;
 
 // checkHeapHealth()'s own state - see evaluateHeapHealth's own comment
 // (lib/heap_health) for why this never re-arms (a lifetime-low watermark
@@ -628,11 +630,14 @@ static void startMonitoring() {
   bool sdBootCheckFailed = sdBootCheck.ranAtAll && !sdBootCheck.ok;
   size_t sdBootUnreadable = sdBootCheck.unreadableFiles;
   size_t sdBootDirsChecked = sdBootCheck.directoriesChecked;
-  bool sendOk = sendTelegramMessage([enabledCount, sdBootCheckFailed, sdBootUnreadable,
-                                      sdBootDirsChecked](TelegramLang lang) {
+  bool powerMonitorEnabled = powerMonitorActive();
+  bool powerPresentAtBoot = getPowerMonitorStatus().powerPresent;
+  bool sendOk = sendTelegramMessage([enabledCount, sdBootCheckFailed, sdBootUnreadable, sdBootDirsChecked,
+                                      powerMonitorEnabled, powerPresentAtBoot](TelegramLang lang) {
     String msg = trBootHeader(lang, FIRMWARE_VERSION) + "\n";
     msg += trRebootReasonLine(lang, describeResetReasonLocalized(lang)) + "\n";
     msg += trEnabledCamerasLine(lang, (size_t)enabledCount, g_cameras.size()) + "\n";
+    if (powerMonitorEnabled) msg += trPowerStatusLine(lang, powerPresentAtBoot) + "\n";
     msg += buildCameraListMessage(lang);
     if (sdBootCheckFailed) {
       msg += "\n" + trSdBootCheckWarning(lang, sdBootUnreadable, sdBootDirsChecked);
@@ -707,16 +712,21 @@ void setup() {
   initRtc();
   seedSystemClockFromRtc();
 
-  // Optional - does nothing at all unless the Maintenance page's setting
-  // is enabled (see net_watchdog.h). Sets the relay to its resting
-  // ("router powered") state immediately, before WiFi/monitoring start -
-  // it should never sit in the "just pulsed" state across a reboot.
+  // Optional - does nothing at all unless the Hardware > Internet page's
+  // setting is enabled (see net_watchdog.h). Sets the relay to its
+  // resting ("router powered") state immediately, before WiFi/monitoring
+  // start - it should never sit in the "just pulsed" state across a reboot.
   initNetWatchdog();
 
   // Same idea, second independent relay - see bridge_watchdog.h. Called
   // after initNetWatchdog() so its own pin-conflict check sees the
   // Internet Watchdog's already-loaded settings.
   initBridgeWatchdog();
+
+  // Third independent relay/sensor feature - see power_monitor.h. Called
+  // after the other two so its own pin-conflict check sees both of their
+  // already-loaded settings.
+  initPowerMonitor();
 
   g_wifiCredentials = loadWifiCredentials();
 
@@ -856,17 +866,32 @@ void loop() {
   }
 
   // Same relay-power-cycle idea, different failure signal: two specific
-  // configured cameras (Maintenance page) both offline for too long points
-  // at the local wireless bridge carrying them, not either camera itself -
-  // see bridge_watchdog.h. WiFi.status() gate kept for consistency with
-  // every other periodic block here, even though the offline check itself
-  // doesn't need WAN - sendTelegramMessage does.
+  // configured cameras (Hardware > WiFi Bridge page) both offline for too
+  // long points at the local wireless bridge carrying them, not either
+  // camera itself - see bridge_watchdog.h. WiFi.status() gate kept for
+  // consistency with every other periodic block here, even though the
+  // offline check itself doesn't need WAN - sendTelegramMessage does.
   if (WiFi.status() == WL_CONNECTED && millis() - lastBridgeWatchdogCheckMs >= BRIDGE_WATCHDOG_CHECK_INTERVAL_MS) {
     lastBridgeWatchdogCheckMs = millis();
     if (checkBridgeCamerasAndMaybePulseRelay(g_cameras.data(), g_cameraStates.data(), g_cameras.size())) {
       sendTelegramMessage([](TelegramLang lang) { return trBridgeOutageAlert(lang); });
     }
     esp_task_wdt_reset();
+  }
+
+  // 220V mains power monitor - see power_monitor.h. No WiFi.status() gate
+  // on the check itself (a digitalRead needs no network, and the
+  // debounce state must keep tracking correctly through a WiFi outage so
+  // the eventual alert isn't wrong/duplicated once it reconnects) -
+  // sendTelegramMessage still just no-ops/logs if WiFi happens to be down
+  // right when a change is confirmed, same as checkScheduledAlertReverts'
+  // own reasoning.
+  if (millis() - lastPowerMonitorCheckMs >= POWER_MONITOR_CHECK_INTERVAL_MS) {
+    lastPowerMonitorCheckMs = millis();
+    if (checkPowerStateChanged()) {
+      bool present = getPowerMonitorStatus().powerPresent;
+      sendTelegramMessage([present](TelegramLang lang) { return present ? trPowerRestored(lang) : trPowerLost(lang); });
+    }
   }
 
   if (WiFi.status() == WL_CONNECTED && millis() - lastCommandPollMs >= TELEGRAM_COMMAND_POLL_MS) {

@@ -44,8 +44,8 @@ bool netWatchdogActive();
 // !netWatchdogActive(), still within the threshold, or already recovered).
 bool checkInternetAndMaybePulseRelay();
 
-// Status for the dashboard (Maintenance page) - reflects live state,
-// doesn't re-probe.
+// Status for the dashboard (Hardware > Internet page) - reflects live
+// state, doesn't re-probe.
 struct NetWatchdogStatus {
   bool settingEnabled = false;
   bool available = false;       // netWatchdogActive()'s value

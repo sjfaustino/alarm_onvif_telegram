@@ -291,10 +291,10 @@ static const uint8_t DS3231_I2C_ADDR = 0x68; // fixed by the chip itself, not co
 // notices). A relay wired in series with the router's own power gets
 // pulsed to force a power-cycle once the outage has lasted longer than a
 // configurable threshold. Entirely optional and off by default (see
-// NetWatchdogSettings::enabled, Maintenance page).
+// NetWatchdogSettings::enabled, Hardware > Internet page).
 //
 // *** VERIFY this pin is actually free on your board before enabling ***
-// Just a sane prefill for the Maintenance page's pin field - unlike every
+// Just a sane prefill for the Hardware page's pin field - unlike every
 // other pin in this file, this one is meant to be changed from the
 // dashboard (isReservedOrUnsafePin, lib/net_watchdog_logic, rejects an
 // unsafe choice there), not by editing this constant.
@@ -336,3 +336,30 @@ static const unsigned long BRIDGE_WATCHDOG_CHECK_INTERVAL_MS = 30UL * 1000UL;
 // Same reasoning as NET_WATCHDOG_PULSE_MAX_MS/THRESHOLD_MAX_MS above.
 static const uint32_t BRIDGE_WATCHDOG_PULSE_MAX_MS = 60UL * 1000UL;      // 60s
 static const uint32_t BRIDGE_WATCHDOG_THRESHOLD_MAX_MS = 60UL * 60UL * 1000UL; // 1h
+
+// 220V mains power monitor (power_monitor.h/.cpp) - the reverse of the two
+// relay watchdogs above: an INPUT, not an output. A relay driven by a
+// 220V-to-5V transformer closes its NO contact onto this pin while mains
+// power is present; losing power de-energizes the relay and opens it.
+// Purely a sensor - there's no corrective action to take (the board and
+// router are themselves on a UPS), just an alert at boot and on every
+// confirmed change. A third independent, dashboard-configurable GPIO -
+// see watchdogPinsConflict (lib/net_watchdog_logic) for why all three of
+// this project's relay/sensor pins are cross-checked against each other,
+// pairwise, at save time.
+//
+// *** VERIFY this pin is actually free on your board before enabling ***
+// Deliberately a third distinct default from NET_WATCHDOG_PIN_DEFAULT/
+// BRIDGE_WATCHDOG_PIN_DEFAULT - all three can be enabled at once.
+static const int POWER_MONITOR_PIN_DEFAULT = 6;
+
+static const unsigned long POWER_MONITOR_CHECK_INTERVAL_MS = 10UL * 1000UL;
+
+// How long a raw reading must keep disagreeing with the last CONFIRMED
+// state before it's trusted as a real change, not relay contact chatter
+// or a momentary sag - roughly 3 checks' worth of sustained disagreement
+// at the interval above. No corrective action is gated on this (unlike
+// the two watchdogs' own outage thresholds), just whether to send an
+// alert at all - short on purpose, since a real, sustained mains outage
+// against a UPS-backed board is worth knowing about promptly.
+static const unsigned long POWER_MONITOR_DEBOUNCE_MS = 30UL * 1000UL;

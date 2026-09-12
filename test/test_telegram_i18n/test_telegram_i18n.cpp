@@ -86,6 +86,24 @@ void test_trInternetOutageAlert_and_trBridgeOutageAlert(void) {
   TEST_ASSERT_TRUE(trBridgeOutageAlert(TelegramLang::English) != trBridgeOutageAlert(TelegramLang::Portuguese));
 }
 
+void test_trPowerStatusLine_on_vs_off(void) {
+  String enOn = trPowerStatusLine(TelegramLang::English, true);
+  String enOff = trPowerStatusLine(TelegramLang::English, false);
+  TEST_ASSERT_TRUE(enOn != enOff);
+  TEST_ASSERT_TRUE(enOn.indexOf("ON") >= 0);
+  TEST_ASSERT_TRUE(enOff.indexOf("OFF") >= 0);
+  String ptOn = trPowerStatusLine(TelegramLang::Portuguese, true);
+  String ptOff = trPowerStatusLine(TelegramLang::Portuguese, false);
+  TEST_ASSERT_TRUE(ptOn != ptOff);
+  TEST_ASSERT_TRUE(enOn != ptOn);
+}
+
+void test_trPowerLost_and_trPowerRestored(void) {
+  TEST_ASSERT_TRUE(trPowerLost(TelegramLang::English) != trPowerLost(TelegramLang::Portuguese));
+  TEST_ASSERT_TRUE(trPowerRestored(TelegramLang::English) != trPowerRestored(TelegramLang::Portuguese));
+  TEST_ASSERT_TRUE(trPowerLost(TelegramLang::English) != trPowerRestored(TelegramLang::English));
+}
+
 void test_trSdFailure_and_trSdCheckWarning(void) {
   String en = trSdFailure(TelegramLang::English, "mount failed");
   String pt = trSdFailure(TelegramLang::Portuguese, "mount failed");
@@ -376,6 +394,8 @@ int main(int argc, char** argv) {
   RUN_TEST(test_trHeapLowWarning);
   RUN_TEST(test_trCameraTaskSpawnFailure);
   RUN_TEST(test_trInternetOutageAlert_and_trBridgeOutageAlert);
+  RUN_TEST(test_trPowerStatusLine_on_vs_off);
+  RUN_TEST(test_trPowerLost_and_trPowerRestored);
   RUN_TEST(test_trSdFailure_and_trSdCheckWarning);
   RUN_TEST(test_trMissingCredentials_both_variants);
   RUN_TEST(test_trTestMessage);

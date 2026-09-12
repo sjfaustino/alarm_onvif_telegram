@@ -219,7 +219,10 @@ Arduino-ESP32/IDF releases.
   Firmware page (its own "Version" row, next to the existing build date/time),
   and the config export header. Useful for confirming which exact build is
   actually running, especially after an OTA update.
-- Firmware, Maintenance, and Storage live under a "System" submenu in the sidebar.
+- Firmware, Maintenance, and Storage live under a "System" submenu in the sidebar;
+  the Internet Watchdog, Camera Bridge Watchdog, and 220V Power Monitor each get
+  their own page under a separate "Hardware" submenu, one per relay/sensor
+  feature rather than stacked together on one page.
   Firmware updates over the dashboard: upload a `.bin` built with
   `pio run -e esp32s3` on the Firmware page instead of reflashing over USB. Uses
   the board's dual OTA app partitions - a failed or aborted upload leaves the
@@ -351,10 +354,10 @@ peripheral.
 while the board's own WiFi link to it stays up the whole time, so
 `WiFi.status()` never notices. A relay wired in series with the router's own
 power, enabled and configured (GPIO pin, active-high/low, outage threshold,
-pulse duration) on the Maintenance dashboard page, gets pulsed to force a
-power-cycle once a real WAN-reachability probe (not just the WiFi link) has
-failed for longer than the threshold - then a Telegram alert goes out. Picking
-a pin already used by the SD card or RTC above, or an ESP32-S3
+pulse duration) on the dashboard's Hardware > Internet page, gets pulsed to
+force a power-cycle once a real WAN-reachability probe (not just the WiFi
+link) has failed for longer than the threshold - then a Telegram alert goes
+out. Picking a pin already used by the SD card or RTC above, or an ESP32-S3
 strapping/flash/PSRAM pin, is rejected rather than applied. Without one, the
 board behaves exactly as it always has - no connectivity monitoring past the
 WiFi link itself.
@@ -364,14 +367,26 @@ internet watchdog above, on a second independent relay, for two specific
 cameras that sit behind a local wireless bridge that occasionally drops and
 needs a physical power reset to come back. Enabled and configured (which two
 cameras, GPIO pin, active-high/low, outage threshold, pulse duration) on the
-Maintenance dashboard page, the relay gets pulsed once *both* configured
-cameras have been reported OFFLINE for longer than the threshold - a single
-camera going offline is far more likely to be that camera's own problem than
-the bridge, so the trigger deliberately requires both. These are the only two
-*dashboard*-configurable GPIOs in this project; each is validated the same
-way as the internet watchdog's own pin, and the two watchdogs are also
-cross-checked against each other so they can't be pointed at the same pin.
-Without this enabled, the board behaves exactly as it always has.
+dashboard's Hardware > WiFi Bridge page, the relay gets pulsed once *both*
+configured cameras have been reported OFFLINE for longer than the threshold -
+a single camera going offline is far more likely to be that camera's own
+problem than the bridge, so the trigger deliberately requires both.
+
+**A 220V mains power monitor is optional.** The reverse of the two relay
+watchdogs above - a sensing *input*, not an output. A relay driven by a
+220V-to-5V transformer closes its NO (normally-open) contact onto a
+configured pin while mains power is present; losing power opens it. Purely
+informational (the board and its router are themselves expected to be on a
+UPS) - enabled and configured (GPIO pin, wiring polarity) on the dashboard's
+Hardware > 220V Power page, it sends a Telegram alert once at boot with the
+current reading, and again every time a change is confirmed (debounced
+against relay chatter/a brief sag before it's trusted).
+
+These are the only three *dashboard*-configurable GPIOs in this project; each
+is validated the same way as the internet watchdog's own pin, and all three
+are cross-checked against each other, pairwise, so no two of them can be
+pointed at the same pin. Without any of these enabled, the board behaves
+exactly as it always has.
 
 ## Setup
 

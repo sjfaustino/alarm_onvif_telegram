@@ -72,7 +72,7 @@ void initBridgeWatchdog() {
   if (isReservedOrUnsafePin(settings.pin)) {
     Serial.printf("[bridge_watchdog] Camera bridge watchdog is enabled, but pin %d is reserved by "
                   "another peripheral or unsafe to use on this board - pick a different pin on the "
-                  "Maintenance page, then reboot. Staying inactive.\n", settings.pin);
+                  "Hardware page, then reboot. Staying inactive.\n", settings.pin);
     return;
   }
 
@@ -83,7 +83,7 @@ void initBridgeWatchdog() {
   if (watchdogPinsConflict(true, settings.pin, netSettings.enabled, netSettings.pin)) {
     Serial.printf("[bridge_watchdog] Camera bridge watchdog is enabled on pin %d, but the Internet "
                   "Watchdog is also configured for that pin - pick a different pin for one of them on "
-                  "the Maintenance page, then reboot. Staying inactive.\n", settings.pin);
+                  "the Hardware page, then reboot. Staying inactive.\n", settings.pin);
     return;
   }
 

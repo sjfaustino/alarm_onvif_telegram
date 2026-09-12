@@ -48,6 +48,12 @@ String trHeapLowWarning(TelegramLang lang, uint32_t baselineBytes, uint32_t maxA
 String trCameraTaskSpawnFailure(TelegramLang lang, const String& cameraName);
 String trInternetOutageAlert(TelegramLang lang);
 String trBridgeOutageAlert(TelegramLang lang);
+// 220V mains power monitor (power_monitor.h) - trPowerStatusLine is folded
+// into the boot/online message (main.cpp); trPowerLost/trPowerRestored are
+// sent standalone on a confirmed state change.
+String trPowerStatusLine(TelegramLang lang, bool present);
+String trPowerLost(TelegramLang lang);
+String trPowerRestored(TelegramLang lang);
 String trSdFailure(TelegramLang lang, const String& reason);
 String trSdCheckWarning(TelegramLang lang, size_t unreadableFiles, size_t filesChecked);
 // afterLiveEdit: false = discovered at camera-task startup, true = discovered

@@ -79,7 +79,7 @@ void initNetWatchdog() {
   if (isReservedOrUnsafePin(settings.pin)) {
     Serial.printf("[net_watchdog] Internet watchdog is enabled, but pin %d is reserved by another "
                   "peripheral or unsafe to use on this board - pick a different pin on the "
-                  "Maintenance page, then reboot. Staying inactive.\n", settings.pin);
+                  "Hardware page, then reboot. Staying inactive.\n", settings.pin);
     return;
   }
 

@@ -6,6 +6,7 @@
 #include "webserver_users.h"
 #include "webserver_firmware.h"
 #include "webserver_maintenance.h"
+#include "webserver_hardware.h"
 #include "webserver_security.h"
 #include "webserver_activity.h"
 #include "webserver_gallery.h"
@@ -14,6 +15,7 @@
 #include "rtc_store.h"
 #include "net_watchdog.h"
 #include "bridge_watchdog.h"
+#include "power_monitor.h"
 #include "net_watchdog_logic.h" // isReservedOrUnsafePin, watchdogPinsConflict
 #include "event_log_store.h"
 #include "snapshot_history.h"
@@ -168,7 +170,8 @@ static RateLimitMiddleware g_rateLimitMiddleware;
 // firmware binary rather than served from a filesystem, on purpose.
 // ============================================================
 
-enum class Tab { None, Network, Cameras, Users, Activity, Gallery, Firmware, Maintenance, Storage, Security };
+enum class Tab { None, Network, Cameras, Users, Activity, Gallery, Firmware, Maintenance, Storage, Security,
+                  HardwareInternet, HardwareBridge, HardwarePower };
 
 // Whether the tab currently being rendered has a background job in
 // progress (a camera connection test, a WS-Discovery search, a WiFi scan,
@@ -382,6 +385,10 @@ static String renderShell(Tab active, const String& banner, const String& conten
   // side framework" stance elsewhere, just enough JS to open/close a menu
   // on a full-page-reload site.
   bool systemOpen = (active == Tab::Firmware || active == Tab::Maintenance || active == Tab::Storage);
+  // Same reasoning as systemOpen above, for the three relay/sensor pages
+  // (Internet Watchdog, Camera Bridge Watchdog, 220V Power Monitor).
+  bool hardwareOpen = (active == Tab::HardwareInternet || active == Tab::HardwareBridge ||
+                        active == Tab::HardwarePower);
 
   html += "<nav class=\"sidebar\"><div class=\"brand\">Camera Monitor v" + String(FIRMWARE_VERSION) + "</div>";
   html += "<a href=\"/network\" class=\"";
@@ -413,6 +420,21 @@ static String renderShell(Tab active, const String& banner, const String& conten
   html += "<a href=\"/storage\" class=\"";
   html += (active == Tab::Storage) ? "active" : "";
   html += "\">Storage</a>";
+  html += "</div>";
+  html += "<a href=\"#\" class=\"sidebar-parent\" onclick=\"var m=document.getElementById('hardware-submenu');"
+          "m.style.display=(m.style.display==='block')?'none':'block';return false;\">Hardware</a>";
+  html += "<div id=\"hardware-submenu\" class=\"sidebar-submenu\" style=\"display:";
+  html += hardwareOpen ? "block" : "none";
+  html += ";\">";
+  html += "<a href=\"/hardware/internet\" class=\"";
+  html += (active == Tab::HardwareInternet) ? "active" : "";
+  html += "\">Internet</a>";
+  html += "<a href=\"/hardware/bridge\" class=\"";
+  html += (active == Tab::HardwareBridge) ? "active" : "";
+  html += "\">WiFi Bridge</a>";
+  html += "<a href=\"/hardware/power\" class=\"";
+  html += (active == Tab::HardwarePower) ? "active" : "";
+  html += "\">220V Power</a>";
   html += "</div>";
   html += "<a href=\"/security\" class=\"";
   html += (active == Tab::Security) ? "active" : "";
@@ -968,8 +990,7 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
   server.on("/firmware/update", HTTP_POST, otaHandler);
 
   server.on("/maintenance", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
-    return response->send(200, "text/html",
-                           renderShell(Tab::Maintenance, "", renderMaintenancePanel(g_liveCameras)).c_str());
+    return response->send(200, "text/html", renderShell(Tab::Maintenance, "", renderMaintenancePanel()).c_str());
   });
 
   server.on("/maintenance/reboot", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) -> esp_err_t {
@@ -977,7 +998,7 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
     esp_err_t result = response->send(
         200, "text/html",
         renderShell(Tab::Maintenance, "Rebooting now - reconnect in about 15-20 seconds.",
-                    renderMaintenancePanel(g_liveCameras))
+                    renderMaintenancePanel())
             .c_str());
     // See the OTA reboot handler's own comment above (/firmware/update) -
     // same failure mode, no user-facing recovery possible once the
@@ -989,7 +1010,12 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
     return result;
   });
 
-  server.on("/maintenance/net-watchdog/save", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
+  server.on("/hardware/internet", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
+    return response->send(200, "text/html",
+                           renderShell(Tab::HardwareInternet, "", renderInternetWatchdogPage()).c_str());
+  });
+
+  server.on("/hardware/internet/save", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
     NetWatchdogSettings settings;
     settings.enabled = request->hasParam("enabled");
     settings.activeLow = request->hasParam("activeLow");
@@ -1018,12 +1044,16 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
 
     String banner;
     BridgeWatchdogSettings bridgeSettings = loadBridgeWatchdogSettings();
+    PowerMonitorSettings powerSettings = loadPowerMonitorSettings();
     if (settings.enabled && isReservedOrUnsafePin(settings.pin)) {
       banner = "Pin " + String(settings.pin) + " is reserved by another peripheral on this board or "
                "unsafe to use for general GPIO - pick a different one. Not saved.";
     } else if (watchdogPinsConflict(settings.enabled, settings.pin, bridgeSettings.enabled, bridgeSettings.pin)) {
       banner = "Pin " + String(settings.pin) + " is already used by the Camera Bridge Watchdog - pick "
                "a different one. Not saved.";
+    } else if (watchdogPinsConflict(settings.enabled, settings.pin, powerSettings.enabled, powerSettings.pin)) {
+      banner = "Pin " + String(settings.pin) + " is already used by the 220V Power Monitor - pick a "
+               "different one. Not saved.";
     } else {
       banner = saveNetWatchdogSettings(settings)
           ? "Saved - the enable checkbox and pin need a reboot to apply; the threshold and pulse "
@@ -1031,10 +1061,15 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
           : "Failed to save - NVS write error (see Serial log). Setting was NOT changed.";
     }
     return response->send(200, "text/html",
-                           renderShell(Tab::Maintenance, banner, renderMaintenancePanel(g_liveCameras)).c_str());
+                           renderShell(Tab::HardwareInternet, banner, renderInternetWatchdogPage()).c_str());
   });
 
-  server.on("/maintenance/bridge-watchdog/save", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
+  server.on("/hardware/bridge", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
+    return response->send(200, "text/html",
+                           renderShell(Tab::HardwareBridge, "", renderBridgeWatchdogPage(g_liveCameras)).c_str());
+  });
+
+  server.on("/hardware/bridge/save", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
     BridgeWatchdogSettings settings;
     settings.enabled = request->hasParam("enabled");
     settings.activeLow = request->hasParam("activeLow");
@@ -1064,6 +1099,7 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
 
     String banner;
     NetWatchdogSettings netSettings = loadNetWatchdogSettings();
+    PowerMonitorSettings powerSettings = loadPowerMonitorSettings();
     if (settings.enabled && (settings.cameraA.length() == 0 || settings.cameraB.length() == 0)) {
       banner = "Both Camera A and Camera B must be selected. Not saved.";
     } else if (settings.enabled && settings.cameraA.equalsIgnoreCase(settings.cameraB)) {
@@ -1074,6 +1110,9 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
     } else if (watchdogPinsConflict(settings.enabled, settings.pin, netSettings.enabled, netSettings.pin)) {
       banner = "Pin " + String(settings.pin) + " is already used by the Internet Watchdog - pick a "
                "different one. Not saved.";
+    } else if (watchdogPinsConflict(settings.enabled, settings.pin, powerSettings.enabled, powerSettings.pin)) {
+      banner = "Pin " + String(settings.pin) + " is already used by the 220V Power Monitor - pick a "
+               "different one. Not saved.";
     } else {
       banner = saveBridgeWatchdogSettings(settings)
           ? "Saved - the enable checkbox, cameras, and pin need a reboot to apply; the threshold and "
@@ -1081,7 +1120,45 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
           : "Failed to save - NVS write error (see Serial log). Setting was NOT changed.";
     }
     return response->send(200, "text/html",
-                           renderShell(Tab::Maintenance, banner, renderMaintenancePanel(g_liveCameras)).c_str());
+                           renderShell(Tab::HardwareBridge, banner, renderBridgeWatchdogPage(g_liveCameras)).c_str());
+  });
+
+  server.on("/hardware/power", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
+    return response->send(200, "text/html",
+                           renderShell(Tab::HardwarePower, "", renderPowerMonitorPage()).c_str());
+  });
+
+  server.on("/hardware/power/save", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
+    PowerMonitorSettings settings;
+    settings.enabled = request->hasParam("enabled");
+    settings.activeHigh = request->hasParam("activeHigh");
+
+    // "6" literal (not String(POWER_MONITOR_PIN_DEFAULT) - getParam's
+    // default overload takes a const char*, not a String) matches
+    // POWER_MONITOR_PIN_DEFAULT - only reached if the field is missing
+    // from the POST entirely, which the real form never does.
+    settings.pin = request->getParam("pin", "6").toInt();
+
+    String banner;
+    NetWatchdogSettings netSettings = loadNetWatchdogSettings();
+    BridgeWatchdogSettings bridgeSettings = loadBridgeWatchdogSettings();
+    if (settings.enabled && isReservedOrUnsafePin(settings.pin)) {
+      banner = "Pin " + String(settings.pin) + " is reserved by another peripheral on this board or "
+               "unsafe to use for general GPIO - pick a different one. Not saved.";
+    } else if (watchdogPinsConflict(settings.enabled, settings.pin, netSettings.enabled, netSettings.pin)) {
+      banner = "Pin " + String(settings.pin) + " is already used by the Internet Watchdog - pick a "
+               "different one. Not saved.";
+    } else if (watchdogPinsConflict(settings.enabled, settings.pin, bridgeSettings.enabled, bridgeSettings.pin)) {
+      banner = "Pin " + String(settings.pin) + " is already used by the Camera Bridge Watchdog - pick "
+               "a different one. Not saved.";
+    } else {
+      banner = savePowerMonitorSettings(settings)
+          ? "Saved - the enable checkbox and pin need a reboot to apply; the wiring polarity is active "
+            "immediately."
+          : "Failed to save - NVS write error (see Serial log). Setting was NOT changed.";
+    }
+    return response->send(200, "text/html",
+                           renderShell(Tab::HardwarePower, banner, renderPowerMonitorPage()).c_str());
   });
 
   server.on("/storage", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {

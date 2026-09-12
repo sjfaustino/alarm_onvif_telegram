@@ -54,8 +54,8 @@ bool bridgeWatchdogActive();
 // send the Telegram alert.
 bool checkBridgeCamerasAndMaybePulseRelay(const CameraConfig cameras[], CameraState states[], size_t numCameras);
 
-// Status for the dashboard (Maintenance page) - reflects live state,
-// doesn't re-probe.
+// Status for the dashboard (Hardware > WiFi Bridge page) - reflects live
+// state, doesn't re-probe.
 struct BridgeWatchdogStatus {
   bool settingEnabled = false;
   bool available = false;       // bridgeWatchdogActive()'s value

@@ -153,6 +153,28 @@ String trBridgeOutageAlert(TelegramLang lang) {
   return "\xE2\x9A\xA0\xEF\xB8\x8F Camera bridge outage detected - power-cycled the bridge relay.";
 }
 
+String trPowerStatusLine(TelegramLang lang, bool present) {
+  if (lang == TelegramLang::Portuguese) {
+    return present ? "Energia da rede el\xC3\xA9trica: LIGADA"
+                   : "Energia da rede el\xC3\xA9trica: DESLIGADA (a funcionar com UPS)";
+  }
+  return present ? "Mains power: ON" : "Mains power: OFF (running on UPS)";
+}
+
+String trPowerLost(TelegramLang lang) {
+  if (lang == TelegramLang::Portuguese) {
+    return "\xE2\x9A\xA0\xEF\xB8\x8F Falha na energia da rede el\xC3\xA9trica - a funcionar com UPS.";
+  }
+  return "\xE2\x9A\xA0\xEF\xB8\x8F Mains power lost - running on UPS.";
+}
+
+String trPowerRestored(TelegramLang lang) {
+  if (lang == TelegramLang::Portuguese) {
+    return "\xE2\x9C\x85 Energia da rede el\xC3\xA9trica restabelecida.";
+  }
+  return "\xE2\x9C\x85 Mains power restored.";
+}
+
 String trSdFailure(TelegramLang lang, const String& reason) {
   if (lang == TelegramLang::Portuguese) {
     return "\xE2\x9A\xA0\xEF\xB8\x8F Falha no armazenamento do cart\xC3\xA3o SD (" + reason + ") e foi "
