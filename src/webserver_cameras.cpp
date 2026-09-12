@@ -1011,11 +1011,18 @@ static BackgroundJob<std::vector<DiscoveredCamera>> g_discoveryJob;
 // blocks for several seconds by design.
 static std::vector<DiscoveredCamera> runCameraDiscovery() {
   std::vector<DiscoveredCamera> found;
-  if (WiFi.status() != WL_CONNECTED) return found;
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("[webserver_cameras] Camera discovery: WiFi not connected - skipping.");
+    return found;
+  }
 
   WiFiUDP udp;
-  if (udp.begin(0) == 0) return found; // 0 = OS-assigned ephemeral local port
+  if (udp.begin(0) == 0) {
+    Serial.println("[webserver_cameras] Camera discovery: udp.begin() failed - skipping.");
+    return found; // 0 = OS-assigned ephemeral local port
+  }
 
+  Serial.println("[webserver_cameras] Camera discovery: listening for WS-Discovery replies...");
   unsigned long start = millis();
   unsigned long nextProbeMs = start;
   int probesSent = 0;
@@ -1051,11 +1058,13 @@ static std::vector<DiscoveredCamera> runCameraDiscovery() {
   }
 
   udp.stop();
+  Serial.printf("[webserver_cameras] Camera discovery: finished, %u camera(s) found.\n", (unsigned)found.size());
   return found;
 }
 
 static void cameraDiscoveryTask(void*) {
   g_discoveryJob.finish(runCameraDiscovery());
+  Serial.println("[webserver_cameras] Camera discovery: background job marked finished.");
   vTaskDelete(nullptr);
 }
 
