@@ -48,6 +48,16 @@ String trHeapLowWarning(TelegramLang lang, uint32_t baselineBytes, uint32_t maxA
 String trCameraTaskSpawnFailure(TelegramLang lang, const String& cameraName);
 String trInternetOutageAlert(TelegramLang lang);
 String trBridgeOutageAlert(TelegramLang lang);
+// Sent once connectivity is confirmed restored, not when the outage began
+// or crossed the pulse threshold - see NetWatchdogCheckResult's own
+// comment (net_watchdog.h) for why. sinceTime is a pre-formatted "HH:MM"
+// local clock string (formatLocalClockTime, telegram.h - not callable
+// from this native-testable lib, so the caller in main.cpp computes it);
+// "" means the clock wasn't synced when the outage started, in which case
+// the message omits the "since HH:MM" clause and reports only the
+// duration.
+String trInternetRecovered(TelegramLang lang, const String& sinceTime, unsigned long outageDurationMs);
+String trBridgeRecovered(TelegramLang lang, const String& sinceTime, unsigned long outageDurationMs);
 // 220V mains power monitor (power_monitor.h) - trPowerStatusLine is folded
 // into the boot/online message (main.cpp); trPowerLost/trPowerRestored are
 // sent standalone on a confirmed state change.

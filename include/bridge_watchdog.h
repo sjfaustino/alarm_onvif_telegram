@@ -41,18 +41,28 @@ void initBridgeWatchdog();
 // the configured pin - mirrors netWatchdogActive()'s shape.
 bool bridgeWatchdogActive();
 
+// Same shape as NetWatchdogCheckResult (net_watchdog.h) - a bridge outage
+// doesn't threaten this board's own Telegram delivery the way a WAN
+// outage does (net_watchdog's own reason for deferring its alert to
+// recovery time), but "was down since HH:MM (for X)" is equally useful
+// information here on its own merits, reported once the outage is
+// actually over rather than only ever logged internally.
+struct BridgeWatchdogCheckResult {
+  enum class Event { None, OutageDetected, Recovered } event = Event::None;
+  unsigned long outageStartMs = 0;    // millis() timestamp; valid only if event == Recovered
+  unsigned long outageDurationMs = 0; // valid only if event == Recovered
+};
+
 // Call on BRIDGE_WATCHDOG_CHECK_INTERVAL_MS's own cadence (main.cpp's
 // loop()). Looks up cameraA/cameraB by name (case-insensitively) in the
 // live camera list; if either name isn't currently found or that camera
-// is disabled, the pair can't be evaluated - returns false without
+// is disabled, the pair can't be evaluated - returns Event::None without
 // touching the outage timer (fail-safe: never guess), surfaced via
 // getBridgeWatchdogStatus()'s camerasResolved field rather than silently
 // doing nothing. Otherwise runs the same reachable/outage/pulse state
 // machine as checkInternetAndMaybePulseRelay, with "both isOffline" in
-// place of "WAN unreachable". Returns true exactly once per detected
-// outage - right when the relay was just pulsed - so the caller knows to
-// send the Telegram alert.
-bool checkBridgeCamerasAndMaybePulseRelay(const CameraConfig cameras[], CameraState states[], size_t numCameras);
+// place of "WAN unreachable".
+BridgeWatchdogCheckResult checkBridgeCamerasAndMaybePulseRelay(const CameraConfig cameras[], CameraState states[], size_t numCameras);
 
 // Status for the dashboard (Hardware > WiFi Bridge page) - reflects live
 // state, doesn't re-probe.

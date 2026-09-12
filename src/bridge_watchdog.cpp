@@ -126,8 +126,9 @@ static void pulseRelay(uint32_t pulseDurationMs) {
   esp_task_wdt_reset();
 }
 
-bool checkBridgeCamerasAndMaybePulseRelay(const CameraConfig cameras[], CameraState states[], size_t numCameras) {
-  if (!bridgeWatchdogActive()) return false;
+BridgeWatchdogCheckResult checkBridgeCamerasAndMaybePulseRelay(const CameraConfig cameras[], CameraState states[], size_t numCameras) {
+  BridgeWatchdogCheckResult result;
+  if (!bridgeWatchdogActive()) return result;
 
   BridgeWatchdogSettings settings = loadBridgeWatchdogSettings();
   int idxA = findCameraIndexByName(cameras, numCameras, settings.cameraA);
@@ -140,7 +141,7 @@ bool checkBridgeCamerasAndMaybePulseRelay(const CameraConfig cameras[], CameraSt
   // already-in-progress outage.
   if (idxA < 0 || idxB < 0 || !cameras[idxA].enabled || !cameras[idxB].enabled) {
     g_camerasResolved = false;
-    return false;
+    return result;
   }
   g_camerasResolved = true;
 
@@ -158,15 +159,19 @@ bool checkBridgeCamerasAndMaybePulseRelay(const CameraConfig cameras[], CameraSt
 
   if (!bothOffline) {
     if (g_firstBothOfflineMs != 0) {
+      unsigned long startMs = g_firstBothOfflineMs;
       logEvent("Camera bridge watchdog: " + settings.cameraA + " / " + settings.cameraB + " recovered");
       g_firstBothOfflineMs = 0;
+      result.event = BridgeWatchdogCheckResult::Event::Recovered;
+      result.outageStartMs = startMs;
+      result.outageDurationMs = now - startMs;
     }
-    return false;
+    return result;
   }
 
   if (g_firstBothOfflineMs == 0) {
     g_firstBothOfflineMs = now; // outage just started - nothing to do yet
-    return false;
+    return result;
   }
 
   // Re-read settings only while an outage is actually in progress (rare) -
@@ -176,7 +181,7 @@ bool checkBridgeCamerasAndMaybePulseRelay(const CameraConfig cameras[], CameraSt
   uint32_t safeThresholdMs = settings.outageThresholdMs;
   if (safeThresholdMs > BRIDGE_WATCHDOG_THRESHOLD_MAX_MS) safeThresholdMs = BRIDGE_WATCHDOG_THRESHOLD_MAX_MS;
 
-  if (!outageThresholdReached(g_firstBothOfflineMs, now, safeThresholdMs)) return false;
+  if (!outageThresholdReached(g_firstBothOfflineMs, now, safeThresholdMs)) return result;
 
   logEvent("Camera bridge watchdog: " + settings.cameraA + " / " + settings.cameraB +
            " both offline past threshold - pulsing relay");
@@ -186,7 +191,8 @@ bool checkBridgeCamerasAndMaybePulseRelay(const CameraConfig cameras[], CameraSt
   // power-cycle attempt, without a separate backoff setting - same
   // reasoning as net_watchdog.cpp's own g_firstFailureMs restart.
   g_firstBothOfflineMs = now;
-  return true;
+  result.event = BridgeWatchdogCheckResult::Event::OutageDetected;
+  return result;
 }
 
 BridgeWatchdogStatus getBridgeWatchdogStatus() {

@@ -104,6 +104,28 @@ void test_trPowerLost_and_trPowerRestored(void) {
   TEST_ASSERT_TRUE(trPowerLost(TelegramLang::English) != trPowerRestored(TelegramLang::English));
 }
 
+void test_trInternetRecovered_with_and_without_since_time(void) {
+  String enWithSince = trInternetRecovered(TelegramLang::English, "14:32", 23UL * 60UL * 1000UL);
+  TEST_ASSERT_TRUE(enWithSince.indexOf("14:32") >= 0);
+  TEST_ASSERT_TRUE(enWithSince.indexOf("23m") >= 0);
+  String enNoSince = trInternetRecovered(TelegramLang::English, "", 23UL * 60UL * 1000UL);
+  TEST_ASSERT_TRUE(enNoSince.indexOf(":") < 0 || enNoSince.indexOf("23m") >= 0); // no stray clock time embedded
+  TEST_ASSERT_TRUE(enWithSince != enNoSince);
+  String pt = trInternetRecovered(TelegramLang::Portuguese, "14:32", 23UL * 60UL * 1000UL);
+  TEST_ASSERT_TRUE(pt.indexOf("14:32") >= 0);
+  TEST_ASSERT_TRUE(pt != enWithSince);
+}
+
+void test_trBridgeRecovered_with_and_without_since_time(void) {
+  String enWithSince = trBridgeRecovered(TelegramLang::English, "06:05", 90UL * 60UL * 1000UL);
+  TEST_ASSERT_TRUE(enWithSince.indexOf("06:05") >= 0);
+  String enNoSince = trBridgeRecovered(TelegramLang::English, "", 90UL * 60UL * 1000UL);
+  TEST_ASSERT_TRUE(enNoSince.indexOf("06:05") < 0);
+  TEST_ASSERT_TRUE(enWithSince != enNoSince);
+  String pt = trBridgeRecovered(TelegramLang::Portuguese, "06:05", 90UL * 60UL * 1000UL);
+  TEST_ASSERT_TRUE(pt != enWithSince);
+}
+
 void test_trSdFailure_and_trSdCheckWarning(void) {
   String en = trSdFailure(TelegramLang::English, "mount failed");
   String pt = trSdFailure(TelegramLang::Portuguese, "mount failed");
@@ -396,6 +418,8 @@ int main(int argc, char** argv) {
   RUN_TEST(test_trInternetOutageAlert_and_trBridgeOutageAlert);
   RUN_TEST(test_trPowerStatusLine_on_vs_off);
   RUN_TEST(test_trPowerLost_and_trPowerRestored);
+  RUN_TEST(test_trInternetRecovered_with_and_without_since_time);
+  RUN_TEST(test_trBridgeRecovered_with_and_without_since_time);
   RUN_TEST(test_trSdFailure_and_trSdCheckWarning);
   RUN_TEST(test_trMissingCredentials_both_variants);
   RUN_TEST(test_trTestMessage);

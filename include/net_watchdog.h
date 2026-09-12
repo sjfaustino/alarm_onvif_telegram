@@ -34,15 +34,29 @@ void initNetWatchdog();
 // configured pin - mirrors rtcActive()/sdActive()'s shape.
 bool netWatchdogActive();
 
+// What checkInternetAndMaybePulseRelay found this call. Recovered is
+// reported separately from OutageDetected, at recovery time rather than
+// when the outage begins or crosses the pulse threshold - an alert
+// attempted at either of those moments needs the very WAN connectivity
+// that's confirmed absent right then to actually deliver, so it's likely
+// to fail silently with no retry; by the time connectivity is confirmed
+// restored, sending a report back is reliable. outageStartMs/
+// outageDurationMs let the caller say "was down since HH:MM (for X)" -
+// meaningful only when event == Recovered.
+struct NetWatchdogCheckResult {
+  enum class Event { None, OutageDetected, Recovered } event = Event::None;
+  unsigned long outageStartMs = 0;    // millis() timestamp; valid only if event == Recovered
+  unsigned long outageDurationMs = 0; // valid only if event == Recovered
+};
+
 // Call on NET_WATCHDOG_CHECK_INTERVAL_MS's own cadence (main.cpp's
 // loop()) - does the actual WAN-reachability probe (a short-timeout raw
 // TCP connect to a fixed, well-known IP:port - deliberately not DNS-
 // based, since DNS itself needs working WAN to resolve anything), and
-// runs the outage-threshold/pulse decision. Returns true exactly once per
-// detected outage - right when the relay was just pulsed - so the caller
-// knows to send the Telegram alert; false every other call (no-op if
-// !netWatchdogActive(), still within the threshold, or already recovered).
-bool checkInternetAndMaybePulseRelay();
+// runs the outage-threshold/pulse decision. Event::None every other call
+// (no-op if !netWatchdogActive(), still within the threshold, or nothing
+// to report).
+NetWatchdogCheckResult checkInternetAndMaybePulseRelay();
 
 // Status for the dashboard (Hardware > Internet page) - reflects live
 // state, doesn't re-probe.

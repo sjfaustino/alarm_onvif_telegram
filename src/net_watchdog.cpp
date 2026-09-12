@@ -122,23 +122,28 @@ static void pulseRelay(uint32_t pulseDurationMs) {
   esp_task_wdt_reset();
 }
 
-bool checkInternetAndMaybePulseRelay() {
-  if (!netWatchdogActive()) return false;
+NetWatchdogCheckResult checkInternetAndMaybePulseRelay() {
+  NetWatchdogCheckResult result;
+  if (!netWatchdogActive()) return result;
 
   bool reachable = probeInternetReachable();
   unsigned long now = millis();
 
   if (reachable) {
     if (g_firstFailureMs != 0) {
+      unsigned long startMs = g_firstFailureMs;
       logEvent("Internet watchdog: connectivity recovered");
       g_firstFailureMs = 0;
+      result.event = NetWatchdogCheckResult::Event::Recovered;
+      result.outageStartMs = startMs;
+      result.outageDurationMs = now - startMs;
     }
-    return false;
+    return result;
   }
 
   if (g_firstFailureMs == 0) {
     g_firstFailureMs = now; // outage just started - nothing to do yet
-    return false;
+    return result;
   }
 
   // Re-read settings only while an outage is actually in progress (rare) -
@@ -148,7 +153,7 @@ bool checkInternetAndMaybePulseRelay() {
   uint32_t safeThresholdMs = settings.outageThresholdMs;
   if (safeThresholdMs > NET_WATCHDOG_THRESHOLD_MAX_MS) safeThresholdMs = NET_WATCHDOG_THRESHOLD_MAX_MS;
 
-  if (!outageThresholdReached(g_firstFailureMs, now, safeThresholdMs)) return false;
+  if (!outageThresholdReached(g_firstFailureMs, now, safeThresholdMs)) return result;
 
   logEvent("Internet watchdog: outage threshold reached - pulsing relay");
   pulseRelay(settings.pulseDurationMs);
@@ -157,7 +162,8 @@ bool checkInternetAndMaybePulseRelay() {
   // power-cycle attempt (the router needs real time to reboot and
   // reacquire 4G), without a separate backoff setting.
   g_firstFailureMs = now;
-  return true;
+  result.event = NetWatchdogCheckResult::Event::OutageDetected;
+  return result;
 }
 
 NetWatchdogStatus getNetWatchdogStatus() {

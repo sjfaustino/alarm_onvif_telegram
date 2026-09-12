@@ -175,6 +175,36 @@ String trPowerRestored(TelegramLang lang) {
   return "\xE2\x9C\x85 Mains power restored.";
 }
 
+String trInternetRecovered(TelegramLang lang, const String& sinceTime, unsigned long outageDurationMs) {
+  bool haveSince = sinceTime.length() > 0;
+  if (lang == TelegramLang::Portuguese) {
+    return haveSince
+        ? "\xE2\x9C\x85 Liga\xC3\xA7\xC3\xA3o \xC3\xA0 internet restabelecida - esteve em falha desde as " +
+          sinceTime + " (" + formatUptime(outageDurationMs) + ")."
+        : "\xE2\x9C\x85 Liga\xC3\xA7\xC3\xA3o \xC3\xA0 internet restabelecida - esteve em falha durante " +
+          formatUptime(outageDurationMs) + ".";
+  }
+  return haveSince
+      ? "\xE2\x9C\x85 Internet connection restored - was down since " + sinceTime + " (" +
+        formatUptime(outageDurationMs) + ")."
+      : "\xE2\x9C\x85 Internet connection restored - was down for " + formatUptime(outageDurationMs) + ".";
+}
+
+String trBridgeRecovered(TelegramLang lang, const String& sinceTime, unsigned long outageDurationMs) {
+  bool haveSince = sinceTime.length() > 0;
+  if (lang == TelegramLang::Portuguese) {
+    return haveSince
+        ? "\xE2\x9C\x85 Ponte de c\xC3\xA2maras restabelecida - esteve em falha desde as " + sinceTime +
+          " (" + formatUptime(outageDurationMs) + ")."
+        : "\xE2\x9C\x85 Ponte de c\xC3\xA2maras restabelecida - esteve em falha durante " +
+          formatUptime(outageDurationMs) + ".";
+  }
+  return haveSince
+      ? "\xE2\x9C\x85 Camera bridge restored - was down since " + sinceTime + " (" +
+        formatUptime(outageDurationMs) + ")."
+      : "\xE2\x9C\x85 Camera bridge restored - was down for " + formatUptime(outageDurationMs) + ".";
+}
+
 String trSdFailure(TelegramLang lang, const String& reason) {
   if (lang == TelegramLang::Portuguese) {
     return "\xE2\x9A\xA0\xEF\xB8\x8F Falha no armazenamento do cart\xC3\xA3o SD (" + reason + ") e foi "

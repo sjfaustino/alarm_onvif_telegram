@@ -859,8 +859,22 @@ void loop() {
   // above checkNvsUsage's own call site.
   if (WiFi.status() == WL_CONNECTED && millis() - lastNetWatchdogCheckMs >= NET_WATCHDOG_CHECK_INTERVAL_MS) {
     lastNetWatchdogCheckMs = millis();
-    if (checkInternetAndMaybePulseRelay()) {
+    NetWatchdogCheckResult netResult = checkInternetAndMaybePulseRelay();
+    if (netResult.event == NetWatchdogCheckResult::Event::OutageDetected) {
+      // Best-effort only - WAN connectivity is confirmed absent right
+      // now, the exact thing this send itself needs, so it's likely to
+      // fail silently. That's what the Recovered case below is for.
       sendTelegramMessage([](TelegramLang lang) { return trInternetOutageAlert(lang); });
+    } else if (netResult.event == NetWatchdogCheckResult::Event::Recovered) {
+      // Sent once WAN is confirmed back, so - unlike the OutageDetected
+      // alert above - this one actually has a working path to deliver
+      // over. formatLocalClockTime tolerates a past timestamp fine (see
+      // its own comment) even though it reads as future-tense ("due").
+      String sinceTime = formatLocalClockTime(netResult.outageStartMs);
+      unsigned long durationMs = netResult.outageDurationMs;
+      sendTelegramMessage([sinceTime, durationMs](TelegramLang lang) {
+        return trInternetRecovered(lang, sinceTime, durationMs);
+      });
     }
     esp_task_wdt_reset();
   }
@@ -873,8 +887,16 @@ void loop() {
   // offline check itself doesn't need WAN - sendTelegramMessage does.
   if (WiFi.status() == WL_CONNECTED && millis() - lastBridgeWatchdogCheckMs >= BRIDGE_WATCHDOG_CHECK_INTERVAL_MS) {
     lastBridgeWatchdogCheckMs = millis();
-    if (checkBridgeCamerasAndMaybePulseRelay(g_cameras.data(), g_cameraStates.data(), g_cameras.size())) {
+    BridgeWatchdogCheckResult bridgeResult =
+        checkBridgeCamerasAndMaybePulseRelay(g_cameras.data(), g_cameraStates.data(), g_cameras.size());
+    if (bridgeResult.event == BridgeWatchdogCheckResult::Event::OutageDetected) {
       sendTelegramMessage([](TelegramLang lang) { return trBridgeOutageAlert(lang); });
+    } else if (bridgeResult.event == BridgeWatchdogCheckResult::Event::Recovered) {
+      String sinceTime = formatLocalClockTime(bridgeResult.outageStartMs);
+      unsigned long durationMs = bridgeResult.outageDurationMs;
+      sendTelegramMessage([sinceTime, durationMs](TelegramLang lang) {
+        return trBridgeRecovered(lang, sinceTime, durationMs);
+      });
     }
     esp_task_wdt_reset();
   }
