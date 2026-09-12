@@ -67,7 +67,7 @@ static void printCameraList() {
   for (size_t i = 0; i < g_cameras.size(); i++) {
     const CameraConfig& cfg = g_cameras[i];
     Serial.printf("  [%u] %-20s %-24s %s\n",
-                  (unsigned)i, cfg.name.c_str(), extractHost(cfg.deviceServiceUrl).c_str(),
+                  (unsigned)(i + 1), cfg.name.c_str(), extractHost(cfg.deviceServiceUrl).c_str(),
                   cfg.enabled ? "enabled" : "disabled");
   }
   Serial.println("--------------------------\n");
@@ -81,7 +81,7 @@ static String buildCameraListMessage(TelegramLang lang) {
     const CameraConfig& cfg = g_cameras[i];
     char line[64];
     snprintf(line, sizeof(line), "  [%u] %-20s %s\n",
-              (unsigned)i, cfg.name.c_str(), cfg.enabled ? (pt ? "LIGADA" : "ON") : (pt ? "DESLIGADA" : "OFF"));
+              (unsigned)(i + 1), cfg.name.c_str(), cfg.enabled ? (pt ? "LIGADA" : "ON") : (pt ? "DESLIGADA" : "OFF"));
     s += line;
   }
   s += "--------------------------";
