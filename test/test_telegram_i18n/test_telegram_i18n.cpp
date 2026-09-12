@@ -331,6 +331,39 @@ void test_trNoEnabledCameras(void) {
   TEST_ASSERT_TRUE(trNoEnabledCameras(TelegramLang::English) != trNoEnabledCameras(TelegramLang::Portuguese));
 }
 
+void test_trLanguagePickerPrompt(void) {
+  TEST_ASSERT_TRUE(trLanguagePickerPrompt(TelegramLang::English) != trLanguagePickerPrompt(TelegramLang::Portuguese));
+}
+
+// trLanguageChanged is phrased in the NEWLY selected language, not the
+// sender's old one - the parameter IS the language to confirm in.
+void test_trLanguageChanged_uses_the_new_language(void) {
+  String toEnglish = trLanguageChanged(TelegramLang::English);
+  TEST_ASSERT_TRUE(toEnglish.indexOf("English") >= 0);
+  String toPortuguese = trLanguageChanged(TelegramLang::Portuguese);
+  TEST_ASSERT_TRUE(toPortuguese.indexOf("portugu") >= 0);
+  TEST_ASSERT_TRUE(toEnglish != toPortuguese);
+}
+
+void test_trUnknownLanguageArg_contains_the_bad_argument(void) {
+  String en = trUnknownLanguageArg(TelegramLang::English, "xx");
+  String pt = trUnknownLanguageArg(TelegramLang::Portuguese, "xx");
+  TEST_ASSERT_TRUE(en.indexOf("xx") >= 0);
+  TEST_ASSERT_TRUE(pt.indexOf("xx") >= 0);
+  TEST_ASSERT_TRUE(en != pt);
+}
+
+void test_trLanguageChangeFailed(void) {
+  TEST_ASSERT_TRUE(trLanguageChangeFailed(TelegramLang::English) != trLanguageChangeFailed(TelegramLang::Portuguese));
+}
+
+void test_trHelpText_mentions_lang_command(void) {
+  String en = trHelpText(TelegramLang::English, 50, 720, true, true, true);
+  TEST_ASSERT_TRUE(en.indexOf("/lang") >= 0);
+  String pt = trHelpText(TelegramLang::Portuguese, 50, 720, true, true, true);
+  TEST_ASSERT_TRUE(pt.indexOf("/lang") >= 0);
+}
+
 int main(int argc, char** argv) {
   UNITY_BEGIN();
   RUN_TEST(test_trMotionCaption_pet_vs_motion_and_language);
@@ -375,5 +408,10 @@ int main(int argc, char** argv) {
   RUN_TEST(test_trAlertsState_and_trAllCamerasSubject);
   RUN_TEST(test_trTimerExpiredSuffix);
   RUN_TEST(test_trNoEnabledCameras);
+  RUN_TEST(test_trLanguagePickerPrompt);
+  RUN_TEST(test_trLanguageChanged_uses_the_new_language);
+  RUN_TEST(test_trUnknownLanguageArg_contains_the_bad_argument);
+  RUN_TEST(test_trLanguageChangeFailed);
+  RUN_TEST(test_trHelpText_mentions_lang_command);
   return UNITY_END();
 }

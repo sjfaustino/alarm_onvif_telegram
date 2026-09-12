@@ -339,6 +339,7 @@ String trHelpText(TelegramLang lang, uint16_t eventLogCapacity, uint16_t maxDura
         "/log [N] - as N entradas mais recentes do log de atividades (padr\xC3\xA3o 10, m\xC3\xA1x " +
         String(eventLogCapacity) + ")\n"
         "/reset - reinicia a placa imediatamente\n"
+        "/lang [en|pt] - muda o seu idioma (sem argumento mostra um menu)\n"
         "/help - esta mensagem\n\n"
         "<c\xC3\xA2mara> corresponde por nome ou prefixo; \"all\" aplica a todas as c\xC3\xA2maras "
         "habilitadas.\n"
@@ -361,6 +362,7 @@ String trHelpText(TelegramLang lang, uint16_t eventLogCapacity, uint16_t maxDura
       "/log [N] - the N most recent Activity log entries (default 10, max " + String(eventLogCapacity) +
       ")\n"
       "/reset - reboot the board immediately\n"
+      "/lang [en|pt] - change your language (no argument shows a picker)\n"
       "/help - this message\n\n"
       "<camera> matches by name or prefix; \"all\" applies to every enabled camera.\n"
       "[duration] is optional: a number of minutes (max " + String(maxDurationMinutes) + "), or a 24h "
@@ -531,4 +533,26 @@ String trAllCamerasSubject(TelegramLang lang, size_t count) {
 String trNoEnabledCameras(TelegramLang lang) {
   if (lang == TelegramLang::Portuguese) return "Nenhuma c\xC3\xA2mara ativada para aplicar isto.";
   return "No enabled cameras to apply this to.";
+}
+
+String trLanguagePickerPrompt(TelegramLang lang) {
+  if (lang == TelegramLang::Portuguese) return "Escolha o seu idioma:";
+  return "Choose your language:";
+}
+
+String trLanguageChanged(TelegramLang newLang) {
+  if (newLang == TelegramLang::Portuguese) return "\xE2\x9C\x85 Idioma definido para portugu\xC3\xAAs.";
+  return "\xE2\x9C\x85 Language set to English.";
+}
+
+String trUnknownLanguageArg(TelegramLang lang, const String& arg) {
+  if (lang == TelegramLang::Portuguese) {
+    return "Idioma desconhecido \"" + arg + "\" - use /lang para ver as op\xC3\xA7\xC3\xB5""es.";
+  }
+  return "Unknown language \"" + arg + "\" - use /lang to see the options.";
+}
+
+String trLanguageChangeFailed(TelegramLang lang) {
+  if (lang == TelegramLang::Portuguese) return "Falha ao guardar o idioma - tente novamente.";
+  return "Failed to save your language - try again.";
 }

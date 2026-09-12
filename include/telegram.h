@@ -155,10 +155,16 @@ String setAllCamerasAlertState(const CameraConfig cameras[], CameraState states[
 //   /health                  - free heap/PSRAM, NVS usage, WiFi signal, SD storage status
 //   /log [N]                 - the N most recent Activity log entries (default 10)
 //   /reset                   - reboot the board immediately
+//   /lang [en|pt]            - change the sender's own TelegramUser::language;
+//                              no argument shows an "English"/"Português"
+//                              inline-keyboard picker instead (same
+//                              tap-handling path as the on/off/snap picker,
+//                              handleTelegramCallbackQuery, telegram.cpp)
 //   /help                    - this command list, plus the sender's own permissions
 // /on, /off, /status, /uptime, /health, /log require canCommand; /snap requires
 // canSnap; /reset requires canReset (off by default, even for the seeded
-// Admin user - see TelegramUser::canReset); /help requires none of the above.
+// Admin user - see TelegramUser::canReset); /help and /lang require none of
+// the above - a personal display-language preference isn't camera control.
 void pollTelegramCommands(const CameraConfig cameras[], CameraState states[], size_t numCameras);
 
 // Flips alertsEnabled back for any camera whose timed /on or /off (see

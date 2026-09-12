@@ -133,3 +133,18 @@ String trTimerExpiredSuffix(TelegramLang lang);
 // all, /off all, and dashboard Mute-all/Unmute-all paths.
 String trAllCamerasSubject(TelegramLang lang, size_t count);
 String trNoEnabledCameras(TelegramLang lang);
+
+// ---- /lang command (self-service language switch) ----
+
+// Shown above the "English"/"Português" inline keyboard for a bare /lang.
+String trLanguagePickerPrompt(TelegramLang lang);
+// Confirmation after a language change - phrased in the NEWLY selected
+// language (newLang), not whatever the user was on before switching: the
+// whole point of switching is to see the very next message in it.
+String trLanguageChanged(TelegramLang newLang);
+// "/lang xyz" where xyz isn't a known language code - phrased in the
+// sender's CURRENT (unchanged) language.
+String trUnknownLanguageArg(TelegramLang lang, const String& arg);
+// NVS write failure persisting the change - phrased in the sender's
+// CURRENT (unchanged, since the save failed) language.
+String trLanguageChangeFailed(TelegramLang lang);

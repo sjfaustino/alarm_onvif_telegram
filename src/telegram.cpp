@@ -1289,6 +1289,27 @@ static AlertTimer resolveAlertTimer(const String& durationText, bool turnOn, Tel
   return result;
 }
 
+// Persists a user's own /lang switch (text command or the inline-keyboard
+// picker tap both funnel through here) and replies with confirmation IN
+// THE NEW language - the whole point of switching is to see the very next
+// message in it, not the one that's about to become stale. `sender` is a
+// const& into loadTelegramUsers()'s own temporary from this poll
+// (pollTelegramCommands), so this never mutates it in place - a fresh
+// TelegramUser copy is written back to NVS by name (the unique key),
+// which the NEXT poll's loadTelegramUsers() picks up.
+static void applyLanguageChange(const TelegramUser& sender, TelegramLang newLang) {
+  TelegramUser updated = sender;
+  updated.language = newLang;
+  if (!updateTelegramUser(sender.name, updated)) {
+    Serial.printf("[Telegram] Failed to persist language change for user \"%s\".\n", sender.name.c_str());
+    sendTelegramMessageTo(sender.chatId, trLanguageChangeFailed(sender.language));
+    return;
+  }
+  Serial.printf("[Telegram] User \"%s\" changed Telegram language.\n", sender.name.c_str());
+  logEvent(sender.name + ": changed Telegram language");
+  sendTelegramMessageTo(sender.chatId, trLanguageChanged(newLang));
+}
+
 // Sets one camera's alerts on/off, persists it (NVS), logs it, and
 // replies with confirmation - the single-camera state-mutation tail
 // shared by the text-command path (/on|/off <camera> [duration], see
@@ -1606,6 +1627,27 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
       return;
     }
 
+    case TelegramCommand::Lang: {
+      String argLower = parsed.langArgText;
+      argLower.toLowerCase();
+      if (argLower.length() == 0) {
+        std::vector<std::pair<String, String>> buttons = {
+          {"English", "lang|en"},
+          {"Portugu\xC3\xAAs", "lang|pt"},
+        };
+        sendTelegramKeyboardTo(sender.chatId, trLanguagePickerPrompt(sender.language), buttons);
+        return;
+      }
+      if (argLower == "en") {
+        applyLanguageChange(sender, TelegramLang::English);
+      } else if (argLower == "pt") {
+        applyLanguageChange(sender, TelegramLang::Portuguese);
+      } else {
+        sendTelegramMessageTo(sender.chatId, trUnknownLanguageArg(sender.language, parsed.langArgText));
+      }
+      return;
+    }
+
     case TelegramCommand::Unknown:
       Serial.println("[Telegram] Unrecognized command - ignored.");
       return;
@@ -1692,6 +1734,28 @@ static void handleTelegramCallbackQuery(const TelegramUser& sender, const Telegr
   int sep = upd.callbackData.indexOf('|');
   String verb = sep >= 0 ? upd.callbackData.substring(0, sep) : upd.callbackData;
   String target = sep >= 0 ? upd.callbackData.substring(sep + 1) : "";
+
+  // Handled separately from the on/off/snap camera-verb dispatch below -
+  // this isn't a camera command at all (no cameras[]/states[] involved),
+  // and needs no canCommand/canSnap check: a user's own display language
+  // is available unconditionally, same as /lang's own text-command
+  // counterpart (requiredPermissionForCommand(Lang) == Unknown).
+  if (verb == "lang") {
+    String targetLower = target;
+    targetLower.toLowerCase();
+    if (targetLower == "en") {
+      applyLanguageChange(sender, TelegramLang::English);
+    } else if (targetLower == "pt") {
+      applyLanguageChange(sender, TelegramLang::Portuguese);
+    } else {
+      Serial.printf("[Telegram] Unrecognized /lang callback target \"%s\" from user \"%s\".\n",
+                    target.c_str(), sender.name.c_str());
+      answerTelegramCallback(upd.callbackQueryId, trCallbackUnrecognized(sender.language));
+      return;
+    }
+    answerTelegramCallback(upd.callbackQueryId, "");
+    return;
+  }
 
   TelegramCommand command;
   if (verb == "on") command = TelegramCommand::On;

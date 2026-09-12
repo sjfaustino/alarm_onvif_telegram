@@ -109,7 +109,11 @@ TelegramCommandPermission requiredPermissionForCommand(TelegramCommand command) 
     case TelegramCommand::Snap: return TelegramCommandPermission::Snap;
     case TelegramCommand::Reset: return TelegramCommandPermission::Reset;
     case TelegramCommand::Unknown:
-    case TelegramCommand::Help: return TelegramCommandPermission::Unknown;
+    case TelegramCommand::Help:
+    // A user's own display language is a personal preference, not camera
+    // control - available to any configured user regardless of
+    // canCommand/canSnap/canReset, same as /help.
+    case TelegramCommand::Lang: return TelegramCommandPermission::Unknown;
   }
   return TelegramCommandPermission::Unknown; // unreachable if every enumerator above is handled
 }
@@ -168,12 +172,18 @@ ParsedTelegramCommand parseTelegramCommand(const String& text) {
   } else if (lower.startsWith("/snap ")) {
     result.command = TelegramCommand::Snap;
     result.cameraName = text.substring(6);
+  } else if (lower == "/lang") {
+    result.command = TelegramCommand::Lang; // langArgText stays "" - picker, see handleTelegramCommand
+  } else if (lower.startsWith("/lang ")) {
+    result.command = TelegramCommand::Lang;
+    result.langArgText = text.substring(6);
   } else {
     return result; // Unknown, requiredPermission stays Unknown too
   }
 
   result.cameraName.trim();
   result.logCountText.trim();
+  result.langArgText.trim();
   result.requiredPermission = requiredPermissionForCommand(result.command);
   return result;
 }
@@ -240,6 +250,7 @@ String commandDisplayName(TelegramCommand command) {
     case TelegramCommand::Help:   return "/help";
     case TelegramCommand::Health: return "/health";
     case TelegramCommand::Log:    return "/log";
+    case TelegramCommand::Lang:   return "/lang";
     case TelegramCommand::Unknown: return "";
   }
   return ""; // unreachable if every enumerator above is handled
