@@ -991,18 +991,31 @@ static const uint16_t  kWsDiscoveryPort = 3702;
 
 // Total time spent listening for ProbeMatch replies after sending the
 // probe(s). Long enough for a slower/busier camera to answer (WS-
-// Discovery has no guaranteed response time), short enough that the
-// button doesn't feel broken - matches the order of magnitude other
-// ONVIF discovery tools default to.
-static const unsigned long kDiscoveryListenMs = 4000;
+// Discovery has no guaranteed response time) - widened from an initial
+// 4000ms after a real fleet found only 2 of several configured cameras
+// with ONVIF Device Manager (a longer-running, wired-PC tool) finding all
+// of them: every already-added camera here already has an active ONVIF
+// PullPoint subscription held open by this same board, and several cheap
+// embedded ONVIF stacks (the XM530-derived kind this project targets)
+// are known to go quiet on WS-Discovery while "busy" serving one - not
+// something a longer window can fix on its own, but a camera that's just
+// slow to answer (rather than deliberately silent) now gets a real chance
+// to. The auto-refresh poll (webserver.cpp's renderShell) re-checks every
+// 2s regardless of how long this is, so the button still doesn't feel
+// broken even at this length.
+static const unsigned long kDiscoveryListenMs = 12000;
 
 // UDP has no delivery guarantee, and a multicast probe is exactly the kind
 // of packet a busy Wi-Fi segment can drop - sending it more than once
 // (spaced out across the listen window, not back-to-back) catches a
 // camera that missed the first one without meaningfully lengthening the
 // wait, since replies from the first send are still being collected while
-// later sends go out.
-static const int kDiscoveryProbeCount = 3;
+// later sends go out. Scaled up alongside kDiscoveryListenMs so the
+// re-probe spacing (still 1/sec - see the send loop below) stays roughly
+// the same fraction of the total window, rather than front-loading every
+// probe into the first few seconds and leaving the rest of a much longer
+// window with no further retries.
+static const int kDiscoveryProbeCount = 8;
 
 static BackgroundJob<std::vector<DiscoveredCamera>> g_discoveryJob;
 
