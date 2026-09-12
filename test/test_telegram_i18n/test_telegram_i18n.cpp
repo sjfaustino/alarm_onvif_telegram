@@ -263,6 +263,11 @@ void test_trNoCamerasToChoose_and_trCameraPickerPrompt(void) {
                             trCameraPickerPrompt(TelegramLang::Portuguese, "/on"), "/on");
 }
 
+void test_trAllButtonLabel(void) {
+  TEST_ASSERT_TRUE(trAllButtonLabel(TelegramLang::English) != trAllButtonLabel(TelegramLang::Portuguese));
+  TEST_ASSERT_EQUAL_STRING("All", trAllButtonLabel(TelegramLang::English).c_str());
+}
+
 void test_trCallbackDataTooLong(void) {
   assertDiffersAndContains(trCallbackDataTooLong(TelegramLang::English, 2, "/on"),
                             trCallbackDataTooLong(TelegramLang::Portuguese, 2, "/on"), "/on");
@@ -360,6 +365,7 @@ int main(int argc, char** argv) {
   RUN_TEST(test_trElapsedSince_just_now_and_ago);
   RUN_TEST(test_trAmbiguousCamera_and_trUnknownCamera);
   RUN_TEST(test_trNoCamerasToChoose_and_trCameraPickerPrompt);
+  RUN_TEST(test_trAllButtonLabel);
   RUN_TEST(test_trCallbackDataTooLong);
   RUN_TEST(test_trCallback_toast_texts);
   RUN_TEST(test_trCameraNoLongerAvailable);

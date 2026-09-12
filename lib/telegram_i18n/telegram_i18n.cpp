@@ -445,6 +445,11 @@ String trCameraPickerPrompt(TelegramLang lang, const String& commandDisplayName)
   return "Choose a camera for " + commandDisplayName + ":";
 }
 
+String trAllButtonLabel(TelegramLang lang) {
+  if (lang == TelegramLang::Portuguese) return "Todas";
+  return "All";
+}
+
 String trCallbackDataTooLong(TelegramLang lang, size_t skipped, const String& commandDisplayName) {
   if (lang == TelegramLang::Portuguese) {
     return String((unsigned)skipped) + " nome(s) de c\xC3\xA2mara eram demasiado longos para exibir como "

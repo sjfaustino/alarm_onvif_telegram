@@ -103,6 +103,13 @@ String trAmbiguousCamera(TelegramLang lang, const String& name, const String& ma
 String trUnknownCamera(TelegramLang lang, const String& name);
 String trNoCamerasToChoose(TelegramLang lang);
 String trCameraPickerPrompt(TelegramLang lang, const String& commandDisplayName);
+// The picker keyboard's own "apply to every camera" button label -
+// distinct from trAllCamerasSubject (the "All N camera(s) alerts: ON"
+// reply text after tapping it/using /on all) and from the literal "all"
+// callback_data token (sendCameraPickerKeyboard, telegram.cpp), which is
+// a protocol identifier matched case-insensitively in
+// handleTelegramCallbackQuery and must NOT be translated.
+String trAllButtonLabel(TelegramLang lang);
 String trCallbackDataTooLong(TelegramLang lang, size_t skipped, const String& commandDisplayName);
 String trCallbackUnrecognized(TelegramLang lang);
 String trCallbackNotAuthorized(TelegramLang lang);

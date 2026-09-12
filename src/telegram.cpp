@@ -1411,7 +1411,10 @@ static void sendCameraPickerKeyboard(const TelegramUser& sender, TelegramCommand
     sendTelegramMessageTo(sender.chatId, trNoCamerasToChoose(sender.language));
     return;
   }
-  buttons.push_back({"All", verb + "|all"});
+  // Label is translated; the "all" callback_data token itself must not be -
+  // it's a protocol identifier handleTelegramCallbackQuery matches
+  // case-insensitively, not display text.
+  buttons.push_back({trAllButtonLabel(sender.language), verb + "|all"});
 
   size_t skipped = 0;
   sendTelegramKeyboardTo(sender.chatId, trCameraPickerPrompt(sender.language, commandDisplayName(command)),
