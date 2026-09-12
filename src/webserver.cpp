@@ -186,6 +186,25 @@ static bool tabHasActiveBackgroundJob(Tab active) {
   }
 }
 
+// The auto-refresh poll below must land on this tab's own plain GET
+// listing page - NOT location.reload(), which repeats whatever request
+// actually produced the current page. Several of these background jobs
+// are STARTED by a POST (e.g. "/cameras/discover"), and location.reload()
+// on a page that was reached via POST silently resubmits that same POST
+// in most browsers, with no confirmation prompt - which restarted the
+// search from scratch every single poll, forever, for as long as the tab
+// stayed open. Only reachable for the 4 tabs tabHasActiveBackgroundJob
+// above returns true for.
+static const char* tabListingUrl(Tab active) {
+  switch (active) {
+    case Tab::Cameras: return "/cameras";
+    case Tab::Users:   return "/users";
+    case Tab::Network: return "/network";
+    case Tab::Storage: return "/storage";
+    default:           return "/cameras"; // unreachable - see this function's own comment
+  }
+}
+
 static String renderShell(Tab active, const String& banner, const String& contentHtml) {
   String html;
   // Server-authoritative theme (a persisted config, not the browser's own
@@ -437,11 +456,14 @@ static String renderShell(Tab active, const String& banner, const String& conten
   // (every tab this applies to - Cameras, Users, Network, Storage - has
   // one) the instant 2s elapses, even mid-keystroke. This skips the reload
   // while any input/textarea/select has focus, checking again next tick
-  // instead of losing the poll entirely.
+  // instead of losing the poll entirely. Navigates to the tab's own plain
+  // GET listing URL, NOT location.reload() - see tabListingUrl's own
+  // comment for why that silently resubmitted whichever POST got us here.
   if (autoRefresh) {
     html += "<script>setInterval(function(){"
             "var t=document.activeElement&&document.activeElement.tagName;"
-            "if(t!=='INPUT'&&t!=='TEXTAREA'&&t!=='SELECT')location.reload();"
+            "if(t!=='INPUT'&&t!=='TEXTAREA'&&t!=='SELECT')location.href='" + String(tabListingUrl(active)) +
+            "';"
             "},2000);</script>";
   }
   html += "</main></body></html>";
