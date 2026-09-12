@@ -602,6 +602,26 @@ static unsigned int safeSnapshotBurstCount(const CameraConfig& cfg) {
   return shots;
 }
 
+// A camera-alert recipient carries only what triggerMotionAlert/
+// triggerTimelapseCapture/triggerTamperAlert/triggerSignalLossAlert/
+// checkPendingMotionDigest actually need after telegramUserWantsCamera has
+// already decided this user is included: where to send it, and in what
+// language. Deliberately NOT the full TelegramUser - that struct also
+// carries a std::vector<String> cameraNames (its own heap allocation for
+// any user with an explicit camera list) plus five more fields none of
+// these alert paths touch, and copying all of that into a fresh vector on
+// every single motion/tamper/timelapse/digest event, for every matching
+// recipient, is exactly the kind of unnecessary heap churn this project
+// is otherwise careful about (see checkHeapHealth/HEAP_LOW_WARN_BYTES,
+// sendTelegramPhotoBuffered's own "buffered once, not per-recipient"
+// reasoning). handleTelegramCommand/handleTelegramCallbackQuery and
+// friends still use the full TelegramUser - they're single-recipient, and
+// already need every field (permissions, name, ...) for that one reply.
+struct AlertRecipient {
+  String chatId;
+  TelegramLang language;
+};
+
 void triggerMotionAlert(const CameraConfig& cfg, CameraState& st, bool isPetEvent) {
   // alertsEnabled is written by loop()'s task (pollTelegramCommands'
   // /on//off), this function runs on the camera's own task - cross-task
@@ -669,9 +689,9 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st, bool isPetEven
     return;
   }
 
-  std::vector<TelegramUser> recipients;
+  std::vector<AlertRecipient> recipients;
   for (auto& u : loadTelegramUsers()) {
-    if (telegramUserWantsCamera(u, cfg.name)) recipients.push_back(u);
+    if (telegramUserWantsCamera(u, cfg.name)) recipients.push_back({u.chatId, u.language});
   }
   if (recipients.empty()) {
     Serial.printf("[%s] No Telegram user is subscribed to this camera - skipping send.\n", cfg.name.c_str());
@@ -803,9 +823,9 @@ void triggerTimelapseCapture(const CameraConfig& cfg, CameraState& st) {
     bool alertsEnabled;
     { CameraStateLock lock(st); alertsEnabled = st.alertsEnabled; }
     if (alertsEnabled) {
-      std::vector<TelegramUser> recipients;
+      std::vector<AlertRecipient> recipients;
       for (auto& u : loadTelegramUsers()) {
-        if (telegramUserWantsCamera(u, cfg.name)) recipients.push_back(u);
+        if (telegramUserWantsCamera(u, cfg.name)) recipients.push_back({u.chatId, u.language});
       }
       // Deliberately distinct wording from a motion-alert caption (no
       // warning glyph, "scheduled" spelled out) - a recipient should never
@@ -833,16 +853,16 @@ void triggerTimelapseCapture(const CameraConfig& cfg, CameraState& st) {
 // tamper/signal-loss don't share (tamper degrades to text-only,
 // signal-loss is always text-only) - not unified into one helper to avoid
 // forcing that extra gate onto events that don't need it.
-static std::vector<TelegramUser> beginCameraAlert(const CameraConfig& cfg, CameraState& st, uint32_t nowMs) {
+static std::vector<AlertRecipient> beginCameraAlert(const CameraConfig& cfg, CameraState& st, uint32_t nowMs) {
   bool alertsEnabled;
   { CameraStateLock lock(st); alertsEnabled = st.alertsEnabled; }
   if (!alertsEnabled) return {};
 
   if (st.hasAlerted && nowMs - st.lastAlert < safeAlertCooldownMs(cfg)) return {};
 
-  std::vector<TelegramUser> recipients;
+  std::vector<AlertRecipient> recipients;
   for (auto& u : loadTelegramUsers()) {
-    if (telegramUserWantsCamera(u, cfg.name)) recipients.push_back(u);
+    if (telegramUserWantsCamera(u, cfg.name)) recipients.push_back({u.chatId, u.language});
   }
   if (recipients.empty()) return {};
 
@@ -851,7 +871,7 @@ static std::vector<TelegramUser> beginCameraAlert(const CameraConfig& cfg, Camer
 }
 
 void triggerTamperAlert(const CameraConfig& cfg, CameraState& st) {
-  std::vector<TelegramUser> recipients = beginCameraAlert(cfg, st, millis());
+  std::vector<AlertRecipient> recipients = beginCameraAlert(cfg, st, millis());
   if (recipients.empty()) return;
 
   logEvent(cfg.name + ": TAMPER detected");
@@ -879,7 +899,7 @@ void triggerTamperAlert(const CameraConfig& cfg, CameraState& st) {
 }
 
 void triggerSignalLossAlert(const CameraConfig& cfg, CameraState& st) {
-  std::vector<TelegramUser> recipients = beginCameraAlert(cfg, st, millis());
+  std::vector<AlertRecipient> recipients = beginCameraAlert(cfg, st, millis());
   if (recipients.empty()) return;
 
   logEvent(cfg.name + ": video SIGNAL LOSS");
@@ -1010,9 +1030,9 @@ void checkPendingMotionDigest(const CameraConfig& cfg, CameraState& st) {
   { CameraStateLock lock(st); alertsEnabled = st.alertsEnabled; }
   if (!alertsEnabled) return; // muted since the snapshot went out - stay quiet
 
-  std::vector<TelegramUser> recipients;
+  std::vector<AlertRecipient> recipients;
   for (auto& u : loadTelegramUsers()) {
-    if (telegramUserWantsCamera(u, cfg.name)) recipients.push_back(u);
+    if (telegramUserWantsCamera(u, cfg.name)) recipients.push_back({u.chatId, u.language});
   }
   if (recipients.empty()) return;
 
