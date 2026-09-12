@@ -28,6 +28,7 @@
 #include "net_watchdog.h"
 #include "bridge_watchdog.h"
 #include "heap_health.h"
+#include "telegram_i18n.h"
 
 static std::vector<CameraConfig> g_cameras;
 static std::vector<CameraState> g_cameraStates;
@@ -73,13 +74,14 @@ static void printCameraList() {
 }
 
 // Same as printCameraList() but for Telegram: no IP, ON/OFF instead of enabled/disabled.
-static String buildCameraListMessage() {
-  String s = "--- Configured cameras ---\n";
+static String buildCameraListMessage(TelegramLang lang) {
+  bool pt = lang == TelegramLang::Portuguese;
+  String s = trConfiguredCamerasHeader(lang) + "\n";
   for (size_t i = 0; i < g_cameras.size(); i++) {
     const CameraConfig& cfg = g_cameras[i];
     char line[64];
     snprintf(line, sizeof(line), "  [%u] %-20s %s\n",
-              (unsigned)i, cfg.name.c_str(), cfg.enabled ? "ON" : "OFF");
+              (unsigned)i, cfg.name.c_str(), cfg.enabled ? (pt ? "LIGADA" : "ON") : (pt ? "DESLIGADA" : "OFF"));
     s += line;
   }
   s += "--------------------------";
@@ -174,6 +176,30 @@ static String describeResetReason() {
     case ESP_RST_SDIO:      return "SDIO";
     default:                return "unknown";
   }
+}
+
+// Portuguese counterpart of describeResetReason() above, used only for the
+// boot Telegram message (Serial always stays English - see that function's
+// own comment on why this table isn't in lib/telegram_i18n).
+static String describeResetReasonPt() {
+  switch (esp_reset_reason()) {
+    case ESP_RST_POWERON:   return "liga\xC3\xA7\xC3\xA3o";
+    case ESP_RST_EXT:       return "pino de reset externo";
+    case ESP_RST_SW:        return "software (comando /reset, uma atualiza\xC3\xA7\xC3\xA3o de firmware, ou um "
+                                    "reinicio pela p\xC3\xA1gina Manuten\xC3\xA7\xC3\xA3o)";
+    case ESP_RST_PANIC:     return "PANIC (falha)";
+    case ESP_RST_INT_WDT:   return "watchdog de interrup\xC3\xA7\xC3\xA3o";
+    case ESP_RST_TASK_WDT:  return "watchdog de tarefa (uma tarefa travou - veja initWatchdog())";
+    case ESP_RST_WDT:       return "outro watchdog";
+    case ESP_RST_DEEPSLEEP: return "despertar de deep sleep (inesperado - este projeto nunca dorme)";
+    case ESP_RST_BROWNOUT:  return "brownout (queda de energia/alimenta\xC3\xA7\xC3\xA3o insuficiente)";
+    case ESP_RST_SDIO:      return "SDIO";
+    default:                return "desconhecido";
+  }
+}
+
+static String describeResetReasonLocalized(TelegramLang lang) {
+  return lang == TelegramLang::Portuguese ? describeResetReasonPt() : describeResetReason();
 }
 
 // Applies the stored static IP config, if enabled - must run after
@@ -329,61 +355,78 @@ static void setupTime() {
 
 // Periodic "still alive" ping - a missing heartbeat (or an unexpected boot
 // message between expected ones) is the signal something's wrong.
+// One camera's already-gathered raw state, snapshotted once (under lock)
+// before composing any text - see sendHeartbeat's own comment for why.
+struct HeartbeatCameraSnapshot {
+  String name;
+  bool subscribed = false;
+  bool offline = false;
+  bool alertsEnabled = false;
+  bool revertPending = false;
+  bool revertToOn = false;
+  String untilTime;
+};
+
 static void sendHeartbeat() {
-  String msg = "\xF0\x9F\x92\x93 Camera monitor v" + String(FIRMWARE_VERSION) + " heartbeat\n";
-  msg += "Uptime: " + formatUptime(millis()) + "\n";
   // The lifetime minimum next to the current value is what reveals a slow
   // leak: dropping every heartbeat means something's leaking; flat means
   // it's just normal steady-state overhead (WiFi/mbedTLS/PsychicHttp/tasks).
-  msg += "Free heap: " + String(ESP.getFreeHeap()) + " bytes (min ever: " +
-         String(ESP.getMinFreeHeap()) + ")\n";
+  uint32_t freeHeap = ESP.getFreeHeap();
+  uint32_t minFreeHeap = ESP.getMinFreeHeap();
   // Same nvs_get_stats call webserver_firmware.cpp's Firmware page and
   // checkNvsUsage() below both use - see NVS_USAGE_WARN_PERCENT's own
   // comment (config.h) for why this is worth watching at all. Folded into
   // every heartbeat too, not just the proactive alert below, so a slow
   // climb toward the threshold is visible before it's actually crossed.
   nvs_stats_t nvsStats;
-  if (nvs_get_stats(NULL, &nvsStats) == ESP_OK && nvsStats.total_entries > 0) {
-    unsigned pct = (unsigned)((uint64_t)nvsStats.used_entries * 100 / nvsStats.total_entries);
-    msg += "NVS usage: " + String(pct) + "%\n";
-  }
-  // Same reasoning as NVS usage above - visible here too, not just
-  // checkWifiSignal()'s own proactive alert, so a slow drift toward
-  // WIFI_RSSI_WARN_DBM is visible before it's actually crossed.
-  msg += "WiFi signal: " + String(WiFi.RSSI()) + " dBm\n";
+  bool haveNvsStats = nvs_get_stats(NULL, &nvsStats) == ESP_OK && nvsStats.total_entries > 0;
+  unsigned nvsPct = haveNvsStats ? (unsigned)((uint64_t)nvsStats.used_entries * 100 / nvsStats.total_entries) : 0;
+  int rssi = WiFi.RSSI();
+
   // subscriptionActive/isOffline are written by each camera's own task;
   // this runs on loop()'s task, so reading them needs CameraStateLock -
-  // see CameraState::stateMutex.
+  // see CameraState::stateMutex. Gathered ONCE here, before any text is
+  // composed, rather than inside the per-recipient-language composer below
+  // - the lock/read doesn't need to happen once per recipient, only the
+  // (much cheaper) text formatting does.
+  std::vector<HeartbeatCameraSnapshot> cams;
   for (size_t i = 0; i < g_cameras.size(); i++) {
     if (!g_cameras[i].enabled) continue;
-    bool subscribed, offline, alertsEnabled, revertToOn;
+    HeartbeatCameraSnapshot snap;
+    snap.name = g_cameras[i].name;
     unsigned long revertDueMs;
     {
       CameraStateLock lock(g_cameraStates[i]);
-      subscribed = g_cameraStates[i].subscriptionActive;
-      offline = g_cameraStates[i].isOffline;
-      alertsEnabled = g_cameraStates[i].alertsEnabled;
+      snap.subscribed = g_cameraStates[i].subscriptionActive;
+      snap.offline = g_cameraStates[i].isOffline;
+      snap.alertsEnabled = g_cameraStates[i].alertsEnabled;
       revertDueMs = g_cameraStates[i].scheduledRevertDueMs;
-      revertToOn = g_cameraStates[i].scheduledRevertToOn;
+      snap.revertToOn = g_cameraStates[i].scheduledRevertToOn;
     }
     // A pending timed /on or /off (see checkScheduledAlertReverts) says
     // WHEN it'll flip back, not just that it will - "alerts OFF" alone
     // looks identical whether that's permanent or about to auto-resume in
     // a minute, which is exactly the ambiguity worth resolving in a
     // heartbeat someone might only glance at.
-    bool revertPending = revertDueMs != 0 && (long)(millis() - revertDueMs) < 0;
-    String untilTime = revertPending ? formatLocalClockTime(revertDueMs) : "";
-    String alertsNote;
-    if (!alertsEnabled) {
-      alertsNote = (revertPending && revertToOn && untilTime.length() > 0)
-          ? " (alerts OFF until " + untilTime + ")" : " (alerts OFF)";
-    } else if (revertPending && !revertToOn && untilTime.length() > 0) {
-      alertsNote = " (alerts ON until " + untilTime + ")";
-    }
-    msg += g_cameras[i].name + ": " + (subscribed ? "subscribed" : "NOT subscribed") +
-           (offline ? " (OFFLINE)" : "") + alertsNote + "\n";
+    snap.revertPending = revertDueMs != 0 && (long)(millis() - revertDueMs) < 0;
+    snap.untilTime = snap.revertPending ? formatLocalClockTime(revertDueMs) : "";
+    cams.push_back(snap);
   }
-  if (!sendTelegramMessage(msg)) {
+
+  unsigned long uptimeMs = millis();
+  bool sendOk = sendTelegramMessage([=](TelegramLang lang) {
+    String msg = trHeartbeatHeader(lang, FIRMWARE_VERSION) + "\n";
+    msg += trUptimeLine(lang, uptimeMs) + "\n";
+    msg += trFreeHeapLine(lang, freeHeap, minFreeHeap) + "\n";
+    if (haveNvsStats) msg += trNvsUsageLine(lang, nvsPct) + "\n";
+    msg += trWifiSignalLine(lang, rssi) + "\n";
+    for (auto& snap : cams) {
+      msg += trHeartbeatCameraLine(lang, snap.name, snap.subscribed, snap.offline, snap.alertsEnabled,
+                                    snap.revertPending, snap.revertToOn, snap.untilTime) + "\n";
+    }
+    return msg;
+  });
+  if (!sendOk) {
     Serial.println("Heartbeat: Telegram send failed.");
   }
 }
@@ -407,10 +450,7 @@ static void checkNvsUsage() {
                   "writes here before once it filled up.\n",
                   pct, (unsigned)nvsStats.used_entries, (unsigned)nvsStats.total_entries);
     logEvent("NVS usage at " + String(pct) + "% - approaching the point writes can start silently failing");
-    sendTelegramMessage("\xE2\x9A\xA0\xEF\xB8\x8F NVS storage is " + String(pct) +
-                         "% full - this board has silently dropped writes here before once it filled "
-                         "up. Check the Firmware page, and consider trimming unused cameras/Telegram "
-                         "users.");
+    sendTelegramMessage([pct](TelegramLang lang) { return trNvsUsageWarning(lang, pct); });
   } else {
     Serial.printf("NVS usage back under %u%% (%u%%).\n", NVS_USAGE_WARN_PERCENT, pct);
     logEvent("NVS usage back under " + String((unsigned)NVS_USAGE_WARN_PERCENT) + "% (" + String(pct) + "%)");
@@ -431,9 +471,7 @@ static void checkWifiSignal() {
   if (weakNow) {
     Serial.printf("WARNING: WiFi signal weak (%d dBm, warn threshold %d dBm).\n", (int)rssi, WIFI_RSSI_WARN_DBM);
     logEvent("WiFi signal weak (" + String(rssi) + " dBm)");
-    sendTelegramMessage("\xE2\x9A\xA0\xEF\xB8\x8F WiFi signal is weak (" + String(rssi) +
-                         " dBm) - still connected, but consider the board/AP's placement or channel "
-                         "before it gets bad enough to actually drop.");
+    sendTelegramMessage([rssi](TelegramLang lang) { return trWifiWeakWarning(lang, (int)rssi); });
   } else {
     Serial.printf("WiFi signal back above %d dBm (%d dBm).\n", WIFI_RSSI_WARN_DBM, (int)rssi);
     logEvent("WiFi signal back above " + String(WIFI_RSSI_WARN_DBM) + " dBm (" + String(rssi) + " dBm)");
@@ -476,11 +514,10 @@ static void checkHeapHealth() {
              String(maxAlloc) + ")");
   }
   if (r.shouldAlert) {
-    sendTelegramMessage("\xE2\x9A\xA0\xEF\xB8\x8F Free (internal) heap hit a new low of " +
-                         String(r.baseline) + " bytes (largest allocatable block: " + String(maxAlloc) +
-                         " bytes) - getting close to allocation-failure territory. Check the Activity "
-                         "log around this time for what else was happening (a motion burst, several "
-                         "cameras reconnecting, ...).");
+    uint32_t baseline = r.baseline;
+    sendTelegramMessage([baseline, maxAlloc](TelegramLang lang) {
+      return trHeapLowWarning(lang, baseline, maxAlloc);
+    });
   }
 }
 
@@ -527,9 +564,8 @@ void spawnCameraTask(size_t index) {
                   "be monitored until the board is rebooted (ideally with more free memory).\n",
                   g_cameras[index].name.c_str());
     logEvent(g_cameras[index].name + ": task creation FAILED (out of memory?) - NOT being monitored");
-    sendTelegramMessage("\xE2\x9A\xA0\xEF\xB8\x8F " + g_cameras[index].name +
-                         ": failed to start its monitoring task (likely out of memory) - it is NOT "
-                         "being monitored. A reboot may free enough memory to fix this.");
+    String cameraName = g_cameras[index].name;
+    sendTelegramMessage([cameraName](TelegramLang lang) { return trCameraTaskSpawnFailure(lang, cameraName); });
   }
 }
 
@@ -587,18 +623,22 @@ static void startMonitoring() {
   // "did it actually restart" marker for whichever of them just happened.
   logEvent("Booted: " + describeResetReason());
 
-  String bootMsg = "\xF0\x9F\x93\xB7 Camera monitor v" + String(FIRMWARE_VERSION) + " online\n";
-  bootMsg += "Reboot reason: " + describeResetReason() + "\n";
-  bootMsg += String(enabledCount) + "/" + String((int)g_cameras.size()) + " cameras enabled\n";
-  bootMsg += buildCameraListMessage();
   QuickSnapshotCheckResult sdBootCheck = lastBootCheckResult();
-  if (sdBootCheck.ranAtAll && !sdBootCheck.ok) {
-    bootMsg += "\n\xE2\x9A\xA0\xEF\xB8\x8F SD boot check found " +
-               String((unsigned)sdBootCheck.unreadableFiles) + " unreadable file(s) in " +
-               String((unsigned)sdBootCheck.directoriesChecked) +
-               " camera director(ies) - see the dashboard's Storage page.";
-  }
-  if (!sendTelegramMessage(bootMsg)) {
+  bool sdBootCheckFailed = sdBootCheck.ranAtAll && !sdBootCheck.ok;
+  size_t sdBootUnreadable = sdBootCheck.unreadableFiles;
+  size_t sdBootDirsChecked = sdBootCheck.directoriesChecked;
+  bool sendOk = sendTelegramMessage([enabledCount, sdBootCheckFailed, sdBootUnreadable,
+                                      sdBootDirsChecked](TelegramLang lang) {
+    String msg = trBootHeader(lang, FIRMWARE_VERSION) + "\n";
+    msg += trRebootReasonLine(lang, describeResetReasonLocalized(lang)) + "\n";
+    msg += trEnabledCamerasLine(lang, (size_t)enabledCount, g_cameras.size()) + "\n";
+    msg += buildCameraListMessage(lang);
+    if (sdBootCheckFailed) {
+      msg += "\n" + trSdBootCheckWarning(lang, sdBootUnreadable, sdBootDirsChecked);
+    }
+    return msg;
+  });
+  if (!sendOk) {
     Serial.println("Boot notice: Telegram send failed (network/token/CA issue?) - continuing anyway.");
   }
 
@@ -809,7 +849,7 @@ void loop() {
   if (WiFi.status() == WL_CONNECTED && millis() - lastNetWatchdogCheckMs >= NET_WATCHDOG_CHECK_INTERVAL_MS) {
     lastNetWatchdogCheckMs = millis();
     if (checkInternetAndMaybePulseRelay()) {
-      sendTelegramMessage("\xE2\x9A\xA0\xEF\xB8\x8F Internet outage detected - power-cycled the router.");
+      sendTelegramMessage([](TelegramLang lang) { return trInternetOutageAlert(lang); });
     }
     esp_task_wdt_reset();
   }
@@ -823,7 +863,7 @@ void loop() {
   if (WiFi.status() == WL_CONNECTED && millis() - lastBridgeWatchdogCheckMs >= BRIDGE_WATCHDOG_CHECK_INTERVAL_MS) {
     lastBridgeWatchdogCheckMs = millis();
     if (checkBridgeCamerasAndMaybePulseRelay(g_cameras.data(), g_cameraStates.data(), g_cameras.size())) {
-      sendTelegramMessage("\xE2\x9A\xA0\xEF\xB8\x8F Camera bridge outage detected - power-cycled the bridge relay.");
+      sendTelegramMessage([](TelegramLang lang) { return trBridgeOutageAlert(lang); });
     }
     esp_task_wdt_reset();
   }

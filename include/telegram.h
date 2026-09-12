@@ -1,8 +1,10 @@
 #pragma once
 #include <Arduino.h>
+#include <functional>
 #include <vector> // explicit, not chained - see camera_serialize.h's comment; recentUnknownChats' return type
 #include "config.h"
 #include "camera.h"
+#include "telegram_users.h" // TelegramLang
 
 // Sends cfg.snapshotBurstCount snapshot(s), captioned "<camera name> -
 // <UTC timestamp>" (plus "(n/N)"), to every subscribed user, subject to
@@ -72,9 +74,12 @@ void checkSubscriptionHealth(const CameraConfig& cfg, CameraState& st);
 // independent of motion/alerts entirely.
 void triggerTimelapseCapture(const CameraConfig& cfg, CameraState& st);
 
-// Sends text to every user with systemMessages enabled. Returns false if
-// no user has it enabled, or every send failed.
-bool sendTelegramMessage(const String& text);
+// Sends a message to every user with systemMessages enabled, composed
+// per-recipient by calling `compose(u.language)` - lets each recipient get
+// their own configured language (lib/telegram_i18n) instead of one fixed,
+// pre-built string. Returns false if no user has systemMessages enabled,
+// or every send failed.
+bool sendTelegramMessage(std::function<String(TelegramLang)> compose);
 
 // True once TELEGRAM_ROOT_CA holds a real certificate - false means every
 // send will fail TLS verification.
@@ -112,9 +117,14 @@ std::vector<UnknownChatSighting> recentUnknownChats();
 // Serial/Activity log ("Telegram (name)", "the dashboard"). Returns a
 // plain-text result for the caller to show however it likes - success, or
 // the specific reason nothing happened (no enabled cameras, or an
-// unparseable duration).
+// unparseable duration). `lang` controls the returned text's language - the
+// dashboard's Mute-all/Unmute-all buttons (webserver.cpp) always pass
+// TelegramLang::English (the web UI stays English regardless of any
+// Telegram user's own preference); the /on all, /off all Telegram command
+// path passes the requesting TelegramUser's own language.
 String setAllCamerasAlertState(const CameraConfig cameras[], CameraState states[], size_t numCameras,
-                                bool turnOn, const String& durationText, const String& viaWho);
+                                bool turnOn, const String& durationText, const String& viaWho,
+                                TelegramLang lang);
 
 // Polls getUpdates and applies commands, matched by case-insensitive
 // camera-name prefix ("/on D01" matches "D01-FDir"; an ambiguous prefix

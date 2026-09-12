@@ -700,7 +700,7 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
     String duration = request->getParam("duration", "");
     duration.trim();
     String result = setAllCamerasAlertState(g_liveCameras->data(), g_liveStates->data(), g_liveCameras->size(),
-                                             false, duration, "the dashboard");
+                                             false, duration, "the dashboard", TelegramLang::English);
     // htmlEscape()d here, the one point this ever becomes HTML -
     // setAllCamerasAlertState's failure message (via resolveAlertTimer,
     // telegram.cpp) echoes the submitted duration text verbatim, which is
@@ -722,7 +722,7 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
     // Mute all's own duration field for the opposite direction, or /on all
     // <duration> via Telegram.
     String result = setAllCamerasAlertState(g_liveCameras->data(), g_liveStates->data(), g_liveCameras->size(),
-                                             true, "", "the dashboard");
+                                             true, "", "the dashboard", TelegramLang::English);
     // htmlEscape() for consistency with /cameras/mute-all above, even
     // though this call site always passes a fixed "" duration today (so
     // there's no actual user text to escape yet) - matching the same

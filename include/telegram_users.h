@@ -2,6 +2,13 @@
 #include <Arduino.h>
 #include <vector>
 
+// Which language this user's Telegram messages (alerts and command
+// replies alike) are composed in - see lib/telegram_i18n. Does NOT affect
+// the web dashboard, which stays English regardless. English is the
+// default so every existing user (and any hand-edited/imported NVS
+// record with no language recorded yet) keeps behaving exactly as before.
+enum class TelegramLang : uint8_t { English = 0, Portuguese = 1 };
+
 // A Telegram recipient - persisted in NVS (Preferences, namespace
 // "tgusers"), managed via the web UI's "Telegram Users" section. Any
 // number of chat IDs can receive alerts, each independently configured
@@ -39,6 +46,10 @@ struct TelegramUser {
   // unlimited (default) - most users never need this; it exists for a
   // shared/less-trusted chat that could otherwise hammer the board.
   uint16_t maxCommandsPerMinute = 0;
+
+  // Language this user's alerts and command replies are composed in - see
+  // TelegramLang's own comment above.
+  TelegramLang language = TelegramLang::English;
 };
 
 // True if this user should receive alerts for camera `cameraName`.

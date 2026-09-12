@@ -4,6 +4,7 @@
 #include "format_utils.h"
 #include "webserver_html.h"
 #include "telegram.h" // recentUnknownChats, sendTelegramMessage
+#include "telegram_i18n.h" // trTestMessage
 #include "background_job.h" // BackgroundJob<T> - startTestMessageAsync
 #include <freertos/FreeRTOS.h>
 
@@ -52,6 +53,12 @@ static String renderTelegramUserForm(const TelegramUser& v, const std::vector<Ca
   html += "<label>Max commands per minute (0 = unlimited)"
           "<input type=\"text\" name=\"maxCommandsPerMinute\" value=\"" + String(v.maxCommandsPerMinute) +
           "\"></label>";
+  bool isPt = v.language == TelegramLang::Portuguese;
+  html += "<label>Language (alerts and command replies sent to this user - the dashboard itself always "
+          "stays English)<select name=\"language\">"
+          "<option value=\"en\"" + String(!isPt ? " selected" : "") + ">English</option>"
+          "<option value=\"pt\"" + String(isPt ? " selected" : "") + ">Portugu\xC3\xAAs</option>"
+          "</select></label>";
   html += "<p><button type=\"submit\">" + String(isEdit ? "Save changes" : "Add user") + "</button>";
   if (isEdit) html += " <a href=\"/users\" class=\"secondary\">Cancel</a>";
   html += "</p></form></fieldset>";
@@ -70,7 +77,7 @@ String renderUsersPanel(const TelegramUser* prefill, bool isEdit) {
   std::vector<CameraConfig> cams = loadCameras();
 
   String html = "<h1>Telegram Users</h1>";
-  html += "<table><tr><th>Name</th><th>Chat ID</th><th>Cameras</th>"
+  html += "<table><tr><th>Name</th><th>Chat ID</th><th>Cameras</th><th>Language</th>"
           "<th>System Messages</th><th>Can Command</th><th>Can Snap</th><th>Can Reset</th><th></th></tr>";
   for (auto& u : users) {
     String camerasCol;
@@ -85,8 +92,9 @@ String renderUsersPanel(const TelegramUser* prefill, bool isEdit) {
       }
     }
 
+    String languageCol = u.language == TelegramLang::Portuguese ? "Portugu\xC3\xAAs" : "English";
     html += "<tr><td>" + htmlEscape(u.name) + "</td><td>" + htmlEscape(u.chatId) + "</td><td>" +
-            camerasCol + "</td><td>" + yesNoBadge(u.systemMessages) + "</td><td>" +
+            camerasCol + "</td><td>" + languageCol + "</td><td>" + yesNoBadge(u.systemMessages) + "</td><td>" +
             yesNoBadge(u.canCommand) + "</td><td>" + yesNoBadge(u.canSnap) + "</td><td>" +
             yesNoBadge(u.canReset) + "</td><td>";
     html += renderEditDeleteActions("/users/edit?name=", "/users/delete", u.name) + "</td></tr>";
@@ -147,9 +155,7 @@ static void sendTestMessageTask(void*) {
     if (u.systemMessages) r.recipientCount++;
   }
   if (r.recipientCount > 0) {
-    r.sent = sendTelegramMessage(
-        "\xF0\x9F\xA7\xAA Test message from the Camera Monitor dashboard - if you're reading this, "
-        "your Telegram setup is working.");
+    r.sent = sendTelegramMessage([](TelegramLang lang) { return trTestMessage(lang); });
   }
   g_testMessageJob.finish(r);
   vTaskDelete(nullptr);
@@ -218,6 +224,8 @@ TelegramUser parseUserForm(PsychicRequest* request) {
     maxCommandsPerMinute = (long)TELEGRAM_MAX_COMMANDS_PER_MINUTE_MAX;
   }
   u.maxCommandsPerMinute = (uint16_t)maxCommandsPerMinute;
+
+  u.language = request->getParam("language", "en") == "pt" ? TelegramLang::Portuguese : TelegramLang::English;
 
   u.name.trim();
   u.chatId.trim();

@@ -65,7 +65,8 @@ String serializeUser(const TelegramUser& u) {
   s += (u.canCommand ? "1" : "0");     s += FIELD_SEP;
   s += (u.canSnap ? "1" : "0");        s += FIELD_SEP;
   s += (u.canReset ? "1" : "0");       s += FIELD_SEP;
-  s += String(u.maxCommandsPerMinute);
+  s += String(u.maxCommandsPerMinute); s += FIELD_SEP;
+  s += String((int)u.language);
   return s;
 }
 
@@ -144,17 +145,37 @@ static TelegramUser deserializeUserV3(const std::vector<String>& fields) {
   return u;
 }
 
+// Version 4 (TELEGRAM_USER_SCHEMA_VERSION): adds language, appended at the
+// end. Requires an exact field count, same reasoning as V2/V3.
+static TelegramUser deserializeUserV4(const std::vector<String>& fields) {
+  TelegramUser u;
+  if (fields.size() != 10) return u; // malformed - caller skips entries with an empty name
+
+  u.name           = fields[0];
+  u.chatId         = fields[1];
+  u.allCameras     = fields[2] == "1";
+  u.systemMessages = fields[4] == "1";
+  u.canCommand     = fields[5] == "1";
+  u.canSnap        = fields[6] == "1";
+  u.canReset       = fields[7] == "1";
+  if (fields[8].length() > 0) u.maxCommandsPerMinute = (uint16_t)fields[8].toInt();
+  u.language       = fields[9].toInt() == 1 ? TelegramLang::Portuguese : TelegramLang::English;
+  u.cameraNames    = splitCameraList(fields[3]);
+  return u;
+}
+
 TelegramUser deserializeUser(const String& record, uint16_t recordVersion) {
   std::vector<String> fields = splitFields(record);
 
   if (recordVersion == 0) return deserializeUserV0(fields);
   if (recordVersion == 1) return deserializeUserV1(fields);
   if (recordVersion == 2) return deserializeUserV2(fields);
-  if (recordVersion == TELEGRAM_USER_SCHEMA_VERSION) return deserializeUserV3(fields);
+  if (recordVersion == 3) return deserializeUserV3(fields);
+  if (recordVersion == TELEGRAM_USER_SCHEMA_VERSION) return deserializeUserV4(fields);
 
   // Unknown/future version - best-effort fall through to the newest known
   // layout; telegram_users.cpp logs a warning when this happens.
-  return deserializeUserV3(fields);
+  return deserializeUserV4(fields);
 }
 
 size_t telegramUserRecordFieldCount(const String& record) {

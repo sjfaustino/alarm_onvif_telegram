@@ -1,6 +1,7 @@
 #include "camera.h"
 #include "onvif_soap.h"
 #include "telegram.h"
+#include "telegram_i18n.h"
 #include "backoff.h"
 #include "camera_parse.h"
 #include "event_log_store.h"
@@ -487,8 +488,8 @@ void cameraTaskFn(void* pvParameters) {
   if (!resolveCameraCredentials(cfg, st)) {
     Serial.printf("[%s] FATAL: no credentials resolved - task exiting, camera will NOT be monitored "
                   "until this is fixed via the web UI and the board is rebooted.\n", cfg.name.c_str());
-    sendTelegramMessage("\xE2\x9A\xA0\xEF\xB8\x8F " + cfg.name +
-                         ": no username/password set for this camera - it is NOT being monitored.");
+    String cameraName = cfg.name;
+    sendTelegramMessage([cameraName](TelegramLang lang) { return trMissingCredentials(lang, cameraName, false); });
     vTaskDelete(nullptr);
     return;
   }
@@ -568,9 +569,8 @@ void cameraTaskFn(void* pvParameters) {
         // another edit.
         Serial.printf("[%s] ERROR: no username/password after this edit - camera will NOT be monitored "
                       "until this is fixed via the web UI.\n", cfg.name.c_str());
-        sendTelegramMessage("\xE2\x9A\xA0\xEF\xB8\x8F " + cfg.name +
-                             ": no username/password set for this camera after the last edit - it is "
-                             "NOT being monitored. Fix it via the dashboard.");
+        String cameraName = cfg.name;
+        sendTelegramMessage([cameraName](TelegramLang lang) { return trMissingCredentials(lang, cameraName, true); });
       }
     }
 

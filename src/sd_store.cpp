@@ -2,6 +2,7 @@
 #include "snapshot_storage.h"
 #include "config.h"
 #include "telegram.h"        // sendTelegramMessage - see checkSnapshotStorage()/markSdFailed()'s own comments
+#include "telegram_i18n.h"
 #include "event_log_store.h" // logEvent
 #include <Preferences.h>
 #include <SD.h>
@@ -156,9 +157,8 @@ static void markSdFailed(const char* reason) {
   // here, so this blocking network call never holds up another camera's
   // SD access.
   logEvent(String("SD storage failed (") + reason + ") - falling back to PSRAM history");
-  sendTelegramMessage("\xE2\x9A\xA0\xEF\xB8\x8F SD card storage failed (" + String(reason) +
-                       ") and has been disabled for the rest of this session - snapshot history is "
-                       "back to the PSRAM-only fallback until the next reboot. Check the card/wiring.");
+  String reasonStr = reason;
+  sendTelegramMessage([reasonStr](TelegramLang lang) { return trSdFailure(lang, reasonStr); });
 }
 
 // Caller must hold g_sdMutex. Lists dirName's own files (basenames only,
@@ -414,10 +414,9 @@ SnapshotStorageCheckResult checkSnapshotStorage() {
 
   if (!result.ok) {
     logEvent("SD storage check found " + String((unsigned)result.unreadableFiles) + " unreadable file(s)");
-    sendTelegramMessage("\xE2\x9A\xA0\xEF\xB8\x8F SD storage check found " +
-                         String((unsigned)result.unreadableFiles) + " unreadable file(s) out of " +
-                         String((unsigned)result.filesChecked) +
-                         " checked. See the dashboard's Storage page or Serial log for details.");
+    size_t unreadable = result.unreadableFiles;
+    size_t checked = result.filesChecked;
+    sendTelegramMessage([unreadable, checked](TelegramLang lang) { return trSdCheckWarning(lang, unreadable, checked); });
   }
   return result;
 }

@@ -255,6 +255,10 @@ Arduino-ESP32/IDF releases.
   their display name - two users sharing one Chat ID would double-send every
   alert to that physical account and make command-permission resolution
   non-deterministic, so the dashboard rejects a save that would create one.
+  Each user also picks their own **Language** (English or Portuguese) - every
+  message sent to that specific chat, alerts and command replies alike, is
+  composed in their chosen language, independently of every other user. The
+  web dashboard itself always stays English regardless of any user's setting.
   Commands are matched by camera name or
   prefix - or the literal word "all" in place of a name, which applies to every
   enabled camera at once (`/off all 30` mutes everything for 30 minutes; `/snap

@@ -3,6 +3,7 @@
 #include "subscription_health.h"
 #include "telegram_ca.h"
 #include "telegram_users.h"
+#include "telegram_i18n.h"
 #include "telegram_parse.h"
 #include "telegram_multipart.h"
 #include "format_utils.h"
@@ -444,14 +445,14 @@ static bool answerTelegramCallback(const String& callbackQueryId, const String& 
 // Broadcasts to every Telegram user with systemMessages enabled - used for
 // the heartbeat, the boot-online notice, and the "no credentials" fatal
 // alert. Returns true if it reached at least one recipient.
-bool sendTelegramMessage(const String& text) {
+bool sendTelegramMessage(std::function<String(TelegramLang)> compose) {
   std::vector<TelegramUser> users = loadTelegramUsers();
   bool anyRecipient = false;
   bool anyOk = false;
   for (auto& u : users) {
     if (!u.systemMessages) continue;
     anyRecipient = true;
-    if (sendTelegramMessageTo(u.chatId, text)) anyOk = true;
+    if (sendTelegramMessageTo(u.chatId, compose(u.language))) anyOk = true;
     // Each recipient can independently block on g_telegramNetMutex for up
     // to TELEGRAM_NET_MUTEX_TIMEOUT_MS (45s) before a send is even
     // attempted - with several systemMessages recipients configured, this
@@ -668,9 +669,9 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st, bool isPetEven
     return;
   }
 
-  std::vector<String> recipients;
+  std::vector<TelegramUser> recipients;
   for (auto& u : loadTelegramUsers()) {
-    if (telegramUserWantsCamera(u, cfg.name)) recipients.push_back(u.chatId);
+    if (telegramUserWantsCamera(u, cfg.name)) recipients.push_back(u);
   }
   if (recipients.empty()) {
     Serial.printf("[%s] No Telegram user is subscribed to this camera - skipping send.\n", cfg.name.c_str());
@@ -689,8 +690,8 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st, bool isPetEven
     { CameraStateLock lock(st); st.lastAlert = nowMs; st.hasAlerted = true; }
     st.digestArmed = true;
     st.suppressedMotionCount = 0;
-    String msg = "\xF0\x9F\x90\xBE " + cfg.name + " - pet detected - " + nowTimestampString();
-    for (auto& chatId : recipients) sendTelegramMessageTo(chatId, msg);
+    String timestamp = nowTimestampString();
+    for (auto& r : recipients) sendTelegramMessageTo(r.chatId, trPetAlertText(r.language, cfg.name, timestamp));
     logEvent(cfg.name + ": pet alert (text) to " + String(recipients.size()) + " recipient(s)");
     if (st.snapshotUri.length() > 0) {
       size_t jpgLen = 0;
@@ -756,13 +757,13 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st, bool isPetEven
     }
     if (!jpg) continue; // one bad shot in a burst shouldn't abort the rest
 
-    String caption = (isPetEvent ? "\xF0\x9F\x90\xBE " + cfg.name + " - pet detected - "
-                                 : cfg.name + " - ") + nowTimestampString();
-    if (shots > 1) caption += " (" + String(i + 1) + "/" + String(shots) + ")";
+    String timestamp = nowTimestampString();
+    String burstSuffix = shots > 1 ? " (" + String(i + 1) + "/" + String(shots) + ")" : "";
 
-    for (auto& chatId : recipients) {
-      if (!sendTelegramPhotoWithRetry(jpg, jpgLen, caption, chatId)) {
-        Serial.printf("[%s] Telegram send to chat %s failed.\n", cfg.name.c_str(), chatId.c_str());
+    for (auto& r : recipients) {
+      String caption = trMotionCaption(r.language, cfg.name, timestamp, isPetEvent) + burstSuffix;
+      if (!sendTelegramPhotoWithRetry(jpg, jpgLen, caption, r.chatId)) {
+        Serial.printf("[%s] Telegram send to chat %s failed.\n", cfg.name.c_str(), r.chatId.c_str());
       }
     }
     pushCameraSnapshot(cfg, st, jpg, jpgLen); // takes ownership - do not free(jpg) here
@@ -802,18 +803,19 @@ void triggerTimelapseCapture(const CameraConfig& cfg, CameraState& st) {
     bool alertsEnabled;
     { CameraStateLock lock(st); alertsEnabled = st.alertsEnabled; }
     if (alertsEnabled) {
-      std::vector<String> recipients;
+      std::vector<TelegramUser> recipients;
       for (auto& u : loadTelegramUsers()) {
-        if (telegramUserWantsCamera(u, cfg.name)) recipients.push_back(u.chatId);
+        if (telegramUserWantsCamera(u, cfg.name)) recipients.push_back(u);
       }
       // Deliberately distinct wording from a motion-alert caption (no
       // warning glyph, "scheduled" spelled out) - a recipient should never
       // mistake a routine timelapse photo for something that needs
       // attention.
-      String caption = "\xF0\x9F\x95\x92 " + cfg.name + " - scheduled snapshot - " + nowTimestampString();
-      for (auto& chatId : recipients) {
-        if (!sendTelegramPhotoWithRetry(jpg, jpgLen, caption, chatId)) {
-          Serial.printf("[%s] Scheduled snapshot send to chat %s failed.\n", cfg.name.c_str(), chatId.c_str());
+      String timestamp = nowTimestampString();
+      for (auto& r : recipients) {
+        String caption = trTimelapseCaption(r.language, cfg.name, timestamp);
+        if (!sendTelegramPhotoWithRetry(jpg, jpgLen, caption, r.chatId)) {
+          Serial.printf("[%s] Scheduled snapshot send to chat %s failed.\n", cfg.name.c_str(), r.chatId.c_str());
         }
       }
     }
@@ -831,16 +833,16 @@ void triggerTimelapseCapture(const CameraConfig& cfg, CameraState& st) {
 // tamper/signal-loss don't share (tamper degrades to text-only,
 // signal-loss is always text-only) - not unified into one helper to avoid
 // forcing that extra gate onto events that don't need it.
-static std::vector<String> beginCameraAlert(const CameraConfig& cfg, CameraState& st, uint32_t nowMs) {
+static std::vector<TelegramUser> beginCameraAlert(const CameraConfig& cfg, CameraState& st, uint32_t nowMs) {
   bool alertsEnabled;
   { CameraStateLock lock(st); alertsEnabled = st.alertsEnabled; }
   if (!alertsEnabled) return {};
 
   if (st.hasAlerted && nowMs - st.lastAlert < safeAlertCooldownMs(cfg)) return {};
 
-  std::vector<String> recipients;
+  std::vector<TelegramUser> recipients;
   for (auto& u : loadTelegramUsers()) {
-    if (telegramUserWantsCamera(u, cfg.name)) recipients.push_back(u.chatId);
+    if (telegramUserWantsCamera(u, cfg.name)) recipients.push_back(u);
   }
   if (recipients.empty()) return {};
 
@@ -849,11 +851,11 @@ static std::vector<String> beginCameraAlert(const CameraConfig& cfg, CameraState
 }
 
 void triggerTamperAlert(const CameraConfig& cfg, CameraState& st) {
-  std::vector<String> recipients = beginCameraAlert(cfg, st, millis());
+  std::vector<TelegramUser> recipients = beginCameraAlert(cfg, st, millis());
   if (recipients.empty()) return;
 
   logEvent(cfg.name + ": TAMPER detected");
-  String caption = "\xE2\x9A\xA0\xEF\xB8\x8F " + cfg.name + " - TAMPER DETECTED - " + nowTimestampString();
+  String timestamp = nowTimestampString();
 
   bool hasSnapshotUri;
   { CameraStateLock lock(st); hasSnapshotUri = st.snapshotUri.length() > 0; }
@@ -861,9 +863,10 @@ void triggerTamperAlert(const CameraConfig& cfg, CameraState& st) {
   uint8_t* jpg = hasSnapshotUri ? fetchOneSnapshot(cfg, st, jpgLen) : nullptr;
 
   if (jpg) {
-    for (auto& chatId : recipients) {
-      if (!sendTelegramPhotoWithRetry(jpg, jpgLen, caption, chatId)) {
-        Serial.printf("[%s] Tamper alert photo send to chat %s failed.\n", cfg.name.c_str(), chatId.c_str());
+    for (auto& r : recipients) {
+      String caption = trTamperCaption(r.language, cfg.name, timestamp);
+      if (!sendTelegramPhotoWithRetry(jpg, jpgLen, caption, r.chatId)) {
+        Serial.printf("[%s] Tamper alert photo send to chat %s failed.\n", cfg.name.c_str(), r.chatId.c_str());
       }
     }
     pushCameraSnapshot(cfg, st, jpg, jpgLen); // takes ownership - do not free(jpg) here
@@ -871,17 +874,17 @@ void triggerTamperAlert(const CameraConfig& cfg, CameraState& st) {
     // No snapshot URI yet, or the fetch itself failed - tamper is
     // important enough not to stay silent just because a photo isn't
     // available right now.
-    for (auto& chatId : recipients) sendTelegramMessageTo(chatId, caption);
+    for (auto& r : recipients) sendTelegramMessageTo(r.chatId, trTamperCaption(r.language, cfg.name, timestamp));
   }
 }
 
 void triggerSignalLossAlert(const CameraConfig& cfg, CameraState& st) {
-  std::vector<String> recipients = beginCameraAlert(cfg, st, millis());
+  std::vector<TelegramUser> recipients = beginCameraAlert(cfg, st, millis());
   if (recipients.empty()) return;
 
   logEvent(cfg.name + ": video SIGNAL LOSS");
-  String msg = "\xE2\x9A\xA0\xEF\xB8\x8F " + cfg.name + " - VIDEO SIGNAL LOSS - " + nowTimestampString();
-  for (auto& chatId : recipients) sendTelegramMessageTo(chatId, msg);
+  String timestamp = nowTimestampString();
+  for (auto& r : recipients) sendTelegramMessageTo(r.chatId, trSignalLossMessage(r.language, cfg.name, timestamp));
 }
 
 void checkCameraOnlineStatus(const CameraConfig& cfg, CameraState& st) {
@@ -915,12 +918,12 @@ void checkCameraOnlineStatus(const CameraConfig& cfg, CameraState& st) {
     // that was never really in effect.
     Serial.printf("[%s] OFFLINE - no response for over %lus.\n", cfg.name.c_str(), offlineThresholdMs / 1000UL);
     logEvent(cfg.name + ": OFFLINE (no response for over " + String(offlineThresholdMs / 60000UL) + "m)");
-    sendTelegramMessage("\xE2\x9A\xA0\xEF\xB8\x8F " + cfg.name + " is OFFLINE - no response for over " +
-                         String(offlineThresholdMs / 60000UL) + " minute(s).");
+    unsigned long minutes = offlineThresholdMs / 60000UL;
+    sendTelegramMessage([cfg, minutes](TelegramLang lang) { return trCameraOffline(lang, cfg.name, minutes); });
   } else {
     Serial.printf("[%s] Back ONLINE.\n", cfg.name.c_str());
     logEvent(cfg.name + ": back ONLINE");
-    sendTelegramMessage("\xE2\x9C\x85 " + cfg.name + " is back ONLINE.");
+    sendTelegramMessage([cfg](TelegramLang lang) { return trCameraBackOnline(lang, cfg.name); });
   }
 }
 
@@ -947,10 +950,8 @@ void checkSubscriptionHealth(const CameraConfig& cfg, CameraState& st) {
                 "be received.\n", cfg.name.c_str(), threshold / 1000UL);
   logEvent(cfg.name + ": responding but not subscribed for over " + String(threshold / 60000UL) +
            "m - not receiving events");
-  sendTelegramMessage("\xE2\x9A\xA0\xEF\xB8\x8F " + cfg.name + " is responding but hasn't held a working "
-                       "ONVIF subscription in over " + String(threshold / 60000UL) + " minute(s) - it is "
-                       "NOT receiving motion/tamper events. Check credentials, WS-Security mode, or the "
-                       "camera's ONVIF eventing support.");
+  unsigned long minutes = threshold / 60000UL;
+  sendTelegramMessage([cfg, minutes](TelegramLang lang) { return trSubscriptionLost(lang, cfg.name, minutes); });
 }
 
 // lastMotionMs/motionWatchdogTripped are same-task-only (see CameraState's
@@ -982,8 +983,8 @@ void checkMotionWatchdog(const CameraConfig& cfg, CameraState& st) {
   Serial.printf("[%s] No motion detected in over %u hour(s).\n", cfg.name.c_str(),
                 (unsigned)cfg.motionWatchdogHours);
   logEvent(cfg.name + ": no motion detected in over " + String((unsigned)cfg.motionWatchdogHours) + "h");
-  sendTelegramMessage("\xE2\x9A\xA0\xEF\xB8\x8F " + cfg.name + ": no motion detected in over " +
-                       String((unsigned)cfg.motionWatchdogHours) + " hour(s) - check the camera/PIR.");
+  unsigned hours = (unsigned)cfg.motionWatchdogHours;
+  sendTelegramMessage([cfg, hours](TelegramLang lang) { return trMotionWatchdogTripped(lang, cfg.name, hours); });
 }
 
 // Flushes triggerMotionAlert's suppressedMotionCount as one summary text
@@ -1009,9 +1010,9 @@ void checkPendingMotionDigest(const CameraConfig& cfg, CameraState& st) {
   { CameraStateLock lock(st); alertsEnabled = st.alertsEnabled; }
   if (!alertsEnabled) return; // muted since the snapshot went out - stay quiet
 
-  std::vector<String> recipients;
+  std::vector<TelegramUser> recipients;
   for (auto& u : loadTelegramUsers()) {
-    if (telegramUserWantsCamera(u, cfg.name)) recipients.push_back(u.chatId);
+    if (telegramUserWantsCamera(u, cfg.name)) recipients.push_back(u);
   }
   if (recipients.empty()) return;
 
@@ -1022,9 +1023,9 @@ void checkPendingMotionDigest(const CameraConfig& cfg, CameraState& st) {
   // that actually stopped 10s into a 30s cooldown should say "10 seconds,"
   // not "30 seconds" just because that's when this check next ran.
   unsigned long elapsedSec = (lastSuppressedMotionMs - st.lastAlert) / 1000UL;
-  String msg = cfg.name + ": motion continued - " + String(count) +
-               " more event(s) in the last " + String(elapsedSec) + " second(s).";
-  for (auto& chatId : recipients) sendTelegramMessageTo(chatId, msg);
+  for (auto& r : recipients) {
+    sendTelegramMessageTo(r.chatId, trMotionDigest(r.language, cfg.name, count, elapsedSec));
+  }
   logEvent(cfg.name + ": motion digest - " + String(count) + " event(s) in " + String(elapsedSec) + "s");
 }
 
@@ -1209,20 +1210,20 @@ static void saveAlertEnabledPref(size_t index, bool enabled) {
 // chatId (whoever asked) - unlike triggerMotionAlert, this is an explicit
 // one-off request, not a motion alert, so it ignores st.alertsEnabled and
 // doesn't touch st.lastAlert/hasAlerted or spend the alert cooldown.
-static void sendOnDemandSnapshot(const CameraConfig& cfg, CameraState& st, const String& chatId) {
+static void sendOnDemandSnapshot(const CameraConfig& cfg, CameraState& st, const String& chatId, TelegramLang lang) {
   // This runs on loop()'s task, snapshotUri is written by the camera's own
   // task - cross-task read, needs CameraStateLock. See CameraState::stateMutex.
   bool hasSnapshotUri;
   { CameraStateLock lock(st); hasSnapshotUri = st.snapshotUri.length() > 0; }
   if (!hasSnapshotUri) {
-    sendTelegramMessageTo(chatId, cfg.name + ": no snapshot URI available yet.");
+    sendTelegramMessageTo(chatId, trNoSnapshotUriYet(lang, cfg.name));
     return;
   }
 
   size_t jpgLen = 0;
   uint8_t* jpg = fetchOneSnapshot(cfg, st, jpgLen);
   if (!jpg) {
-    sendTelegramMessageTo(chatId, cfg.name + ": snapshot fetch failed - see Serial log.");
+    sendTelegramMessageTo(chatId, trSnapshotFetchFailed(lang, cfg.name));
     return;
   }
 
@@ -1250,7 +1251,7 @@ struct AlertTimer {
 // on/off - the original behavior). Resolving "HH:MM" needs the actual
 // current local time, which parseDurationToken (telegram_parse.h)
 // deliberately doesn't read for itself - see its own comment.
-static AlertTimer resolveAlertTimer(const String& durationText, bool turnOn) {
+static AlertTimer resolveAlertTimer(const String& durationText, bool turnOn, TelegramLang lang) {
   AlertTimer result;
   if (durationText.length() == 0) return result;
 
@@ -1259,14 +1260,12 @@ static AlertTimer resolveAlertTimer(const String& durationText, bool turnOn) {
   ParsedDuration dur = parseDurationToken(durationText, nowLocal);
   if (!dur.ok) {
     result.ok = false;
-    result.errorMsg = "Couldn't understand duration \"" + durationText +
-                       "\" - use a number of minutes (e.g. \"30\", max " + String(MAX_DURATION_MINUTES) +
-                       ") or a 24h clock time (e.g. \"23:00\").";
+    result.errorMsg = trDurationParseError(lang, durationText, MAX_DURATION_MINUTES);
     return result;
   }
   result.hasTimer = true;
   result.revertDueMs = millis() + dur.secondsFromNow * 1000UL;
-  result.suffix = " (auto " + String(turnOn ? "OFF" : "ON") + " in " + formatUptime(dur.secondsFromNow * 1000UL) + ")";
+  result.suffix = trTimerSuffix(lang, turnOn, dur.secondsFromNow * 1000UL);
   return result;
 }
 
@@ -1281,7 +1280,8 @@ static AlertTimer resolveAlertTimer(const String& durationText, bool turnOn) {
 // here or a forgotten saveAlertEnabledPref call would otherwise only be
 // caught in one of the two places).
 static void applyOnOffToCamera(const CameraConfig& cfg, CameraState& st, size_t index, bool turnOn,
-                                const AlertTimer& timer, const String& viaWho, const String& replyChatId) {
+                                const AlertTimer& timer, const String& viaWho, const String& replyChatId,
+                                TelegramLang lang) {
   {
     CameraStateLock lock(st); // read cross-task by camera.cpp/webserver.cpp
     st.alertsEnabled = turnOn;
@@ -1295,7 +1295,7 @@ static void applyOnOffToCamera(const CameraConfig& cfg, CameraState& st, size_t 
   Serial.printf("[%s] Alerts turned %s via Telegram by user \"%s\"%s.\n", cfg.name.c_str(),
                 turnOn ? "ON" : "OFF", viaWho.c_str(), timer.hasTimer ? " (timed)" : "");
   logEvent(cfg.name + " alerts: " + (turnOn ? "ON" : "OFF") + " via " + viaWho + timer.suffix);
-  sendTelegramMessageTo(replyChatId, cfg.name + " alerts: " + (turnOn ? "ON" : "OFF") + timer.suffix);
+  sendTelegramMessageTo(replyChatId, trAlertsState(lang, cfg.name, turnOn, timer.suffix));
 }
 
 // Shared by /on all, /off all [duration] (via handleAllCamerasCommand
@@ -1310,14 +1310,15 @@ static void applyOnOffToCamera(const CameraConfig& cfg, CameraState& st, size_t 
 // (no enabled cameras, or an unparseable duration) - for the caller to
 // relay however it likes (a Telegram reply, a web banner).
 String setAllCamerasAlertState(const CameraConfig cameras[], CameraState states[], size_t numCameras,
-                                bool turnOn, const String& durationText, const String& viaWho) {
+                                bool turnOn, const String& durationText, const String& viaWho,
+                                TelegramLang lang) {
   std::vector<size_t> targets;
   for (size_t i = 0; i < numCameras; i++) {
     if (cameras[i].enabled) targets.push_back(i);
   }
-  if (targets.empty()) return "No enabled cameras to apply this to.";
+  if (targets.empty()) return trNoEnabledCameras(lang);
 
-  AlertTimer timer = resolveAlertTimer(durationText, turnOn);
+  AlertTimer timer = resolveAlertTimer(durationText, turnOn, lang);
   if (!timer.ok) return timer.errorMsg;
 
   for (size_t i : targets) {
@@ -1329,7 +1330,7 @@ String setAllCamerasAlertState(const CameraConfig cameras[], CameraState states[
   Serial.printf("Alerts turned %s for all %u camera(s) via %s%s.\n", turnOn ? "ON" : "OFF",
                 (unsigned)targets.size(), viaWho.c_str(), timer.hasTimer ? " (timed)" : "");
   logEvent("All cameras alerts: " + String(turnOn ? "ON" : "OFF") + " via " + viaWho + timer.suffix);
-  return "All " + String(targets.size()) + " camera(s) alerts: " + (turnOn ? "ON" : "OFF") + timer.suffix;
+  return trAlertsState(lang, trAllCamerasSubject(lang, targets.size()), turnOn, timer.suffix);
 }
 
 // Applies /on all, /off all [duration], or /snap all to every currently-
@@ -1346,13 +1347,13 @@ static void handleAllCamerasCommand(const TelegramUser& sender, const ParsedTele
       if (cameras[i].enabled) targets.push_back(i);
     }
     if (targets.empty()) {
-      sendTelegramMessageTo(sender.chatId, "No enabled cameras to apply this to.");
+      sendTelegramMessageTo(sender.chatId, trNoEnabledCameras(sender.language));
       return;
     }
     Serial.printf("[Telegram] On-demand snapshot of all %u camera(s) requested by user \"%s\".\n",
                   (unsigned)targets.size(), sender.name.c_str());
     for (size_t i : targets) {
-      sendOnDemandSnapshot(cameras[i], states[i], sender.chatId);
+      sendOnDemandSnapshot(cameras[i], states[i], sender.chatId, sender.language);
       // A fetch+send per camera, synchronously, all within this one
       // loop() tick - main.cpp's loop() only resets the task watchdog at
       // its own top, so enough slow/unresponsive cameras in one "/snap
@@ -1366,7 +1367,7 @@ static void handleAllCamerasCommand(const TelegramUser& sender, const ParsedTele
 
   bool turnOn = (parsed.command == TelegramCommand::On);
   String result = setAllCamerasAlertState(cameras, states, numCameras, turnOn, parsed.durationText,
-                                           "Telegram (" + sender.name + ")");
+                                           "Telegram (" + sender.name + ")", sender.language);
   sendTelegramMessageTo(sender.chatId, result);
 }
 
@@ -1387,22 +1388,21 @@ static void sendCameraPickerKeyboard(const TelegramUser& sender, TelegramCommand
     buttons.push_back({cameras[i].name, verb + "|" + cameras[i].name});
   }
   if (buttons.empty()) {
-    sendTelegramMessageTo(sender.chatId, "No enabled cameras to choose from.");
+    sendTelegramMessageTo(sender.chatId, trNoCamerasToChoose(sender.language));
     return;
   }
   buttons.push_back({"All", verb + "|all"});
 
   size_t skipped = 0;
-  sendTelegramKeyboardTo(sender.chatId, "Choose a camera for " + commandDisplayName(command) + ":", buttons,
-                          &skipped);
+  sendTelegramKeyboardTo(sender.chatId, trCameraPickerPrompt(sender.language, commandDisplayName(command)),
+                          buttons, &skipped);
   if (skipped > 0) {
     // Not expected to trigger with this project's camera names (see
     // sendTelegramKeyboardTo's own comment) - but if it ever does, the
     // camera(s) missing from the keyboard above shouldn't be a silent gap
     // only visible in the Serial log.
-    sendTelegramMessageTo(sender.chatId, String(skipped) + " camera name(s) were too long to show as a "
-                           "button and were left off the list above - use the text command instead (e.g. "
-                           "\"" + commandDisplayName(command) + " <name>\").");
+    sendTelegramMessageTo(sender.chatId,
+                           trCallbackDataTooLong(sender.language, skipped, commandDisplayName(command)));
   }
 }
 
@@ -1437,14 +1437,14 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
   if (parsed.requiredPermission != TelegramCommandPermission::Unknown && !authorized) {
     String name = commandDisplayName(parsed.command);
     Serial.printf("[Telegram] User \"%s\" not authorized for %s.\n", sender.name.c_str(), name.c_str());
-    sendTelegramMessageTo(sender.chatId, "You're not authorized to use " + name + ".");
+    sendTelegramMessageTo(sender.chatId, trNotAuthorized(sender.language, name));
     return;
   }
 
   if (sender.maxCommandsPerMinute > 0 && !allowTelegramCommand(sender.chatId, sender.maxCommandsPerMinute)) {
     Serial.printf("[Telegram] User \"%s\" rate-limited (max %u command(s)/minute).\n", sender.name.c_str(),
                   (unsigned)sender.maxCommandsPerMinute);
-    sendTelegramMessageTo(sender.chatId, "You're sending commands too quickly - wait a moment and try again.");
+    sendTelegramMessageTo(sender.chatId, trRateLimited(sender.language));
     return;
   }
 
@@ -1457,7 +1457,7 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
       // the whole group is read under one lock for simplicity rather than
       // splitting into a locked and an unlocked half. See
       // CameraState::stateMutex.
-      String msg = "Camera alert status:\n";
+      String msg = trStatusHeader(sender.language) + "\n";
       for (size_t i = 0; i < numCameras; i++) {
         if (!cameras[i].enabled) continue;
         bool alertsEnabled, offline;
@@ -1474,18 +1474,13 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
           latencyCount = states[i].motionLatencyHistoryCount;
           for (size_t j = 0; j < latencyCount; j++) latencySum += states[i].motionLatencyHistory[j];
         }
-        msg += String(cameras[i].name) + ": " + (alertsEnabled ? "ON" : "OFF");
-        if (offline) msg += " - OFFLINE";
+        String timerSuffix;
         if (revertDueMs != 0 && (long)(millis() - revertDueMs) < 0) {
-          msg += " (auto " + String(revertToOn ? "ON" : "OFF") + " in " +
-                 formatUptime(revertDueMs - millis()) + ")";
+          timerSuffix = trTimerSuffix(sender.language, !revertToOn, revertDueMs - millis());
         }
-        // Condensed on purpose - just the average, not min/max/count (see
-        // the Cameras page's own click-to-reveal rollup for the full
-        // breakdown) - /status is meant to stay a compact, phone-readable
-        // per-camera list, not a diagnostics dump.
-        if (latencyCount > 0) msg += " ~" + String(latencySum / latencyCount) + "ms";
-        msg += "\n";
+        long avgLatencyMs = latencyCount > 0 ? (long)(latencySum / latencyCount) : -1;
+        msg += trStatusCameraLine(sender.language, cameras[i].name, alertsEnabled, offline, timerSuffix,
+                                   avgLatencyMs) + "\n";
       }
       Serial.printf("[Telegram] Replying to user \"%s\" with camera status.\n", sender.name.c_str());
       sendTelegramMessageTo(sender.chatId, msg);
@@ -1494,7 +1489,7 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
 
     case TelegramCommand::Uptime:
       Serial.printf("[Telegram] Replying to user \"%s\" with uptime.\n", sender.name.c_str());
-      sendTelegramMessageTo(sender.chatId, "Uptime: " + formatUptime(millis()));
+      sendTelegramMessageTo(sender.chatId, trUptimeLine(sender.language, millis()));
       return;
 
     case TelegramCommand::Reset:
@@ -1505,7 +1500,7 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
       saveLastUpdateId(lastUpdateId);
       // Reply before restarting - ESP.restart() never returns, so this is
       // the last chance to confirm the command was actually received.
-      sendTelegramMessageTo(sender.chatId, "\xE2\x99\xBB\xEF\xB8\x8F Rebooting now...");
+      sendTelegramMessageTo(sender.chatId, trRebootingNow(sender.language));
       delay(500); // let the TLS send above finish flushing before the reboot tears down WiFi
       // ESP.restart() doesn't wait for other FreeRTOS tasks to finish
       // whatever they're doing - if a camera task is mid-write to SD at
@@ -1524,26 +1519,8 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
 
     case TelegramCommand::Help: {
       Serial.printf("[Telegram] Replying to user \"%s\" with /help.\n", sender.name.c_str());
-      String msg =
-          "/status - list every camera's alert status\n"
-          "/uptime - board uptime\n"
-          "/on <camera|all> [duration] - resume alerts\n"
-          "/off <camera|all> [duration] - mute alerts\n"
-          "/snap <camera|all> - fresh photo now, ignoring mute/cooldown\n"
-          "/on, /off, or /snap with no camera name shows a tappable button "
-          "picker instead (permanent on/off/snap only, no duration timer)\n"
-          "/health - board health (heap, PSRAM, NVS, WiFi signal, SD storage)\n"
-          "/log [N] - the N most recent Activity log entries (default 10, max " +
-          String((unsigned)EVENT_LOG_CAPACITY) + ")\n"
-          "/reset - reboot the board immediately\n"
-          "/help - this message\n\n"
-          "<camera> matches by name or prefix; \"all\" applies to every enabled camera.\n"
-          "[duration] is optional: a number of minutes (max " + String(MAX_DURATION_MINUTES) +
-          "), or a 24h clock time like \"23:00\" (next occurrence - tomorrow if that time already "
-          "passed today). Omitted means permanent.\n\n"
-          "Your permissions: canCommand=" + String(sender.canCommand ? "yes" : "no") +
-          ", canSnap=" + String(sender.canSnap ? "yes" : "no") +
-          ", canReset=" + String(sender.canReset ? "yes" : "no");
+      String msg = trHelpText(sender.language, (uint16_t)EVENT_LOG_CAPACITY, MAX_DURATION_MINUTES,
+                               sender.canCommand, sender.canSnap, sender.canReset);
       sendTelegramMessageTo(sender.chatId, msg);
       return;
     }
@@ -1555,28 +1532,27 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
       bool haveNvsStats = (nvs_get_stats(NULL, &nvsStats) == ESP_OK) && nvsStats.total_entries > 0;
 
       SdStatus sd = getSdStatus();
-      String sdLine;
+      String sdDetail;
       if (!sd.settingEnabled) {
-        sdLine = "disabled (PSRAM-only snapshot history)";
+        sdDetail = trSdDisabledDetail(sender.language);
       } else if (!sd.available) {
-        sdLine = "enabled but not detected (PSRAM-only fallback active)";
+        sdDetail = trSdNotDetectedDetail(sender.language);
       } else {
-        sdLine = sd.cardTypeName + ", " + String((double)sd.usedBytes / (1024.0 * 1024.0), 1) +
-                 " MB / " + String((double)sd.totalBytes / (1024.0 * 1024.0), 1) + " MB used";
+        sdDetail = trSdDetail(sender.language, sd.cardTypeName, (double)sd.usedBytes / (1024.0 * 1024.0),
+                               (double)sd.totalBytes / (1024.0 * 1024.0));
       }
 
-      String msg = "Board health:\n";
-      msg += "Uptime: " + formatUptime(millis()) + "\n";
-      msg += "Free heap: " + String(ESP.getFreeHeap()) + " bytes (min ever: " +
-             String(ESP.getMinFreeHeap()) + ")\n";
-      msg += "Free PSRAM: " + String((unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM)) + " bytes\n";
+      String msg = trHealthHeader(sender.language) + "\n";
+      msg += trUptimeLine(sender.language, millis()) + "\n";
+      msg += trFreeHeapLine(sender.language, ESP.getFreeHeap(), ESP.getMinFreeHeap()) + "\n";
+      msg += trFreePsramLine(sender.language, (uint32_t)heap_caps_get_free_size(MALLOC_CAP_SPIRAM)) + "\n";
       if (haveNvsStats) {
         unsigned pct = (unsigned)((uint64_t)nvsStats.used_entries * 100 / nvsStats.total_entries);
-        msg += "NVS usage: " + String(pct) + "% (" + String((unsigned)nvsStats.used_entries) + " / " +
+        msg += trNvsUsageLine(sender.language, pct) + " (" + String((unsigned)nvsStats.used_entries) + " / " +
                String((unsigned)nvsStats.total_entries) + " entries)\n";
       }
-      msg += "WiFi signal: " + String(WiFi.RSSI()) + " dBm\n";
-      msg += "SD storage: " + sdLine;
+      msg += trWifiSignalLine(sender.language, WiFi.RSSI()) + "\n";
+      msg += trSdStorageLine(sender.language, sdDetail);
 
       sendTelegramMessageTo(sender.chatId, msg);
       return;
@@ -1588,15 +1564,18 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
       if (count > (long)EVENT_LOG_CAPACITY) count = (long)EVENT_LOG_CAPACITY;
 
       std::vector<EventLogEntry> events = recentEvents(); // oldest-first
-      String msg = "Recent activity:\n";
+      String msg = trLogHeader(sender.language) + "\n";
       if (events.empty()) {
-        msg += "Nothing logged yet.";
+        msg += trLogEmpty(sender.language);
       } else {
         // Newest first, same as webserver_activity.cpp's render - reverse
-        // iterate, capped at `count`.
+        // iterate, capped at `count`. Only the elapsed-time prefix is
+        // translated - it->text is the Activity Log's own stored text,
+        // which stays English everywhere (see lib/telegram_i18n.h's own
+        // comment on why).
         long shown = 0;
         for (auto it = events.rbegin(); it != events.rend() && shown < count; ++it, ++shown) {
-          msg += formatElapsedSince(it->ms, millis()) + " - " + it->text + "\n";
+          msg += trElapsedSince(sender.language, it->ms, millis()) + " - " + it->text + "\n";
         }
       }
       Serial.printf("[Telegram] Replying to user \"%s\" with /log.\n", sender.name.c_str());
@@ -1641,15 +1620,14 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
     for (size_t idx : matches) { if (list.length() > 0) list += ", "; list += cameras[idx].name; }
     Serial.printf("[Telegram] /%s target \"%s\" from user \"%s\" is ambiguous: %s\n", verb.c_str(),
                   parsed.cameraName.c_str(), sender.name.c_str(), list.c_str());
-    sendTelegramMessageTo(sender.chatId, "\"" + parsed.cameraName + "\" matches more than one camera: " + list +
-                                          " - be more specific.");
+    sendTelegramMessageTo(sender.chatId, trAmbiguousCamera(sender.language, parsed.cameraName, list));
     return;
   }
 
   if (matches.empty()) {
     Serial.printf("[Telegram] /%s target not found or disabled: \"%s\" (user \"%s\")\n", verb.c_str(),
                   parsed.cameraName.c_str(), sender.name.c_str());
-    sendTelegramMessageTo(sender.chatId, "Unknown or disabled camera: " + parsed.cameraName);
+    sendTelegramMessageTo(sender.chatId, trUnknownCamera(sender.language, parsed.cameraName));
     return;
   }
 
@@ -1658,7 +1636,7 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
   if (parsed.command == TelegramCommand::Snap) {
     Serial.printf("[%s] On-demand snapshot requested by user \"%s\" via Telegram.\n",
                   cameras[i].name.c_str(), sender.name.c_str());
-    sendOnDemandSnapshot(cameras[i], states[i], sender.chatId);
+    sendOnDemandSnapshot(cameras[i], states[i], sender.chatId, sender.language);
     return;
   }
 
@@ -1669,7 +1647,7 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
   // camera name (see parseTelegramCommand's comment). See resolveAlertTimer's
   // own comment for why the actual parsing lives there, shared with the
   // "/on all"/"/off all" path (handleAllCamerasCommand) above.
-  AlertTimer timer = resolveAlertTimer(parsed.durationText, turnOn);
+  AlertTimer timer = resolveAlertTimer(parsed.durationText, turnOn, sender.language);
   if (!timer.ok) {
     Serial.printf("[Telegram] /%s target \"%s\" from user \"%s\" has an unparseable duration \"%s\".\n",
                   verb.c_str(), cameras[i].name.c_str(), sender.name.c_str(), parsed.durationText.c_str());
@@ -1677,7 +1655,7 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
     return;
   }
 
-  applyOnOffToCamera(cameras[i], states[i], i, turnOn, timer, sender.name, sender.chatId);
+  applyOnOffToCamera(cameras[i], states[i], i, turnOn, timer, sender.name, sender.chatId, sender.language);
 }
 
 // Handles an inline-keyboard button tap (sendCameraPickerKeyboard above) -
@@ -1699,15 +1677,15 @@ static void handleTelegramCallbackQuery(const TelegramUser& sender, const Telegr
   else {
     Serial.printf("[Telegram] Unrecognized callback_data \"%s\" from user \"%s\".\n",
                   upd.callbackData.c_str(), sender.name.c_str());
-    answerTelegramCallback(upd.callbackQueryId, "Unrecognized action.");
+    answerTelegramCallback(upd.callbackQueryId, trCallbackUnrecognized(sender.language));
     return;
   }
 
   bool authorized = (command == TelegramCommand::Snap) ? sender.canSnap : sender.canCommand;
   if (!authorized) {
     Serial.printf("[Telegram] User \"%s\" not authorized for the %s button.\n", sender.name.c_str(), verb.c_str());
-    answerTelegramCallback(upd.callbackQueryId, "Not authorized.");
-    sendTelegramMessageTo(sender.chatId, "You're not authorized to use " + commandDisplayName(command) + ".");
+    answerTelegramCallback(upd.callbackQueryId, trCallbackNotAuthorized(sender.language));
+    sendTelegramMessageTo(sender.chatId, trNotAuthorized(sender.language, commandDisplayName(command)));
     return;
   }
 
@@ -1744,23 +1722,23 @@ static void handleTelegramCallbackQuery(const TelegramUser& sender, const Telegr
     // available" reply, not a crash.
     Serial.printf("[Telegram] Callback target camera \"%s\" no longer available (user \"%s\").\n",
                   target.c_str(), sender.name.c_str());
-    answerTelegramCallback(upd.callbackQueryId, "That camera is no longer available.");
-    sendTelegramMessageTo(sender.chatId, "\"" + target + "\" is no longer available - it may have been "
-                                          "renamed, deleted, or disabled since this button was sent.");
+    answerTelegramCallback(upd.callbackQueryId, trCallbackCameraGone(sender.language));
+    sendTelegramMessageTo(sender.chatId, trCameraNoLongerAvailable(sender.language, target));
     return;
   }
 
   if (command == TelegramCommand::Snap) {
     Serial.printf("[%s] On-demand snapshot requested by user \"%s\" via button.\n",
                   cameras[idx].name.c_str(), sender.name.c_str());
-    sendOnDemandSnapshot(cameras[idx], states[idx], sender.chatId);
+    sendOnDemandSnapshot(cameras[idx], states[idx], sender.chatId, sender.language);
     answerTelegramCallback(upd.callbackQueryId, "");
     return;
   }
 
   bool turnOn = (command == TelegramCommand::On);
   AlertTimer permanent; // default-constructed: ok=true, hasTimer=false, suffix="" - buttons are permanent only
-  applyOnOffToCamera(cameras[idx], states[idx], (size_t)idx, turnOn, permanent, sender.name, sender.chatId);
+  applyOnOffToCamera(cameras[idx], states[idx], (size_t)idx, turnOn, permanent, sender.name, sender.chatId,
+                      sender.language);
   answerTelegramCallback(upd.callbackQueryId, "");
 }
 
@@ -1796,7 +1774,10 @@ void checkScheduledAlertReverts(const CameraConfig cameras[], CameraState states
     Serial.printf("[%s] Timed alert window expired - alerts turned %s automatically.\n",
                   cameras[i].name.c_str(), revertToOn ? "ON" : "OFF");
     logEvent(String(cameras[i].name) + " alerts: " + (revertToOn ? "ON" : "OFF") + " (timer expired)");
-    sendTelegramMessage(String(cameras[i].name) + " alerts: " + (revertToOn ? "ON" : "OFF") + " (timer expired)");
+    String cameraName = cameras[i].name;
+    sendTelegramMessage([cameraName, revertToOn](TelegramLang lang) {
+      return trAlertsState(lang, cameraName, revertToOn, trTimerExpiredSuffix(lang));
+    });
     esp_task_wdt_reset();
   }
 }
