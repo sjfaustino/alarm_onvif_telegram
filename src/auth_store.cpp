@@ -17,6 +17,20 @@ DashboardAuth loadDashboardAuth() {
   // namespace the first time this runs, silencing that spam for good -
   // getString's own defaults below still apply either way.
   prefs.begin(NVS_NAMESPACE, false);
+  // One level deeper than the read-write begin() above: getString() on a
+  // key that's never been written ALSO logs its own "[E][Preferences.cpp]
+  // getString(): nvs_get_str len fail: ... NOT_FOUND" on every single
+  // call, not just once - same "no dashboard password ever set" common
+  // case, hit on every page render since this is called from renderShell().
+  // isKey() (-> getType(), which only probes via the raw nvs_get_* C
+  // calls) logs nothing on a miss, unlike getString() itself, so it's
+  // safe to use as a silent existence check here. Seeding an empty
+  // default the first time either key is missing makes every getString()
+  // call from here on a normal hit instead of a NOT_FOUND miss - the
+  // effective value ("" for "no password set") is identical either way,
+  // this only silences the logging.
+  if (!prefs.isKey(NVS_KEY_USER)) prefs.putString(NVS_KEY_USER, "");
+  if (!prefs.isKey(NVS_KEY_PASS)) prefs.putString(NVS_KEY_PASS, "");
   DashboardAuth auth;
   auth.username = prefs.getString(NVS_KEY_USER, "");
   auth.password = prefs.getString(NVS_KEY_PASS, "");
