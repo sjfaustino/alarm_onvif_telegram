@@ -178,15 +178,16 @@ static String describeResetReason() {
   }
 }
 
-// Portuguese counterpart of describeResetReason() above, used only for the
-// boot Telegram message (Serial always stays English - see that function's
-// own comment on why this table isn't in lib/telegram_i18n).
+// European Portuguese (pt-PT) counterpart of describeResetReason() above,
+// used only for the boot Telegram message (Serial always stays English -
+// see that function's own comment on why this table isn't in
+// lib/telegram_i18n).
 static String describeResetReasonPt() {
   switch (esp_reset_reason()) {
     case ESP_RST_POWERON:   return "liga\xC3\xA7\xC3\xA3o";
     case ESP_RST_EXT:       return "pino de reset externo";
     case ESP_RST_SW:        return "software (comando /reset, uma atualiza\xC3\xA7\xC3\xA3o de firmware, ou um "
-                                    "reinicio pela p\xC3\xA1gina Manuten\xC3\xA7\xC3\xA3o)";
+                                    "rein\xC3\xAD" "cio a partir da p\xC3\xA1gina Manuten\xC3\xA7\xC3\xA3o)";
     case ESP_RST_PANIC:     return "PANIC (falha)";
     case ESP_RST_INT_WDT:   return "watchdog de interrup\xC3\xA7\xC3\xA3o";
     case ESP_RST_TASK_WDT:  return "watchdog de tarefa (uma tarefa travou - veja initWatchdog())";
