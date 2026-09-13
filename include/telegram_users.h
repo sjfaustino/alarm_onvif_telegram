@@ -39,6 +39,17 @@ struct TelegramUser {
   // user, since it's disruptive rather than just informational/control.
   bool canReset = false;
 
+  // May send /backup (sends the current config export - see
+  // webserver_security.h's buildConfigExport - as a Telegram document).
+  // Independent of canCommand/canSnap/canReset and, like canReset, NOT
+  // granted to the auto-seeded Admin user by default (see
+  // loadTelegramUsers()) - the export's machine-readable section includes
+  // every camera's own username/password (WiFi credentials are never
+  // exported at all, unlike camera ones - see buildConfigExport's own
+  // comment), arguably more sensitive than a reboot, so this has to be
+  // turned on deliberately even for the first user.
+  bool canBackup = false;
+
   // Enforced as a minimum gap between this user's commands
   // (60000/maxCommandsPerMinute ms - see telegram.cpp's rate-limit check in
   // handleTelegramCommand), not a true rolling-window count: O(1) in-RAM

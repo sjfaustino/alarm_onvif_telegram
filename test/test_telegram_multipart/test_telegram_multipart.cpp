@@ -68,6 +68,51 @@ void test_buildMultipart_zero_length_photo(void) {
   TEST_ASSERT_EQUAL_UINT32(m.head.length() + m.tail.length(), m.contentLength);
 }
 
+void test_buildDocumentMultipart_requestLine_has_bot_token_and_endpoint(void) {
+  TelegramMultipart m = buildDocumentMultipart(100, "caption", "12345", "TESTTOKEN", "backup.txt");
+  TEST_ASSERT_TRUE(m.requestLine.startsWith("POST /botTESTTOKEN/sendDocument HTTP/1.1\r\n"));
+  TEST_ASSERT_TRUE(m.requestLine.indexOf("Host: api.telegram.org\r\n") >= 0);
+}
+
+// Same independently-authored-expected-bytes reasoning as
+// test_buildMultipart_head_and_tail_match_expected_bytes_exactly above.
+void test_buildDocumentMultipart_head_and_tail_match_expected_bytes_exactly(void) {
+  TelegramMultipart m = buildDocumentMultipart(1234, "hi", "98765", "T", "config.txt");
+  String boundary = "----ESP32Boundary7MA4YWxk"; // the fixed literal buildDocumentMultipart always uses
+
+  String expectedHead =
+      "--" + boundary + "\r\n" +
+      "Content-Disposition: form-data; name=\"chat_id\"\r\n\r\n98765\r\n" +
+      "--" + boundary + "\r\n" +
+      "Content-Disposition: form-data; name=\"caption\"\r\n\r\nhi\r\n" +
+      "--" + boundary + "\r\n" +
+      "Content-Disposition: form-data; name=\"document\"; filename=\"config.txt\"\r\n" +
+      "Content-Type: text/plain\r\n\r\n";
+  String expectedTail = "\r\n--" + boundary + "--\r\n";
+
+  TEST_ASSERT_EQUAL_STRING(expectedHead.c_str(), m.head.c_str());
+  TEST_ASSERT_EQUAL_STRING(expectedTail.c_str(), m.tail.c_str());
+
+  size_t expectedContentLength = expectedHead.length() + 1234 + expectedTail.length();
+  TEST_ASSERT_EQUAL_UINT32(expectedContentLength, m.contentLength);
+  TEST_ASSERT_TRUE(m.requestLine.indexOf("Content-Length: " + String((unsigned long)expectedContentLength)) >= 0);
+}
+
+// contentType defaults to "text/plain" but is overridable - not exercised
+// by any real caller yet, but this is the whole reason it's a parameter
+// rather than hardcoded like buildMultipart's "image/jpeg".
+void test_buildDocumentMultipart_custom_content_type(void) {
+  TelegramMultipart m = buildDocumentMultipart(0, "c", "1", "T", "data.json", "application/json");
+  TEST_ASSERT_TRUE(m.head.indexOf("Content-Type: application/json\r\n\r\n") >= 0);
+}
+
+void test_buildDocumentMultipart_boundary_consistent_across_head_tail_and_header(void) {
+  TelegramMultipart m = buildDocumentMultipart(0, "c", "1", "T", "f.txt");
+  TEST_ASSERT_TRUE(m.head.indexOf("--" + m.boundary + "\r\n") >= 0);
+  TEST_ASSERT_TRUE(m.tail.indexOf("--" + m.boundary + "--\r\n") >= 0);
+  TEST_ASSERT_TRUE(m.requestLine.indexOf("boundary=" + m.boundary) >= 0);
+}
+
 int main(int argc, char** argv) {
   UNITY_BEGIN();
   RUN_TEST(test_buildMultipart_requestLine_has_bot_token_and_endpoint);
@@ -75,5 +120,9 @@ int main(int argc, char** argv) {
   RUN_TEST(test_buildMultipart_head_contains_chat_id_and_caption);
   RUN_TEST(test_buildMultipart_boundary_consistent_across_head_tail_and_header);
   RUN_TEST(test_buildMultipart_zero_length_photo);
+  RUN_TEST(test_buildDocumentMultipart_requestLine_has_bot_token_and_endpoint);
+  RUN_TEST(test_buildDocumentMultipart_head_and_tail_match_expected_bytes_exactly);
+  RUN_TEST(test_buildDocumentMultipart_custom_content_type);
+  RUN_TEST(test_buildDocumentMultipart_boundary_consistent_across_head_tail_and_header);
   return UNITY_END();
 }

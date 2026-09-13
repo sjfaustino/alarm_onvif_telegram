@@ -352,6 +352,7 @@ String buildConfigExport() {
     out += "    Can command (/on /off /status /uptime): " + String(u.canCommand ? "yes" : "no") + "\n";
     out += "    Can snap (/snap): " + String(u.canSnap ? "yes" : "no") + "\n";
     out += "    Can reset (/reset): " + String(u.canReset ? "yes" : "no") + "\n";
+    out += "    Can backup (/backup): " + String(u.canBackup ? "yes" : "no") + "\n";
   }
   out += "### TELEGRAM_USERS v" + String(TELEGRAM_USER_SCHEMA_VERSION) + "\n";
   for (auto& u : users) out += serializeUser(u) + "\n";

@@ -240,6 +240,10 @@ void test_requiredPermissionForCommand_reset_needs_reset(void) {
   TEST_ASSERT_TRUE(TelegramCommandPermission::Reset == requiredPermissionForCommand(TelegramCommand::Reset));
 }
 
+void test_requiredPermissionForCommand_backup_needs_backup(void) {
+  TEST_ASSERT_TRUE(TelegramCommandPermission::Backup == requiredPermissionForCommand(TelegramCommand::Backup));
+}
+
 void test_requiredPermissionForCommand_unknown_needs_unknown(void) {
   TEST_ASSERT_TRUE(TelegramCommandPermission::Unknown == requiredPermissionForCommand(TelegramCommand::Unknown));
 }
@@ -264,6 +268,12 @@ void test_parseTelegramCommand_reset(void) {
   ParsedTelegramCommand p = parseTelegramCommand("/reset");
   TEST_ASSERT_TRUE(TelegramCommand::Reset == p.command);
   TEST_ASSERT_TRUE(TelegramCommandPermission::Reset == p.requiredPermission);
+}
+
+void test_parseTelegramCommand_backup(void) {
+  ParsedTelegramCommand p = parseTelegramCommand("/backup");
+  TEST_ASSERT_TRUE(TelegramCommand::Backup == p.command);
+  TEST_ASSERT_TRUE(TelegramCommandPermission::Backup == p.requiredPermission);
 }
 
 void test_parseTelegramCommand_on_extracts_and_trims_camera_name(void) {
@@ -531,6 +541,7 @@ void test_commandDisplayName_every_command(void) {
   TEST_ASSERT_EQUAL_STRING("/health", commandDisplayName(TelegramCommand::Health).c_str());
   TEST_ASSERT_EQUAL_STRING("/log", commandDisplayName(TelegramCommand::Log).c_str());
   TEST_ASSERT_EQUAL_STRING("/lang", commandDisplayName(TelegramCommand::Lang).c_str());
+  TEST_ASSERT_EQUAL_STRING("/backup", commandDisplayName(TelegramCommand::Backup).c_str());
   TEST_ASSERT_EQUAL_STRING("", commandDisplayName(TelegramCommand::Unknown).c_str());
 }
 
@@ -560,10 +571,12 @@ int main(int argc, char** argv) {
   RUN_TEST(test_requiredPermissionForCommand_status_uptime_on_off_need_command);
   RUN_TEST(test_requiredPermissionForCommand_snap_needs_snap);
   RUN_TEST(test_requiredPermissionForCommand_reset_needs_reset);
+  RUN_TEST(test_requiredPermissionForCommand_backup_needs_backup);
   RUN_TEST(test_requiredPermissionForCommand_unknown_needs_unknown);
   RUN_TEST(test_parseTelegramCommand_status);
   RUN_TEST(test_parseTelegramCommand_uptime);
   RUN_TEST(test_parseTelegramCommand_reset);
+  RUN_TEST(test_parseTelegramCommand_backup);
   RUN_TEST(test_parseTelegramCommand_on_extracts_and_trims_camera_name);
   RUN_TEST(test_parseTelegramCommand_off);
   RUN_TEST(test_parseTelegramCommand_snap);

@@ -113,8 +113,14 @@ String trStatusHeader(TelegramLang lang);
 String trStatusCameraLine(TelegramLang lang, const String& cameraName, bool alertsEnabled, bool offline,
                             const String& timerSuffix, long avgLatencyMs);
 String trRebootingNow(TelegramLang lang);
+// /backup command - trBackupCaption is the document's own caption text;
+// trBackupFailed is sent as a plain text fallback if the send itself fails
+// (e.g. WAN blip mid-upload - the export text is cheap to regenerate, so
+// this just tells the sender to try again rather than being retry-queued).
+String trBackupCaption(TelegramLang lang);
+String trBackupFailed(TelegramLang lang);
 String trHelpText(TelegramLang lang, uint16_t eventLogCapacity, uint16_t maxDurationMinutes,
-                    bool canCommand, bool canSnap, bool canReset);
+                    bool canCommand, bool canSnap, bool canReset, bool canBackup);
 String trHealthHeader(TelegramLang lang);
 String trFreePsramLine(TelegramLang lang, uint32_t freeBytes);
 // "SD storage: {sdDetailText}" - sdDetailText is one of the three below, pre-localized by the caller.

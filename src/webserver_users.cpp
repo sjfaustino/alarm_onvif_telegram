@@ -50,6 +50,11 @@ static String renderTelegramUserForm(const TelegramUser& v, const std::vector<Ca
           String(v.canReset ? " checked" : "") +
           "> May send /reset (reboots the board immediately) - independent of the permissions "
           "above, off by default even for a new user</label>";
+  html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"canBackup\"" +
+          String(v.canBackup ? " checked" : "") +
+          "> May send /backup (sends the full config export as a file - includes every camera's own "
+          "username/password, though never the WiFi password) - independent of the permissions "
+          "above, off by default even for a new user</label>";
   html += "<label>Max commands per minute (0 = unlimited)"
           "<input type=\"text\" name=\"maxCommandsPerMinute\" value=\"" + String(v.maxCommandsPerMinute) +
           "\"></label>";
@@ -78,7 +83,8 @@ String renderUsersPanel(const TelegramUser* prefill, bool isEdit) {
 
   String html = "<h1>Telegram Users</h1>";
   html += "<table><tr><th>Name</th><th>Chat ID</th><th>Cameras</th><th>Language</th>"
-          "<th>System Messages</th><th>Can Command</th><th>Can Snap</th><th>Can Reset</th><th></th></tr>";
+          "<th>System Messages</th><th>Can Command</th><th>Can Snap</th><th>Can Reset</th>"
+          "<th>Can Backup</th><th></th></tr>";
   for (auto& u : users) {
     String camerasCol;
     if (u.allCameras) {
@@ -96,7 +102,7 @@ String renderUsersPanel(const TelegramUser* prefill, bool isEdit) {
     html += "<tr><td>" + htmlEscape(u.name) + "</td><td>" + htmlEscape(u.chatId) + "</td><td>" +
             camerasCol + "</td><td>" + languageCol + "</td><td>" + yesNoBadge(u.systemMessages) + "</td><td>" +
             yesNoBadge(u.canCommand) + "</td><td>" + yesNoBadge(u.canSnap) + "</td><td>" +
-            yesNoBadge(u.canReset) + "</td><td>";
+            yesNoBadge(u.canReset) + "</td><td>" + yesNoBadge(u.canBackup) + "</td><td>";
     html += renderEditDeleteActions("/users/edit?name=", "/users/delete", u.name) + "</td></tr>";
   }
   html += "</table>";
@@ -213,6 +219,7 @@ TelegramUser parseUserForm(PsychicRequest* request) {
   u.canCommand     = request->hasParam("canCommand");
   u.canSnap        = request->hasParam("canSnap");
   u.canReset       = request->hasParam("canReset");
+  u.canBackup      = request->hasParam("canBackup");
 
   // 0 is the deliberate, meaningful "unlimited" value - never substitute
   // it away, only clamp a negative (not reachable from a plain number

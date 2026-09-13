@@ -17,3 +17,15 @@ struct TelegramMultipart {
 // this stays pure/testable without a real secrets.h value.
 TelegramMultipart buildMultipart(size_t jpgLen, const String& caption, const String& chatId,
                                   const char* botToken);
+
+// Same shape as buildMultipart above, but for Telegram's sendDocument
+// endpoint instead of sendPhoto - an arbitrary file attachment (the "/backup"
+// command's config-export text file, telegram.cpp) rather than always a
+// JPEG. fileLen only feeds contentLength, same reasoning as jpgLen above;
+// the file bytes themselves are streamed separately by the caller.
+// contentType defaults to "text/plain" - the only kind this project sends
+// today - but is a parameter rather than hardcoded, matching this being a
+// generic document builder, not a config-export-specific one.
+TelegramMultipart buildDocumentMultipart(size_t fileLen, const String& caption, const String& chatId,
+                                          const char* botToken, const String& filename,
+                                          const String& contentType = "text/plain");

@@ -405,8 +405,24 @@ String trRebootingNow(TelegramLang lang) {
   return "\xE2\x99\xBB\xEF\xB8\x8F Rebooting now...";
 }
 
+String trBackupCaption(TelegramLang lang) {
+  if (lang == TelegramLang::Portuguese) {
+    return "\xF0\x9F\x93\xA6 C\xC3\xB3pia de seguran\xC3\xA7" "a da configura\xC3\xA7\xC3\xA3o - inclui "
+           "utilizador/palavra-passe de cada c\xC3\xA2mara, nunca a palavra-passe WiFi.";
+  }
+  return "\xF0\x9F\x93\xA6 Config backup - includes each camera's own username/password, never the "
+         "WiFi password.";
+}
+
+String trBackupFailed(TelegramLang lang) {
+  if (lang == TelegramLang::Portuguese) {
+    return "\xE2\x9A\xA0\xEF\xB8\x8F Falha ao enviar a c\xC3\xB3pia de seguran\xC3\xA7" "a - tente novamente.";
+  }
+  return "\xE2\x9A\xA0\xEF\xB8\x8F Failed to send the backup - try again.";
+}
+
 String trHelpText(TelegramLang lang, uint16_t eventLogCapacity, uint16_t maxDurationMinutes,
-                    bool canCommand, bool canSnap, bool canReset) {
+                    bool canCommand, bool canSnap, bool canReset, bool canBackup) {
   bool pt = lang == TelegramLang::Portuguese;
   if (pt) {
     return
@@ -421,6 +437,8 @@ String trHelpText(TelegramLang lang, uint16_t eventLogCapacity, uint16_t maxDura
         "/log [N] - as N entradas mais recentes do log de atividades (padr\xC3\xA3o 10, m\xC3\xA1x " +
         String(eventLogCapacity) + ")\n"
         "/reset - reinicia a placa imediatamente\n"
+        "/backup - envia a configura\xC3\xA7\xC3\xA3o atual como ficheiro (inclui utilizador/palavra-passe "
+        "de cada c\xC3\xA2mara, nunca a palavra-passe WiFi - use com cuidado)\n"
         "/lang [en|pt] - muda o seu idioma (sem argumento mostra um menu)\n"
         "/help - esta mensagem\n\n"
         "<c\xC3\xA2mara> corresponde por nome ou prefixo; \"all\" aplica a todas as c\xC3\xA2maras "
@@ -430,7 +448,7 @@ String trHelpText(TelegramLang lang, uint16_t eventLogCapacity, uint16_t maxDura
         "ocorr\xC3\xAAncia - amanh\xC3\xA3 se essa hora j\xC3\xA1 passou hoje). Se omitido, \xC3\xA9 "
         "permanente.\n\n"
         "As suas permiss\xC3\xB5""es: canCommand=" + yesNo(pt, canCommand) + ", canSnap=" + yesNo(pt, canSnap) +
-        ", canReset=" + yesNo(pt, canReset);
+        ", canReset=" + yesNo(pt, canReset) + ", canBackup=" + yesNo(pt, canBackup);
   }
   return
       "/status - list every camera's alert status\n"
@@ -444,6 +462,8 @@ String trHelpText(TelegramLang lang, uint16_t eventLogCapacity, uint16_t maxDura
       "/log [N] - the N most recent Activity log entries (default 10, max " + String(eventLogCapacity) +
       ")\n"
       "/reset - reboot the board immediately\n"
+      "/backup - sends the current config as a file (includes each camera's own username/password, "
+      "never the WiFi password - handle with care)\n"
       "/lang [en|pt] - change your language (no argument shows a picker)\n"
       "/help - this message\n\n"
       "<camera> matches by name or prefix; \"all\" applies to every enabled camera.\n"
@@ -451,7 +471,7 @@ String trHelpText(TelegramLang lang, uint16_t eventLogCapacity, uint16_t maxDura
       "clock time like \"23:00\" (next occurrence - tomorrow if that time already passed today). Omitted "
       "means permanent.\n\n"
       "Your permissions: canCommand=" + yesNo(pt, canCommand) + ", canSnap=" + yesNo(pt, canSnap) +
-      ", canReset=" + yesNo(pt, canReset);
+      ", canReset=" + yesNo(pt, canReset) + ", canBackup=" + yesNo(pt, canBackup);
 }
 
 String trHealthHeader(TelegramLang lang) {

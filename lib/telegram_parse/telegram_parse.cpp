@@ -108,6 +108,7 @@ TelegramCommandPermission requiredPermissionForCommand(TelegramCommand command) 
     case TelegramCommand::Off:  return TelegramCommandPermission::Command;
     case TelegramCommand::Snap: return TelegramCommandPermission::Snap;
     case TelegramCommand::Reset: return TelegramCommandPermission::Reset;
+    case TelegramCommand::Backup: return TelegramCommandPermission::Backup;
     case TelegramCommand::Unknown:
     case TelegramCommand::Help:
     // A user's own display language is a personal preference, not camera
@@ -148,6 +149,8 @@ ParsedTelegramCommand parseTelegramCommand(const String& text) {
     result.command = TelegramCommand::Uptime;
   } else if (lower == "/reset") {
     result.command = TelegramCommand::Reset;
+  } else if (lower == "/backup") {
+    result.command = TelegramCommand::Backup;
   } else if (lower == "/help") {
     result.command = TelegramCommand::Help;
   } else if (lower == "/health") {
@@ -251,6 +254,7 @@ String commandDisplayName(TelegramCommand command) {
     case TelegramCommand::Health: return "/health";
     case TelegramCommand::Log:    return "/log";
     case TelegramCommand::Lang:   return "/lang";
+    case TelegramCommand::Backup: return "/backup";
     case TelegramCommand::Unknown: return "";
   }
   return ""; // unreachable if every enumerator above is handled

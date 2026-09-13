@@ -54,7 +54,7 @@ std::vector<size_t> matchCamerasByPrefix(const CameraConfig cameras[], size_t nu
 
 // The specific command a message's text was recognized as - Unknown means
 // it isn't a recognized command at all.
-enum class TelegramCommand { Unknown, Status, Uptime, Reset, On, Off, Snap, Help, Health, Log, Lang };
+enum class TelegramCommand { Unknown, Status, Uptime, Reset, On, Off, Snap, Help, Health, Log, Lang, Backup };
 
 // Which TelegramUser permission a command requires. The single source of
 // truth handleTelegramCommand's authorization check is built from, instead
@@ -64,7 +64,7 @@ enum class TelegramCommand { Unknown, Status, Uptime, Reset, On, Off, Snap, Help
 // default case - a new TelegramCommand added without a case here is a
 // build failure (-Werror=switch, scoped to this module's own
 // library.json, not project-wide - see platformio.ini's comment).
-enum class TelegramCommandPermission { Unknown, Command, Snap, Reset };
+enum class TelegramCommandPermission { Unknown, Command, Snap, Reset, Backup };
 TelegramCommandPermission requiredPermissionForCommand(TelegramCommand command);
 
 // One recognized command, already fully parsed. command is Unknown (and

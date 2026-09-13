@@ -273,18 +273,31 @@ void test_trRebootingNow(void) {
   TEST_ASSERT_TRUE(trRebootingNow(TelegramLang::English) != trRebootingNow(TelegramLang::Portuguese));
 }
 
+void test_trBackupCaption_and_trBackupFailed_differ_by_language(void) {
+  TEST_ASSERT_TRUE(trBackupCaption(TelegramLang::English) != trBackupCaption(TelegramLang::Portuguese));
+  TEST_ASSERT_TRUE(trBackupFailed(TelegramLang::English) != trBackupFailed(TelegramLang::Portuguese));
+  // Never let the caption claim WiFi is included - the whole point of
+  // saying so explicitly is that it's easy to get backwards (see
+  // buildConfigExport's own comment on WiFi passwords never being
+  // exported, unlike camera ones).
+  TEST_ASSERT_TRUE(trBackupCaption(TelegramLang::English).indexOf("never the WiFi password") >= 0);
+}
+
 void test_trHelpText_contains_dynamic_values_and_permissions(void) {
-  String en = trHelpText(TelegramLang::English, 50, 720, true, false, true);
+  String en = trHelpText(TelegramLang::English, 50, 720, true, false, true, false);
   TEST_ASSERT_TRUE(en.indexOf("50") >= 0);
   TEST_ASSERT_TRUE(en.indexOf("720") >= 0);
   TEST_ASSERT_TRUE(en.indexOf("canCommand=yes") >= 0);
   TEST_ASSERT_TRUE(en.indexOf("canSnap=no") >= 0);
   TEST_ASSERT_TRUE(en.indexOf("canReset=yes") >= 0);
+  TEST_ASSERT_TRUE(en.indexOf("canBackup=no") >= 0);
+  TEST_ASSERT_TRUE(en.indexOf("/backup") >= 0);
 
-  String pt = trHelpText(TelegramLang::Portuguese, 50, 720, true, false, true);
+  String pt = trHelpText(TelegramLang::Portuguese, 50, 720, true, false, true, false);
   TEST_ASSERT_TRUE(pt.indexOf("50") >= 0);
   TEST_ASSERT_TRUE(pt.indexOf("canCommand=sim") >= 0);
   TEST_ASSERT_TRUE(pt.indexOf("canSnap=n\xC3\xA3o") >= 0);
+  TEST_ASSERT_TRUE(pt.indexOf("canBackup=n\xC3\xA3o") >= 0);
   TEST_ASSERT_TRUE(en != pt);
 }
 
@@ -429,9 +442,9 @@ void test_trLanguageChangeFailed(void) {
 }
 
 void test_trHelpText_mentions_lang_command(void) {
-  String en = trHelpText(TelegramLang::English, 50, 720, true, true, true);
+  String en = trHelpText(TelegramLang::English, 50, 720, true, true, true, true);
   TEST_ASSERT_TRUE(en.indexOf("/lang") >= 0);
-  String pt = trHelpText(TelegramLang::Portuguese, 50, 720, true, true, true);
+  String pt = trHelpText(TelegramLang::Portuguese, 50, 720, true, true, true, true);
   TEST_ASSERT_TRUE(pt.indexOf("/lang") >= 0);
 }
 
@@ -469,6 +482,7 @@ int main(int argc, char** argv) {
   RUN_TEST(test_trNotAuthorized_and_trRateLimited);
   RUN_TEST(test_trStatusHeader_and_trStatusCameraLine);
   RUN_TEST(test_trRebootingNow);
+  RUN_TEST(test_trBackupCaption_and_trBackupFailed_differ_by_language);
   RUN_TEST(test_trHelpText_contains_dynamic_values_and_permissions);
   RUN_TEST(test_trHealthHeader_and_trFreePsramLine_and_trSdStorageLine);
   RUN_TEST(test_trSdDisabledDetail_and_trSdNotDetectedDetail_and_trSdDetail);

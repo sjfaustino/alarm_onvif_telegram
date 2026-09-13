@@ -12,6 +12,7 @@
 #include "sd_store.h"
 #include "quiet_hours.h"
 #include "telegram_retry_queue.h" // enqueueFailedTelegramMessage
+#include "webserver_security.h" // buildConfigExport - /backup command
 #include <esp_task_wdt.h>
 #include <ArduinoJson.h>
 #include <WiFi.h>
@@ -265,6 +266,56 @@ static bool sendTelegramPhotoBuffered(const uint8_t* jpg, size_t jpgLen, const S
   sent += writeAllBytes(client, (const uint8_t*)m.requestLine.c_str(), m.requestLine.length());
   sent += writeAllBytes(client, (const uint8_t*)m.head.c_str(), m.head.length());
   sent += writeAllBytes(client, jpg, jpgLen);
+  sent += writeAllBytes(client, (const uint8_t*)m.tail.c_str(), m.tail.length());
+
+  size_t expectedTotal = m.requestLine.length() + m.contentLength;
+  if (sent < expectedTotal) {
+    Serial.println("Write incomplete - server will never see the full request.");
+    client.stop();
+    return false;
+  }
+
+  return readTelegramResponse(client);
+}
+
+// Same shape as sendTelegramPhotoBuffered above, but for Telegram's
+// sendDocument endpoint (buildDocumentMultipart) - an arbitrary text file
+// already fully in RAM, for the /backup command's config-export
+// attachment. Single attempt, no retry-on-failure counterpart the way
+// photos have (sendTelegramPhotoWithRetry below) - /backup is an
+// explicit, low-frequency admin action the sender can just re-issue by
+// hand if it fails, unlike a motion alert that might never get another
+// chance.
+static bool sendTelegramDocumentBuffered(const String& content, const String& filename, const String& caption,
+                                          const String& chatId) {
+  if (content.length() == 0) return false;
+
+  // See g_telegramNetMutex's own comment.
+  TelegramNetLock netLock;
+  if (!netLock.held()) {
+    Serial.println("Telegram sendDocument: timed out waiting for Telegram send capacity - skipping.");
+    return false;
+  }
+
+  WiFiClientSecure client;
+  client.setCACert(TELEGRAM_ROOT_CA); // see telegram_ca.h if this needs refreshing
+  client.setHandshakeTimeout(HTTP_TIMEOUT_MS / 1000); // seconds, not ms - unlike every other timeout in this file
+  if (!client.connect("api.telegram.org", 443, HTTP_TIMEOUT_MS)) {
+    char errBuf[128];
+    client.lastError(errBuf, sizeof(errBuf));
+    Serial.printf("Could not connect to api.telegram.org - TLS/socket error: %s\n", errBuf);
+    if (!telegramCAConfigured()) {
+      Serial.println("  ^ TELEGRAM_ROOT_CA in telegram_ca.h is still the placeholder - fill it in.");
+    }
+    return false;
+  }
+
+  TelegramMultipart m = buildDocumentMultipart(content.length(), caption, chatId, TELEGRAM_BOT_TOKEN, filename);
+
+  size_t sent = 0;
+  sent += writeAllBytes(client, (const uint8_t*)m.requestLine.c_str(), m.requestLine.length());
+  sent += writeAllBytes(client, (const uint8_t*)m.head.c_str(), m.head.length());
+  sent += writeAllBytes(client, (const uint8_t*)content.c_str(), content.length());
   sent += writeAllBytes(client, (const uint8_t*)m.tail.c_str(), m.tail.length());
 
   size_t expectedTotal = m.requestLine.length() + m.contentLength;
@@ -1614,6 +1665,7 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
     case TelegramCommandPermission::Command: authorized = sender.canCommand; break;
     case TelegramCommandPermission::Snap:    authorized = sender.canSnap;    break;
     case TelegramCommandPermission::Reset:   authorized = sender.canReset;   break;
+    case TelegramCommandPermission::Backup:  authorized = sender.canBackup;  break;
     case TelegramCommandPermission::Unknown: authorized = false;             break;
   }
   // Logged here for every command now, including /status/uptime/reset -
@@ -1699,6 +1751,17 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
       ESP.restart();
       return; // unreachable - ESP.restart() doesn't return - kept for a tidy switch
 
+    case TelegramCommand::Backup: {
+      Serial.printf("[Telegram] Config backup requested by user \"%s\" via /backup.\n", sender.name.c_str());
+      String exportText = buildConfigExport();
+      if (!sendTelegramDocumentBuffered(exportText, "camera-monitor-config.txt",
+                                         trBackupCaption(sender.language), sender.chatId)) {
+        Serial.printf("[Telegram] Backup send to user \"%s\" failed.\n", sender.name.c_str());
+        sendTelegramMessageTo(sender.chatId, trBackupFailed(sender.language));
+      }
+      return;
+    }
+
     case TelegramCommand::On:
     case TelegramCommand::Off:
     case TelegramCommand::Snap:
@@ -1707,7 +1770,7 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
     case TelegramCommand::Help: {
       Serial.printf("[Telegram] Replying to user \"%s\" with /help.\n", sender.name.c_str());
       String msg = trHelpText(sender.language, (uint16_t)EVENT_LOG_CAPACITY, MAX_DURATION_MINUTES,
-                               sender.canCommand, sender.canSnap, sender.canReset);
+                               sender.canCommand, sender.canSnap, sender.canReset, sender.canBackup);
       sendTelegramMessageTo(sender.chatId, msg);
       return;
     }
