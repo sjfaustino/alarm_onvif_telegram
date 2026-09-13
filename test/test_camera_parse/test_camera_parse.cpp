@@ -65,6 +65,60 @@ void test_parseProfiles_skips_profile_missing_token(void) {
   TEST_ASSERT_EQUAL_INT(0, (int)profiles.size());
 }
 
+void test_parseProfiles_finds_video_encoding(void) {
+  String xml = "<trt:Profiles token=\"P1\"><tt:Name>Main</tt:Name>"
+               "<tt:VideoEncoderConfiguration token=\"VEC1\"><tt:Encoding>H264</tt:Encoding>"
+               "</tt:VideoEncoderConfiguration></trt:Profiles>";
+  auto profiles = parseProfiles(xml);
+  TEST_ASSERT_EQUAL_INT(1, (int)profiles.size());
+  TEST_ASSERT_EQUAL_STRING("H264", profiles[0].encoding.c_str());
+}
+
+// The whole point of this field - finding a camera's MJPEG-capable
+// profile (Cameras dashboard live-preview link) means distinguishing this
+// from an H264/H265-only profile.
+void test_parseProfiles_finds_jpeg_encoding(void) {
+  String xml = "<trt:Profiles token=\"P1\"><tt:Name>Sub</tt:Name>"
+               "<tt:VideoEncoderConfiguration token=\"VEC1\"><tt:Encoding>JPEG</tt:Encoding>"
+               "</tt:VideoEncoderConfiguration></trt:Profiles>";
+  auto profiles = parseProfiles(xml);
+  TEST_ASSERT_EQUAL_STRING("JPEG", profiles[0].encoding.c_str());
+}
+
+// A profile with no VideoEncoderConfiguration at all (audio/metadata-only,
+// or simply absent from a terse response) must leave encoding empty, not
+// pick up an unrelated element from later in the document.
+void test_parseProfiles_no_video_encoder_configuration_leaves_encoding_empty(void) {
+  String xml = "<trt:Profiles token=\"P1\"><tt:Name>Main</tt:Name></trt:Profiles>";
+  auto profiles = parseProfiles(xml);
+  TEST_ASSERT_EQUAL_STRING("", profiles[0].encoding.c_str());
+}
+
+// AudioEncoderConfiguration has its own Encoding element ("G711"/"AAC") -
+// a profile with only that (no VideoEncoderConfiguration) must not report
+// the audio codec as if it were the video one.
+void test_parseProfiles_ignores_audio_encoder_encoding(void) {
+  String xml = "<trt:Profiles token=\"P1\"><tt:Name>Main</tt:Name>"
+               "<tt:AudioEncoderConfiguration token=\"AEC1\"><tt:Encoding>G711</tt:Encoding>"
+               "</tt:AudioEncoderConfiguration></trt:Profiles>";
+  auto profiles = parseProfiles(xml);
+  TEST_ASSERT_EQUAL_STRING("", profiles[0].encoding.c_str());
+}
+
+// A later profile's VideoEncoderConfiguration must never leak into an
+// earlier profile that has none of its own - the profile-block bound
+// (nextProfilePos) is what prevents this.
+void test_parseProfiles_encoding_does_not_leak_across_profiles(void) {
+  String xml = "<trt:Profiles token=\"P1\"><tt:Name>NoEncoder</tt:Name></trt:Profiles>"
+               "<trt:Profiles token=\"P2\"><tt:Name>HasEncoder</tt:Name>"
+               "<tt:VideoEncoderConfiguration token=\"VEC1\"><tt:Encoding>H264</tt:Encoding>"
+               "</tt:VideoEncoderConfiguration></trt:Profiles>";
+  auto profiles = parseProfiles(xml);
+  TEST_ASSERT_EQUAL_INT(2, (int)profiles.size());
+  TEST_ASSERT_EQUAL_STRING("", profiles[0].encoding.c_str());
+  TEST_ASSERT_EQUAL_STRING("H264", profiles[1].encoding.c_str());
+}
+
 // ---- extractEventStateValue ----
 
 void test_extractEventStateValue_finds_State_value(void) {
@@ -333,6 +387,11 @@ int main(int argc, char** argv) {
   RUN_TEST(test_parseProfiles_missing_name_leaves_it_empty);
   RUN_TEST(test_parseProfiles_no_profiles_returns_empty);
   RUN_TEST(test_parseProfiles_skips_profile_missing_token);
+  RUN_TEST(test_parseProfiles_finds_video_encoding);
+  RUN_TEST(test_parseProfiles_finds_jpeg_encoding);
+  RUN_TEST(test_parseProfiles_no_video_encoder_configuration_leaves_encoding_empty);
+  RUN_TEST(test_parseProfiles_ignores_audio_encoder_encoding);
+  RUN_TEST(test_parseProfiles_encoding_does_not_leak_across_profiles);
   RUN_TEST(test_extractEventStateValue_finds_State_value);
   RUN_TEST(test_extractEventStateValue_recognizes_IsMotion_name);
   RUN_TEST(test_extractEventStateValue_scoped_to_correct_notification_block);

@@ -287,6 +287,42 @@ bool cameraFetchProfileAndSnapshotUri(const CameraConfig& cfg, CameraState& st) 
     st.streamUri = resolvedStreamUri;
     Serial.printf("[%s] Stream URI: %s\n", cfg.name.c_str(), resolvedStreamUri.c_str());
   }
+
+  // Best-effort, non-fatal - see CameraState::mjpegUri's own comment. Only
+  // attempted at all if some profile actually reports a JPEG encoder -
+  // most modern H.264/H.265-only cameras don't, so this is skipped
+  // entirely (no wasted round trip) far more often than it runs.
+  ProfileInfo* jpegProfile = nullptr;
+  for (auto& p : profiles) {
+    if (p.encoding.equalsIgnoreCase("JPEG")) { jpegProfile = &p; break; }
+  }
+  if (jpegProfile) {
+    // HTTP transport, not RTSP - a plain <img> tag can stream MJPEG-over-
+    // HTTP directly, unlike RTSP which needs an external player. This is a
+    // separate, vendor-optional capability from the JPEG encoder itself -
+    // plenty of cameras support HTTP transport only for their RTSP-format
+    // profiles and refuse it for this one, or vice versa, so failure here
+    // is common and not logged as a warning, just a plain trace.
+    String mjpegAction = "http://www.onvif.org/ver10/media/wsdl/GetStreamUri";
+    String mjpegBody = "<trt:GetStreamUri><trt:StreamSetup><tt:Stream>RTP-Unicast</tt:Stream>"
+                        "<tt:Transport><tt:Protocol>HTTP</tt:Protocol></tt:Transport></trt:StreamSetup>"
+                        "<trt:ProfileToken>" + xmlEscape(jpegProfile->token) + "</trt:ProfileToken></trt:GetStreamUri>";
+    String mjpegResponse = cameraSoapCall(cfg, st, st.mediaServiceUrl, "", mjpegAction, mjpegBody);
+    if (mjpegResponse.length() > 0 && !responseHasFault(mjpegResponse)) {
+      String resolvedMjpegUri = findElementByLocalName(mjpegResponse, "Uri");
+      resolvedMjpegUri.trim();
+      if (resolvedMjpegUri.length() > 0) {
+        CameraStateLock lock(st);
+        st.mjpegUri = resolvedMjpegUri;
+        Serial.printf("[%s] MJPEG preview URI (profile '%s'): %s\n",
+                      cfg.name.c_str(), jpegProfile->name.c_str(), resolvedMjpegUri.c_str());
+      }
+    } else {
+      Serial.printf("[%s] Camera has a JPEG-encoded profile ('%s') but doesn't support HTTP transport "
+                    "for it - no live preview will be shown on the dashboard for this camera.\n",
+                    cfg.name.c_str(), jpegProfile->name.c_str());
+    }
+  }
   return true;
 }
 

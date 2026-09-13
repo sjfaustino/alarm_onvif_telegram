@@ -10,6 +10,16 @@
 struct ProfileInfo {
   String token;
   String name;
+  // This profile's VideoEncoderConfiguration codec ("JPEG", "H264", "H265",
+  // "MPEG4") - "" if the profile has no VideoEncoderConfiguration at all
+  // (audio/metadata-only) or no Encoding element was found within it.
+  // Scoped to THIS profile's own VideoEncoderConfiguration block specifically -
+  // never an AudioEncoderConfiguration's own Encoding element (e.g.
+  // "G711"/"AAC"), which would misreport an H.264-only camera as having an
+  // MJPEG-viewable profile. Used to find a browser-viewable MJPEG profile
+  // for the Cameras dashboard's live-preview link - see
+  // cameraFetchProfileAndSnapshotUri's own comment (camera.cpp).
+  String encoding;
 };
 
 // Extracts every <trt:Profiles token="..."><tt:Name>...</tt:Name>...

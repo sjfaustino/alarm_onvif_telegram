@@ -63,17 +63,19 @@ static int findLiveCameraIndex(std::vector<CameraConfig>* liveCameras, const Str
   return -1;
 }
 
-// Embeds user:pass as rtsp://user:pass@host/... userinfo, so the Cameras
-// page's RTSP link is directly pastable into VLC/an NVR without the
-// viewer needing to already know the camera's credentials - the same
-// ones cfg.user/cfg.pass already store in NVS, not a new exposure of
-// anything. urlEncode()d (not raw) so a ':'/'@' in either one can't break
-// out of the userinfo section and corrupt the rest of the URI. A no-op
-// (returns rawUri unchanged) if there's no username to embed, or the URI
-// already carries its own userinfo (some cameras' GetStreamUri response
-// embeds one directly) - never overwrite credentials the camera itself
-// already chose to include.
-static String buildRtspUriWithCredentials(const String& rawUri, const String& user, const String& pass) {
+// Embeds user:pass as scheme://user:pass@host/... userinfo - shared by
+// the RTSP live-view link (rtsp://) and the MJPEG live-preview <img> src
+// (http://) below, so either is directly usable without the viewer (VLC,
+// an NVR, or the browser's own <img> fetch, none of which have anywhere
+// else to be told a password) needing to already know the camera's
+// credentials - the same ones cfg.user/cfg.pass already store in NVS, not
+// a new exposure of anything. urlEncode()d (not raw) so a ':'/'@' in
+// either one can't break out of the userinfo section and corrupt the
+// rest of the URI. A no-op (returns rawUri unchanged) if there's no
+// username to embed, or the URI already carries its own userinfo (some
+// cameras' GetStreamUri response embeds one directly) - never overwrite
+// credentials the camera itself already chose to include.
+static String buildUriWithCredentials(const String& rawUri, const String& user, const String& pass) {
   int schemeEnd = rawUri.indexOf("://");
   if (schemeEnd < 0 || user.length() == 0) return rawUri;
   int afterScheme = schemeEnd + 3;
@@ -216,7 +218,9 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
     String liveStatus;
     String lastAlertStr = "never";
     String previewCell = "<span class=\"hint\">(none yet)</span>";
-    String rtspUri; // populated below only if isLive - see CameraState::streamUri's own comment
+    String rtspUri;  // populated below only if isLive - see CameraState::streamUri's own comment
+    String mjpegUri; // populated below only if isLive - see CameraState::mjpegUri's own comment
+    String liveRowHtml; // set below only if mjpegUri is non-empty - a sibling <tr> appended after this row's own
     // c.enabled (fresh from NVS, not the live cfg) is required here, not
     // just idx>=0 - a torn-down camera (requestCameraStop, disabled/deleted
     // live) keeps its liveCameras/liveStates slot forever (never shrinks),
@@ -251,6 +255,7 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
         revertToOn = st.scheduledRevertToOn;
         totalReconnects = st.totalReconnects;
         rtspUri = st.streamUri;
+        mjpegUri = st.mjpegUri;
         for (size_t i = 0; i < st.reconnectHistoryCount; i++) {
           if (nowMs - st.reconnectHistory[i] < 24UL * 3600UL * 1000UL) recentReconnects++;
         }
@@ -435,10 +440,36 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
     // which - like deviceServiceUrl above - a rogue/compromised camera
     // controls entirely.
     if (rtspUri.length() > 0) {
-      String rtspWithCreds = buildRtspUriWithCredentials(rtspUri, c.user, c.pass);
+      String rtspWithCreds = buildUriWithCredentials(rtspUri, c.user, c.pass);
       html += " <a class=\"icon-btn secondary\" href=\"" + htmlEscape(rtspWithCreds) +
               "\" title=\"Open live RTSP stream (e.g. in VLC)\" aria-label=\"Open live RTSP stream\">"
               "&#9654;</a>";
+    }
+    // Inline MJPEG live preview - only once this camera's own
+    // VideoEncoderConfiguration actually reports a JPEG-encoded profile
+    // AND the camera accepted HTTP transport for it (see
+    // CameraState::mjpegUri's own comment, camera.h, for how rare that
+    // combination is - most modern H.264/H.265-only cameras never get
+    // here at all). Unlike the RTSP link above, a plain <img> tag can
+    // stream this directly with zero browser plugin/codec - toggled
+    // on/off rather than always-on, since the browser holds a real,
+    // sustained HTTP connection straight to the camera for as long as
+    // it's showing (bypassing the ESP32 entirely - zero load on this
+    // board either way), which can contend with this project's own ONVIF
+    // polling on a camera whose embedded HTTP stack only tolerates one or
+    // two concurrent connections (see CameraState::snapshotInFlight's own
+    // comment for a real instance of that class of limit).
+    if (mjpegUri.length() > 0) {
+      String mjpegWithCreds = buildUriWithCredentials(mjpegUri, c.user, c.pass);
+      String liveRowId = "liverow" + String((unsigned)rowIdx);
+      String liveImgId = "liveimg" + String((unsigned)rowIdx);
+      html += " <button type=\"button\" class=\"icon-btn secondary\" title=\"Toggle live preview - "
+              "holds an extra connection open on the camera while showing\" aria-label=\"Toggle live "
+              "preview\" onclick=\"toggleLivePreview(this,'" + liveRowId + "','" + liveImgId + "','" +
+              htmlEscape(mjpegWithCreds) + "')\">\xE2\x96\xB6 Live</button>";
+      liveRowHtml = "<tr id=\"" + liveRowId + "\" style=\"display:none;\"><td colspan=\"8\">"
+                    "<img id=\"" + liveImgId + "\" style=\"max-width:100%;max-height:400px;\" "
+                    "alt=\"live preview\"></td></tr>";
     }
     if (isLive) {
       // Own <form>, not just a link - this is a real POST that fetches a
@@ -452,6 +483,7 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
               "aria-label=\"Send test alert\">\xF0\x9F\xA7\xAA</button></form>";
     }
     html += renderEditDeleteActions("/cameras/edit?name=", "/delete", c.name) + "</div></td></tr>";
+    html += liveRowHtml;
     rowIdx++;
   }
   html += "</table>";
@@ -473,6 +505,20 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
           "var i=0;img.src=urls[0];"
           "var timer=setInterval(function(){i=(i+1)%urls.length;img.src=urls[i];},400);"
           "btn.dataset.timer=String(timer);"
+          "}"
+          // Shared by every row's Live button (onclick="toggleLivePreview(this,
+          // rowId, imgId, src)") - shows/hides the dedicated <tr> this camera's
+          // row emitted right after itself, and sets/clears the <img>'s src to
+          // actually start/stop the browser's MJPEG-over-HTTP connection to the
+          // camera (an empty src doesn't just hide it, it releases the
+          // connection - see this button's own title text for why that matters
+          // on some cameras).
+          "function toggleLivePreview(btn,rowId,imgId,src){"
+          "var row=document.getElementById(rowId);"
+          "var img=document.getElementById(imgId);"
+          "if(row.style.display==='table-row'){"
+          "row.style.display='none';img.src='';btn.textContent='\xE2\x96\xB6 Live';return;}"
+          "row.style.display='table-row';img.src=src;btn.textContent='\xE2\x8F\xB8 Stop';"
           "}"
           "</script>";
 

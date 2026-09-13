@@ -39,6 +39,19 @@ struct CameraState {
   // all (no profile to ask GetStreamUri about), same limitation as every
   // other ONVIF-derived field for an overridden camera.
   String   streamUri;
+  // Browser-viewable MJPEG stream URI (ONVIF GetStreamUri, HTTP transport,
+  // requested against whichever profile's VideoEncoderConfiguration
+  // reports Encoding=="JPEG" - see ProfileInfo::encoding, camera_parse.h),
+  // for the Cameras dashboard's inline live-preview - a plain <img> tag
+  // can stream MJPEG-over-HTTP directly with zero browser plugin/codec,
+  // unlike streamUri above (RTSP, needs an external player like VLC).
+  // Empty whenever: this camera has no JPEG-encoded profile at all (most
+  // modern H.264/H.265-only cameras), the camera doesn't support HTTP
+  // transport for GetStreamUri (RTSP-only is common even for a JPEG
+  // profile - this is a completely separate, vendor-optional capability
+  // from the codec itself), or (same as streamUri) this camera uses
+  // snapshotUriOverride. Always best-effort/non-fatal, same as streamUri.
+  String   mjpegUri;
   String   profileToken;
   bool     subscriptionActive = false;
   unsigned long lastPull  = 0;
@@ -242,7 +255,7 @@ struct CameraState {
   size_t snapshotHistoryCount = 0;
 
   // Guards subscriptionActive, isOffline, alertsEnabled, hasAlerted,
-  // lastAlert, snapshotUri, streamUri, user, pass, scheduledRevertDueMs,
+  // lastAlert, snapshotUri, streamUri, mjpegUri, user, pass, scheduledRevertDueMs,
   // scheduledRevertToOn, pendingConfig, stopRequested, snapshotInFlight,
   // snapshotHistory (+Next/Count), lastContactMs, totalReconnects,
   // reconnectHistory (+Next/Count), offlineHistory (+Next/Count), and

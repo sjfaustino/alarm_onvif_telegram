@@ -24,7 +24,21 @@ std::vector<ProfileInfo> parseProfiles(const String& xml) {
       if (ce > cs) name = xml.substring(cs, ce);
     }
 
-    if (token.length() > 0) profiles.push_back({token, name});
+    // Bounded to this profile's own block (up to the next "...Profiles "
+    // opening tag, or end of document) before searching within it - a
+    // camera's own AudioEncoderConfiguration has its own Encoding element
+    // too, and an unbounded search could otherwise pick up either the
+    // wrong element or a LATER profile's VideoEncoderConfiguration when
+    // this one has none.
+    String encoding;
+    int nextProfilePos = xml.indexOf("Profiles ", tagEnd);
+    int profileBlockEnd = (nextProfilePos > 0) ? nextProfilePos : xml.length();
+    int vecPos = xml.indexOf("VideoEncoderConfiguration", tagEnd);
+    if (vecPos >= 0 && vecPos < profileBlockEnd) {
+      encoding = findElementByLocalName(xml.substring(vecPos, profileBlockEnd), "Encoding");
+    }
+
+    if (token.length() > 0) profiles.push_back({token, name, encoding});
     pos = tagEnd + 1;
   }
   return profiles;
