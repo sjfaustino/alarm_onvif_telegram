@@ -56,10 +56,15 @@ bool powerMonitorActive();
 bool checkPowerStateChanged();
 
 // Status for the dashboard (Hardware > 220V Power page) and the boot
-// message - reflects live state, doesn't re-read the pin.
+// message. powerPresent/settingEnabled/available reflect live (cached)
+// state, doesn't re-read the pin - but rawPinHigh IS a fresh digitalRead,
+// taken right when this is called, so a user can watch it track a wire
+// being connected/disconnected in real time without waiting out the
+// debounce - the whole point of exposing it.
 struct PowerMonitorStatus {
   bool settingEnabled = false;
   bool available = false;      // powerMonitorActive()'s value
   bool powerPresent = true;    // last CONFIRMED reading; meaningful only if available
+  bool rawPinHigh = false;     // fresh digitalRead() right now; meaningful only if available
 };
 PowerMonitorStatus getPowerMonitorStatus();

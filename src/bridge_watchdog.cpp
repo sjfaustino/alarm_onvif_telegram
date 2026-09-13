@@ -137,6 +137,16 @@ static void pulseRelay(uint32_t pulseDurationMs) {
   esp_task_wdt_reset();
 }
 
+bool bridgeWatchdogManualPulse() {
+  if (!bridgeWatchdogActive()) return false;
+  // Deliberately does NOT touch g_firstBothOfflineMs/g_outageEpisodeStartMs -
+  // see net_watchdog.cpp's bridgeWatchdogManualPulse for the full reasoning (same
+  // pattern, applies identically here).
+  pulseRelay(loadBridgeWatchdogSettings().pulseDurationMs);
+  logEvent("Camera bridge watchdog: manual test pulse");
+  return true;
+}
+
 BridgeWatchdogCheckResult checkBridgeCamerasAndMaybePulseRelay(const CameraConfig cameras[], CameraState states[], size_t numCameras) {
   BridgeWatchdogCheckResult result;
   if (!bridgeWatchdogActive()) return result;

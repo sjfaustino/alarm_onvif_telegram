@@ -34,6 +34,14 @@ void initNetWatchdog();
 // configured pin - mirrors rtcActive()/sdActive()'s shape.
 bool netWatchdogActive();
 
+// Pulses the relay right now, ignoring the outage/threshold state machine
+// entirely - for the Hardware page's "Pulse relay now" test button, so
+// wiring can be verified without waiting for (or faking) a real outage.
+// Does NOT touch the outage-tracking timers, so it can't disturb a real
+// outage's own "was down since/for" reporting if one happens to be in
+// progress. False (no-op) if !netWatchdogActive() - nothing to pulse.
+bool netWatchdogManualPulse();
+
 // What checkInternetAndMaybePulseRelay found this call. Recovered is
 // reported separately from OutageDetected, at recovery time rather than
 // when the outage begins or crosses the pulse threshold - an alert

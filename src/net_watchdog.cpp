@@ -136,6 +136,18 @@ static void pulseRelay(uint32_t pulseDurationMs) {
   esp_task_wdt_reset();
 }
 
+bool netWatchdogManualPulse() {
+  if (!netWatchdogActive()) return false;
+  // Deliberately does NOT touch g_firstFailureMs/g_outageEpisodeStartMs -
+  // a manual test pulse (Hardware page "Pulse relay now" button) must not
+  // interfere with a real outage's own timing if one happens to be in
+  // progress. Uses the currently-saved pulse duration, same clamp as the
+  // real detection path.
+  pulseRelay(loadNetWatchdogSettings().pulseDurationMs);
+  logEvent("Internet watchdog: manual test pulse");
+  return true;
+}
+
 NetWatchdogCheckResult checkInternetAndMaybePulseRelay() {
   NetWatchdogCheckResult result;
   if (!netWatchdogActive()) return result;

@@ -51,6 +51,13 @@ void initBridgeWatchdog();
 // the configured pin - mirrors netWatchdogActive()'s shape.
 bool bridgeWatchdogActive();
 
+// Pulses the relay right now, ignoring the outage/threshold state machine
+// entirely - see net_watchdog.h's bridgeWatchdogManualPulse for the full reasoning
+// (same pattern: doesn't touch the outage-tracking timers, so a real
+// in-progress outage's own "was down since/for" reporting is unaffected).
+// False (no-op) if !bridgeWatchdogActive().
+bool bridgeWatchdogManualPulse();
+
 // Same shape as NetWatchdogCheckResult (net_watchdog.h) - a bridge outage
 // doesn't threaten this board's own Telegram delivery the way a WAN
 // outage does (net_watchdog's own reason for deferring its alert to

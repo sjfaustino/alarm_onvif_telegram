@@ -142,5 +142,6 @@ PowerMonitorStatus getPowerMonitorStatus() {
   status.settingEnabled = g_settingEnabled;
   status.available = g_available;
   status.powerPresent = g_confirmedPowerPresent;
+  if (status.available) status.rawPinHigh = digitalRead(g_activePin) == HIGH;
   return status;
 }

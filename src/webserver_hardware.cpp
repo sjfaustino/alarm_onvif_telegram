@@ -34,6 +34,13 @@ String renderInternetWatchdogPage() {
     html += "<p class=\"hint\">Active on pin " + String(settings.pin) + " - no outage currently detected.</p>";
   }
 
+  if (status.available) {
+    html += "<form method=\"POST\" action=\"/hardware/internet/pulse\">"
+            "<p><button type=\"submit\">Pulse relay now</button> "
+            "<span class=\"hint\">Fires a test pulse immediately, without waiting for (or faking) a "
+            "real outage - doesn't affect outage detection.</span></p></form>";
+  }
+
   html += "<form method=\"POST\" action=\"/hardware/internet/save\">";
   html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"enabled\"" +
           String(settings.enabled ? " checked" : "") + "> Use a relay to power-cycle the router on an "
@@ -87,6 +94,13 @@ String renderBridgeWatchdogPage(const std::vector<CameraConfig>* liveCameras) {
             formatElapsedSince(status.outageStartMs, millis()) + ".</p>";
   } else {
     html += "<p class=\"hint\">Active on pin " + String(settings.pin) + " - no outage currently detected.</p>";
+  }
+
+  if (status.available) {
+    html += "<form method=\"POST\" action=\"/hardware/bridge/pulse\">"
+            "<p><button type=\"submit\">Pulse relay now</button> "
+            "<span class=\"hint\">Fires a test pulse immediately, without waiting for (or faking) a "
+            "real outage - doesn't affect outage detection.</span></p></form>";
   }
 
   html += "<form method=\"POST\" action=\"/hardware/bridge/save\">";
@@ -162,6 +176,11 @@ String renderPowerMonitorPage() {
   } else {
     html += "<p class=\"hint\">Active on pin " + String(settings.pin) + " - mains power is currently " +
             (status.powerPresent ? "ON" : "OFF") + ".</p>";
+    html += "<p class=\"hint\">Pin " + String(settings.pin) + " currently reads " +
+            (status.rawPinHigh ? "HIGH" : "LOW") + " (raw) - interpreted as power " +
+            (status.powerPresent ? "PRESENT" : "ABSENT") + " given the wiring setting below. Use this "
+            "live reading to verify your wiring/polarity choice right after flashing, without needing "
+            "to physically cut mains power.</p>";
   }
 
   html += "<form method=\"POST\" action=\"/hardware/power/save\">";

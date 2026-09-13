@@ -1064,6 +1064,14 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
                            renderShell(Tab::HardwareInternet, banner, renderInternetWatchdogPage()).c_str());
   });
 
+  server.on("/hardware/internet/pulse", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
+    String banner = netWatchdogManualPulse()
+        ? "Relay pulsed."
+        : "Internet Watchdog isn't active (disabled, or the configured pin wasn't accepted at boot) - nothing to pulse.";
+    return response->send(200, "text/html",
+                           renderShell(Tab::HardwareInternet, banner, renderInternetWatchdogPage()).c_str());
+  });
+
   server.on("/hardware/bridge", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
     return response->send(200, "text/html",
                            renderShell(Tab::HardwareBridge, "", renderBridgeWatchdogPage(g_liveCameras)).c_str());
@@ -1119,6 +1127,14 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
             "pulse duration are active immediately."
           : "Failed to save - NVS write error (see Serial log). Setting was NOT changed.";
     }
+    return response->send(200, "text/html",
+                           renderShell(Tab::HardwareBridge, banner, renderBridgeWatchdogPage(g_liveCameras)).c_str());
+  });
+
+  server.on("/hardware/bridge/pulse", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
+    String banner = bridgeWatchdogManualPulse()
+        ? "Relay pulsed."
+        : "Camera Bridge Watchdog isn't active (disabled, or the configured pin wasn't accepted at boot) - nothing to pulse.";
     return response->send(200, "text/html",
                            renderShell(Tab::HardwareBridge, banner, renderBridgeWatchdogPage(g_liveCameras)).c_str());
   });
