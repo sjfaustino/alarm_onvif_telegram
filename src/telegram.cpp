@@ -719,7 +719,7 @@ static void noteMultiCameraAlert(const String& cameraName) {
   xSemaphoreGive(g_multiCameraDigestMutex);
 }
 
-void triggerMotionAlert(const CameraConfig& cfg, CameraState& st, bool isPetEvent) {
+void triggerMotionAlert(const CameraConfig& cfg, CameraState& st, bool isPetEvent, MotionDetectionKind kind) {
   // alertsEnabled is written by loop()'s task (pollTelegramCommands'
   // /on//off), this function runs on the camera's own task - cross-task
   // read, needs CameraStateLock. See CameraState::stateMutex.
@@ -880,7 +880,7 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st, bool isPetEven
     String burstSuffix = shots > 1 ? " (" + String(i + 1) + "/" + String(shots) + ")" : "";
 
     for (auto& r : recipients) {
-      String caption = trMotionCaption(r.language, cfg.name, timestamp, isPetEvent) + burstSuffix;
+      String caption = trMotionCaption(r.language, cfg.name, timestamp, isPetEvent, kind) + burstSuffix;
       if (!sendTelegramPhotoWithRetry(jpg, jpgLen, caption, r.chatId)) {
         Serial.printf("[%s] Telegram send to chat %s failed.\n", cfg.name.c_str(), r.chatId.c_str());
       }

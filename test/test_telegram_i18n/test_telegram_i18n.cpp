@@ -29,6 +29,39 @@ void test_trMotionCaption_pet_vs_motion_and_language(void) {
   TEST_ASSERT_EQUAL_STRING(enMotion.c_str(), ptMotion.c_str());
 }
 
+// Person/Vehicle wording - the whole point is a distinguishing keyword a
+// phone-side notification automation (MacroDroid/Tasker) can match on, so
+// each must actually differ from plain motion and from each other, in
+// both languages.
+void test_trMotionCaption_person_and_vehicle_kinds(void) {
+  String plain = trMotionCaption(TelegramLang::English, "D01", "TS", false);
+  String enPerson = trMotionCaption(TelegramLang::English, "D01", "TS", false, MotionDetectionKind::Person);
+  String enVehicle = trMotionCaption(TelegramLang::English, "D01", "TS", false, MotionDetectionKind::Vehicle);
+  TEST_ASSERT_TRUE(enPerson != plain);
+  TEST_ASSERT_TRUE(enVehicle != plain);
+  TEST_ASSERT_TRUE(enPerson != enVehicle);
+  TEST_ASSERT_TRUE(enPerson.indexOf("PERSON") >= 0);
+  TEST_ASSERT_TRUE(enVehicle.indexOf("VEHICLE") >= 0);
+  TEST_ASSERT_TRUE(enPerson.indexOf("D01") >= 0);
+  TEST_ASSERT_TRUE(enVehicle.indexOf("D01") >= 0);
+
+  String ptPerson = trMotionCaption(TelegramLang::Portuguese, "D01", "TS", false, MotionDetectionKind::Person);
+  String ptVehicle = trMotionCaption(TelegramLang::Portuguese, "D01", "TS", false, MotionDetectionKind::Vehicle);
+  TEST_ASSERT_TRUE(ptPerson != enPerson);
+  TEST_ASSERT_TRUE(ptVehicle != enVehicle);
+  TEST_ASSERT_TRUE(ptPerson.indexOf("PESSOA") >= 0);
+  TEST_ASSERT_TRUE(ptVehicle.indexOf("VE\xC3\x8D" "CULO") >= 0);
+}
+
+// isPetEvent must win over kind entirely - a DogCatDetect topic never
+// reports Person/Vehicle, but this pins the precedence explicitly rather
+// than relying on camera.cpp never passing that combination.
+void test_trMotionCaption_pet_event_ignores_kind(void) {
+  String pet = trMotionCaption(TelegramLang::English, "D01", "TS", true, MotionDetectionKind::Person);
+  TEST_ASSERT_TRUE(pet.indexOf("pet") >= 0);
+  TEST_ASSERT_TRUE(pet.indexOf("PERSON") < 0);
+}
+
 void test_trTestAlertCaption_contains_name_and_says_test(void) {
   String en = trTestAlertCaption(TelegramLang::English, "D01", "2024-01-01 10:00:00");
   String pt = trTestAlertCaption(TelegramLang::Portuguese, "D01", "2024-01-01 10:00:00");
@@ -471,6 +504,8 @@ void test_trRestoreResult_contains_summary(void) {
 int main(int argc, char** argv) {
   UNITY_BEGIN();
   RUN_TEST(test_trMotionCaption_pet_vs_motion_and_language);
+  RUN_TEST(test_trMotionCaption_person_and_vehicle_kinds);
+  RUN_TEST(test_trMotionCaption_pet_event_ignores_kind);
   RUN_TEST(test_trTestAlertCaption_contains_name_and_says_test);
   RUN_TEST(test_trMultiCameraDigest_contains_count_and_list);
   RUN_TEST(test_trCameraOffline_contains_name_and_minutes);

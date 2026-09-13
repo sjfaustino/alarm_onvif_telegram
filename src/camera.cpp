@@ -405,7 +405,20 @@ static void parseEvents(const CameraConfig& cfg, CameraState& st, const String& 
   // pattern already fixed once for motion).
   if (motionEventFired(xml, ev)) {
     st.lastMotionMs = millis(); // real motion signal, independent of mute/cooldown/quiet hours - see checkMotionWatchdog
-    triggerMotionAlert(cfg, st);
+    // Person takes priority over Vehicle when a camera reports both in
+    // the same event batch - not a meaningful ordering otherwise, just a
+    // tie-break (see MotionDetectionKind's own comment, telegram_i18n.h).
+    // Scoped the same topicReportedTrue way as every other check in this
+    // function - ev.peopleDetect/ev.vehicleDetect alone only says the
+    // topic string appeared somewhere in this batch, not that THIS
+    // specific topic reported true.
+    MotionDetectionKind kind = MotionDetectionKind::Generic;
+    if (ev.peopleDetect && topicReportedTrue(xml, "PeopleDetect")) {
+      kind = MotionDetectionKind::Person;
+    } else if (ev.vehicleDetect && topicReportedTrue(xml, "VehicleDetect")) {
+      kind = MotionDetectionKind::Vehicle;
+    }
+    triggerMotionAlert(cfg, st, false, kind);
   } else if (ev.dogCatDetect && topicReportedTrue(xml, "DogCatDetect")) {
     // Pet-only event (no person/vehicle/motion topic also fired in this
     // same batch - motionEventFired above would have already handled it

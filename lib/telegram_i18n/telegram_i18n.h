@@ -25,10 +25,28 @@
 
 // ---- Camera alerts (broadcast to each subscribed recipient, one call per recipient) ----
 
+// Which ONVIF detection topic actually fired, for trMotionCaption's
+// wording below - camera.cpp's parseEvents decides this from
+// CameraEventClassification (lib/camera_parse), preferring Person over
+// Vehicle when a camera reports both in the same event batch (not a
+// meaningful priority otherwise, just a tie-break - see parseEvents' own
+// comment). Generic covers plain MotionAlarm/CellMotionDetector, or a
+// camera that doesn't support AI person/vehicle classification at all.
+enum class MotionDetectionKind { Generic, Person, Vehicle };
+
 // Motion/pet-detected photo caption. isPetEvent picks the paw-print
-// wording; the "(i/N)" burst suffix (numbers/slash only) is appended by
-// the caller, not part of this - it's language-neutral.
-String trMotionCaption(TelegramLang lang, const String& cameraName, const String& timestamp, bool isPetEvent);
+// wording (kind is ignored entirely in that case - pets have their own
+// fixed wording, independent of the Generic/Person/Vehicle a DogCatDetect
+// topic never reports); otherwise kind (default Generic) picks a
+// distinct emoji/keyword per detection type - see MotionDetectionKind's
+// own comment for why this exists at all (a phone-side notification
+// automation, e.g. MacroDroid/Tasker, playing a different sound per
+// detection type by matching this message's text, without this project
+// needing to know anything about sounds). The "(i/N)" burst suffix
+// (numbers/slash only) is appended by the caller, not part of this -
+// it's language-neutral either way.
+String trMotionCaption(TelegramLang lang, const String& cameraName, const String& timestamp, bool isPetEvent,
+                        MotionDetectionKind kind = MotionDetectionKind::Generic);
 // Pet alert, text-only delivery mode (CameraConfig::petAlertsTextOnly) - no photo.
 String trPetAlertText(TelegramLang lang, const String& cameraName, const String& timestamp);
 String trTimelapseCaption(TelegramLang lang, const String& cameraName, const String& timestamp);

@@ -5,6 +5,7 @@
 #include "config.h"
 #include "camera.h"
 #include "telegram_users.h" // TelegramLang
+#include "telegram_i18n.h" // MotionDetectionKind
 
 // Sends cfg.snapshotBurstCount snapshot(s), captioned "<camera name> -
 // <UTC timestamp>" (plus "(n/N)"), to every subscribed user, subject to
@@ -17,7 +18,18 @@
 // alert, just with pet-specific wording, and skips the photo entirely
 // (sending a single text message instead) when cfg.petAlertsTextOnly is
 // also set.
-void triggerMotionAlert(const CameraConfig& cfg, CameraState& st, bool isPetEvent = false);
+//
+// kind (default Generic, ignored entirely when isPetEvent is true - the
+// pet branch has its own fixed wording) picks whether the caption calls
+// out PERSON/VEHICLE specifically instead of the plain "<camera> -
+// <timestamp>" a bare motion/cell-motion event gets - see
+// trMotionCaption's own comment (telegram_i18n.h). This exists so a
+// phone-side notification automation (e.g. MacroDroid/Tasker reading the
+// Telegram notification's text) can play a different sound per detection
+// type without this project needing to know anything about sounds at
+// all - the distinguishing keyword/emoji is all it provides.
+void triggerMotionAlert(const CameraConfig& cfg, CameraState& st, bool isPetEvent = false,
+                         MotionDetectionKind kind = MotionDetectionKind::Generic);
 
 // Tamper/signal-loss alerts, gated by the same alertsEnabled/cooldown
 // subscribed-recipients rules triggerMotionAlert uses (one shared

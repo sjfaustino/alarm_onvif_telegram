@@ -14,13 +14,22 @@ static String yesNo(bool lang_is_pt, bool value) {
   return value ? "yes" : "no";
 }
 
-String trMotionCaption(TelegramLang lang, const String& cameraName, const String& timestamp, bool isPetEvent) {
-  if (lang == TelegramLang::Portuguese) {
-    return isPetEvent ? "\xF0\x9F\x90\xBE " + cameraName + " - animal detetado - " + timestamp
-                       : cameraName + " - " + timestamp;
+String trMotionCaption(TelegramLang lang, const String& cameraName, const String& timestamp, bool isPetEvent,
+                        MotionDetectionKind kind) {
+  bool pt = lang == TelegramLang::Portuguese;
+  if (isPetEvent) {
+    return pt ? "\xF0\x9F\x90\xBE " + cameraName + " - animal detetado - " + timestamp
+              : "\xF0\x9F\x90\xBE " + cameraName + " - pet detected - " + timestamp;
   }
-  return isPetEvent ? "\xF0\x9F\x90\xBE " + cameraName + " - pet detected - " + timestamp
-                     : cameraName + " - " + timestamp;
+  if (kind == MotionDetectionKind::Person) {
+    return pt ? "\xF0\x9F\x9A\xB6 " + cameraName + " - PESSOA detetada - " + timestamp
+              : "\xF0\x9F\x9A\xB6 " + cameraName + " - PERSON detected - " + timestamp;
+  }
+  if (kind == MotionDetectionKind::Vehicle) {
+    return pt ? "\xF0\x9F\x9A\x97 " + cameraName + " - VE\xC3\x8D" "CULO detetado - " + timestamp
+              : "\xF0\x9F\x9A\x97 " + cameraName + " - VEHICLE detected - " + timestamp;
+  }
+  return cameraName + " - " + timestamp; // Generic - unchanged from before this
 }
 
 String trPetAlertText(TelegramLang lang, const String& cameraName, const String& timestamp) {
