@@ -1,6 +1,8 @@
 #include "webserver_firmware.h"
 #include "build_version.h" // FIRMWARE_VERSION
 #include "config.h" // NVS_USAGE_WARN_PERCENT, HEAP_LOW_WARN_BYTES
+#include "telegram_retry_queue.h" // getTelegramRetryQueueStatus
+#include "format_utils.h" // formatUptime
 #include <esp_ota_ops.h>
 #include <esp_heap_caps.h> // heap_caps_get_free_size(MALLOC_CAP_SPIRAM)
 #include <nvs_flash.h>
@@ -33,6 +35,20 @@ String renderFirmwarePanel() {
   html += "<tr><th>Largest allocatable block</th><td>" + String(ESP.getMaxAllocHeap()) + " bytes</td></tr>";
   html += "<tr><th>Free PSRAM</th><td>" +
           String((unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM)) + " bytes</td></tr>";
+
+  // Previously invisible entirely - see TelegramRetryQueueStatus's own
+  // comment (telegram_retry_queue.h) for what an empty vs. nonzero count
+  // actually means. formatUptime()'s "Xh Ym ago" shape reused directly
+  // for "queued for" since oldestPendingMs is already an elapsed
+  // duration, not a point in time (formatElapsedSince, its usual partner,
+  // would need a "now" to subtract from, which isn't the case here).
+  TelegramRetryQueueStatus retryStatus = getTelegramRetryQueueStatus();
+  html += "<tr><th>Telegram retry queue</th><td>" +
+          (retryStatus.count > 0
+               ? String((unsigned)retryStatus.count) + " pending (oldest queued for " +
+                     formatUptime(retryStatus.oldestPendingMs) + ")"
+               : String("empty")) +
+          "</td></tr>";
 
   // NVS is entry-based (fixed ~32-byte slots), not a raw byte pool, so
   // "% used" here means % of entries, not bytes - still the right signal:

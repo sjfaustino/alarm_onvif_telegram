@@ -29,3 +29,15 @@ void enqueueFailedTelegramMessage(const String& chatId, const String& text);
 // (config.h) is dropped after this attempt regardless of outcome - by
 // then it's no longer useful information.
 void flushTelegramRetryQueue();
+
+// Status for the dashboard (Firmware page) - reflects live state, doesn't
+// trigger a flush itself. An empty queue (the common, healthy case) is
+// the "everything's being delivered fine" signal; a nonzero, growing
+// oldestPendingMs alongside a nonzero count is what a sustained WAN
+// outage (or a misconfigured bot token/CA cert, see telegram_ca.h) looks
+// like from the dashboard - previously invisible entirely.
+struct TelegramRetryQueueStatus {
+  size_t count = 0;
+  unsigned long oldestPendingMs = 0; // meaningful only if count > 0
+};
+TelegramRetryQueueStatus getTelegramRetryQueueStatus();
