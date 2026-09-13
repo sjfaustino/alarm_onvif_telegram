@@ -29,12 +29,26 @@ static bool g_settingEnabled = false;   // cached at boot, see initNetWatchdog()
 static bool g_available = false;        // see netWatchdogActive()'s comment
 static int g_activePin = -1;
 static bool g_activeLow = true;
-// 0 = no outage currently in progress - a millis() timestamp of when the
-// CURRENT unbroken stretch of failed probes started, same "0 is the
-// sentinel for none scheduled" convention CameraState::scheduledRevertDueMs
-// already uses. Same-task-only (main.cpp's loop() is the only caller of
+// 0 = no outage currently in progress - a millis() timestamp used purely
+// to pace repeated relay pulses: RESTARTED after every pulse (see the
+// pulse branch below) so a still-ongoing outage isn't pulsed again until
+// another full threshold has passed, without a separate backoff setting.
+// Same "0 is the sentinel for none scheduled" convention
+// CameraState::scheduledRevertDueMs already uses. Same-task-only
+// (main.cpp's loop() is the only caller of
 // checkInternetAndMaybePulseRelay/getNetWatchdogStatus), no lock needed.
 static unsigned long g_firstFailureMs = 0;
+
+// 0 = no outage currently in progress - a millis() timestamp of when the
+// CURRENT unbroken outage episode truly began, set once and left alone
+// until recovery, deliberately NOT restarted by the pulse branch the way
+// g_firstFailureMs above is. Without this separate variable, an outage
+// that outlives one pulse cycle (the router needs a full power-cycle,
+// reboot, and reacquire before the next probe can even succeed) would
+// report "first detected"/"was down since" as the time of the MOST
+// RECENT pulse instead of when the outage actually started - understating
+// exactly the outages worth reporting accurately.
+static unsigned long g_outageEpisodeStartMs = 0;
 
 NetWatchdogSettings loadNetWatchdogSettings() {
   Preferences prefs;
@@ -131,9 +145,10 @@ NetWatchdogCheckResult checkInternetAndMaybePulseRelay() {
 
   if (reachable) {
     if (g_firstFailureMs != 0) {
-      unsigned long startMs = g_firstFailureMs;
+      unsigned long startMs = g_outageEpisodeStartMs;
       logEvent("Internet watchdog: connectivity recovered");
       g_firstFailureMs = 0;
+      g_outageEpisodeStartMs = 0;
       result.event = NetWatchdogCheckResult::Event::Recovered;
       result.outageStartMs = startMs;
       result.outageDurationMs = now - startMs;
@@ -143,6 +158,7 @@ NetWatchdogCheckResult checkInternetAndMaybePulseRelay() {
 
   if (g_firstFailureMs == 0) {
     g_firstFailureMs = now; // outage just started - nothing to do yet
+    g_outageEpisodeStartMs = now; // true episode start - never touched again until recovery
     return result;
   }
 
@@ -171,6 +187,6 @@ NetWatchdogStatus getNetWatchdogStatus() {
   status.settingEnabled = g_settingEnabled;
   status.available = g_available;
   status.outageInProgress = g_firstFailureMs != 0;
-  status.outageStartMs = g_firstFailureMs;
+  status.outageStartMs = g_outageEpisodeStartMs;
   return status;
 }

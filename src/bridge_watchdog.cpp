@@ -19,11 +19,21 @@ static bool g_available = false;        // see bridgeWatchdogActive()'s comment
 static int g_activePin = -1;
 static bool g_activeLow = true;
 static bool g_camerasResolved = false;  // updated on each check - see checkBridgeCamerasAndMaybePulseRelay
-// 0 = no outage currently in progress - a millis() timestamp of when the
-// CURRENT unbroken stretch of "both offline" started, same sentinel
-// convention net_watchdog.cpp's own g_firstFailureMs uses. Same-task-only
-// (main.cpp's loop() is the only caller here), no lock needed.
+// 0 = no outage currently in progress - a millis() timestamp used purely
+// to pace repeated relay pulses: RESTARTED after every pulse (see the
+// pulse branch below), same sentinel convention net_watchdog.cpp's own
+// g_firstFailureMs uses, for the same reason. Same-task-only (main.cpp's
+// loop() is the only caller here), no lock needed.
 static unsigned long g_firstBothOfflineMs = 0;
+
+// 0 = no outage currently in progress - a millis() timestamp of when the
+// CURRENT unbroken "both offline" episode truly began, set once and left
+// alone until recovery - deliberately NOT restarted by the pulse branch
+// the way g_firstBothOfflineMs above is. See net_watchdog.cpp's own
+// g_outageEpisodeStartMs comment for why: without this, an outage
+// outliving one pulse cycle would report "first detected"/"was down
+// since" as the time of the most recent pulse, not the true start.
+static unsigned long g_outageEpisodeStartMs = 0;
 
 BridgeWatchdogSettings loadBridgeWatchdogSettings() {
   Preferences prefs;
@@ -159,9 +169,10 @@ BridgeWatchdogCheckResult checkBridgeCamerasAndMaybePulseRelay(const CameraConfi
 
   if (!bothOffline) {
     if (g_firstBothOfflineMs != 0) {
-      unsigned long startMs = g_firstBothOfflineMs;
+      unsigned long startMs = g_outageEpisodeStartMs;
       logEvent("Camera bridge watchdog: " + settings.cameraA + " / " + settings.cameraB + " recovered");
       g_firstBothOfflineMs = 0;
+      g_outageEpisodeStartMs = 0;
       result.event = BridgeWatchdogCheckResult::Event::Recovered;
       result.outageStartMs = startMs;
       result.outageDurationMs = now - startMs;
@@ -171,6 +182,7 @@ BridgeWatchdogCheckResult checkBridgeCamerasAndMaybePulseRelay(const CameraConfi
 
   if (g_firstBothOfflineMs == 0) {
     g_firstBothOfflineMs = now; // outage just started - nothing to do yet
+    g_outageEpisodeStartMs = now; // true episode start - never touched again until recovery
     return result;
   }
 
@@ -201,6 +213,6 @@ BridgeWatchdogStatus getBridgeWatchdogStatus() {
   status.available = g_available;
   status.camerasResolved = g_camerasResolved;
   status.outageInProgress = g_firstBothOfflineMs != 0;
-  status.outageStartMs = g_firstBothOfflineMs;
+  status.outageStartMs = g_outageEpisodeStartMs;
   return status;
 }
