@@ -638,6 +638,36 @@ struct AlertRecipient {
   TelegramLang language;
 };
 
+// Multi-camera alert digest - correlates DIFFERENT cameras alerting close
+// together (see checkMultiCameraAlertDigest's own comment, telegram.h) into
+// one extra summary message. Cross-task shared state: each camera runs on
+// its own FreeRTOS task (cameraTaskFn), so this needs its own mutex, same
+// pattern as g_telegramNetMutex/g_commandRateMutex elsewhere in this file.
+static SemaphoreHandle_t g_multiCameraDigestMutex = xSemaphoreCreateMutex();
+// 0 = no window currently open - opened by the first camera to alert,
+// closed (and cleared) by checkMultiCameraAlertDigest once
+// MULTI_CAMERA_DIGEST_WINDOW_MS has passed since then.
+static unsigned long g_multiCameraDigestWindowStartMs = 0;
+static std::vector<String> g_multiCameraDigestCameras; // distinct camera names seen so far this window
+
+// Records cfg.name into the current cross-camera alert window, opening a
+// fresh one first if none is currently open. Called by triggerMotionAlert
+// right after a real (non-quiet-hours, non-cooldown) send has already been
+// decided - see both of its call sites below. A camera already present in
+// the window (its own repeat alert, unlikely this close together given its
+// own cooldown, but not impossible with a very short one configured) isn't
+// added twice.
+static void noteMultiCameraAlert(const String& cameraName) {
+  xSemaphoreTake(g_multiCameraDigestMutex, portMAX_DELAY);
+  if (g_multiCameraDigestWindowStartMs == 0) g_multiCameraDigestWindowStartMs = millis();
+  bool alreadyIn = false;
+  for (auto& n : g_multiCameraDigestCameras) {
+    if (n.equalsIgnoreCase(cameraName)) { alreadyIn = true; break; }
+  }
+  if (!alreadyIn) g_multiCameraDigestCameras.push_back(cameraName);
+  xSemaphoreGive(g_multiCameraDigestMutex);
+}
+
 void triggerMotionAlert(const CameraConfig& cfg, CameraState& st, bool isPetEvent) {
   // alertsEnabled is written by loop()'s task (pollTelegramCommands'
   // /on//off), this function runs on the camera's own task - cross-task
@@ -729,6 +759,7 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st, bool isPetEven
     String timestamp = nowTimestampString();
     for (auto& r : recipients) sendTelegramMessageTo(r.chatId, trPetAlertText(r.language, cfg.name, timestamp));
     logEvent(cfg.name + ": pet alert (text) to " + String(recipients.size()) + " recipient(s)");
+    noteMultiCameraAlert(cfg.name);
     if (st.snapshotUri.length() > 0) {
       size_t jpgLen = 0;
       uint8_t* jpg = fetchOneSnapshot(cfg, st, jpgLen);
@@ -760,6 +791,7 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st, bool isPetEven
   unsigned int shots = safeSnapshotBurstCount(cfg);
   logEvent(cfg.name + ": " + (isPetEvent ? "pet" : "motion") + " alert, " + String(shots) + " shot(s) to " +
            String(recipients.size()) + " recipient(s)");
+  noteMultiCameraAlert(cfg.name);
 
   // Each shot is its own fetch (re-fetching is what makes consecutive
   // shots differ) and its own fan-out to every recipient - re-fetching per
@@ -804,6 +836,67 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st, bool isPetEven
     }
     pushCameraSnapshot(cfg, st, jpg, jpgLen); // takes ownership - do not free(jpg) here
   }
+}
+
+// Manual "Send test alert" button (Cameras dashboard page,
+// webserver_cameras.cpp's startTestAlertAsync). Fetches ONE fresh
+// snapshot and sends it, clearly captioned as a test (trTestAlertCaption),
+// to every Telegram user currently subscribed to this camera
+// (telegramUserWantsCamera) - the same recipient list a real motion alert
+// would use, so the whole snapshot-fetch/recipient-filtering/Telegram-
+// delivery chain gets verified end-to-end, without waiting for real
+// motion or faking a PIR trip. Deliberately ignores st.alertsEnabled
+// (muted or not), quiet hours, and the alert cooldown entirely, and does
+// NOT touch st.lastAlert/hasAlerted/digestArmed/suppressedMotionCount - a
+// manual test must never interfere with the real motion-alert state
+// machine, same "manual override, real state machine left alone"
+// reasoning as net_watchdog.h's manualPulseRelay. Still pushes the
+// snapshot to this camera's history (pushCameraSnapshot) same as every
+// other alert path, so it shows up in the Preview column too.
+// `outDetail` is set to a human-readable reason on any failure (left
+// untouched on success).
+bool sendTestAlert(const CameraConfig& cfg, CameraState& st, String& outDetail) {
+  // snapshotUri is written by this camera's own task (camera.cpp) but this
+  // runs from the Send-Test-Alert background task - cross-task read,
+  // needs CameraStateLock. See CameraState::stateMutex.
+  bool hasSnapshotUri;
+  { CameraStateLock lock(st); hasSnapshotUri = st.snapshotUri.length() > 0; }
+  if (!hasSnapshotUri) {
+    outDetail = "no snapshot URI resolved yet for this camera";
+    return false;
+  }
+
+  std::vector<AlertRecipient> recipients;
+  for (auto& u : loadTelegramUsers()) {
+    if (telegramUserWantsCamera(u, cfg.name)) recipients.push_back({u.chatId, u.language});
+  }
+  if (recipients.empty()) {
+    outDetail = "no Telegram user is currently subscribed to this camera";
+    return false;
+  }
+
+  size_t jpgLen = 0;
+  uint8_t* jpg = fetchOneSnapshot(cfg, st, jpgLen);
+  if (!jpg) {
+    outDetail = "snapshot fetch from the camera failed - see the Serial log";
+    return false;
+  }
+
+  String timestamp = nowTimestampString();
+  bool anyOk = false;
+  for (auto& r : recipients) {
+    if (sendTelegramPhotoWithRetry(jpg, jpgLen, trTestAlertCaption(r.language, cfg.name, timestamp), r.chatId)) {
+      anyOk = true;
+    }
+  }
+  pushCameraSnapshot(cfg, st, jpg, jpgLen); // takes ownership - do not free(jpg) here
+
+  if (!anyOk) {
+    outDetail = "Telegram delivery failed for every recipient - see the Serial log";
+    return false;
+  }
+  logEvent(cfg.name + ": test alert sent to " + String(recipients.size()) + " recipient(s)");
+  return true;
 }
 
 void triggerTimelapseCapture(const CameraConfig& cfg, CameraState& st) {
@@ -1063,6 +1156,40 @@ void checkPendingMotionDigest(const CameraConfig& cfg, CameraState& st) {
     sendTelegramMessageTo(r.chatId, trMotionDigest(r.language, cfg.name, count, elapsedSec));
   }
   logEvent(cfg.name + ": motion digest - " + String(count) + " event(s) in " + String(elapsedSec) + "s");
+}
+
+// See its own header comment (telegram.h) and noteMultiCameraAlert's
+// (above) for the full design. Reads/clears the shared window under
+// g_multiCameraDigestMutex, then does the actual (possibly slow) Telegram
+// send OUTSIDE the lock - same "don't hold a mutex across a blocking
+// network call" discipline as every other cross-task lock in this file.
+void checkMultiCameraAlertDigest() {
+  unsigned long windowStartMs;
+  std::vector<String> cameras;
+  {
+    xSemaphoreTake(g_multiCameraDigestMutex, portMAX_DELAY);
+    windowStartMs = g_multiCameraDigestWindowStartMs;
+    if (windowStartMs == 0 || millis() - windowStartMs < MULTI_CAMERA_DIGEST_WINDOW_MS) {
+      xSemaphoreGive(g_multiCameraDigestMutex);
+      return; // no window open, or still within it - not due yet
+    }
+    cameras = g_multiCameraDigestCameras;
+    g_multiCameraDigestWindowStartMs = 0;
+    g_multiCameraDigestCameras.clear();
+    xSemaphoreGive(g_multiCameraDigestMutex);
+  }
+  // A single camera's own burst is exactly what its per-camera cooldown/
+  // digest (checkPendingMotionDigest above) already reports - no
+  // cross-camera correlation to add here, so silently discard the window
+  // rather than sending a one-camera "digest" that says nothing new.
+  if (cameras.size() < 2) return;
+
+  String cameraList;
+  for (size_t i = 0; i < cameras.size(); i++) cameraList += (i > 0 ? ", " : "") + cameras[i];
+  sendTelegramMessage([&](TelegramLang lang) {
+    return trMultiCameraDigest(lang, (uint32_t)cameras.size(), cameraList);
+  });
+  logEvent(String((unsigned)cameras.size()) + " cameras detected motion together: " + cameraList);
 }
 
 // ============================================================

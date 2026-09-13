@@ -29,6 +29,25 @@ void test_trMotionCaption_pet_vs_motion_and_language(void) {
   TEST_ASSERT_EQUAL_STRING(enMotion.c_str(), ptMotion.c_str());
 }
 
+void test_trTestAlertCaption_contains_name_and_says_test(void) {
+  String en = trTestAlertCaption(TelegramLang::English, "D01", "2024-01-01 10:00:00");
+  String pt = trTestAlertCaption(TelegramLang::Portuguese, "D01", "2024-01-01 10:00:00");
+  assertDiffersAndContains(en, pt, "D01");
+  // Must be unmistakably labeled as a test, in each language, so it's
+  // never confused with a real motion alert - the whole point of the
+  // Cameras page's "Send test alert" button.
+  TEST_ASSERT_TRUE(en.indexOf("TEST") >= 0);
+  TEST_ASSERT_TRUE(pt.indexOf("TESTE") >= 0);
+}
+
+void test_trMultiCameraDigest_contains_count_and_list(void) {
+  String en = trMultiCameraDigest(TelegramLang::English, 3, "D01, D02, D03");
+  String pt = trMultiCameraDigest(TelegramLang::Portuguese, 3, "D01, D02, D03");
+  assertDiffersAndContains(en, pt, "D01, D02, D03");
+  TEST_ASSERT_TRUE(en.indexOf("3") >= 0);
+  TEST_ASSERT_TRUE(pt.indexOf("3") >= 0);
+}
+
 void test_trCameraOffline_contains_name_and_minutes(void) {
   String en = trCameraOffline(TelegramLang::English, "D07-PortariaEsq", 15);
   String pt = trCameraOffline(TelegramLang::Portuguese, "D07-PortariaEsq", 15);
@@ -407,6 +426,8 @@ void test_trHelpText_mentions_lang_command(void) {
 int main(int argc, char** argv) {
   UNITY_BEGIN();
   RUN_TEST(test_trMotionCaption_pet_vs_motion_and_language);
+  RUN_TEST(test_trTestAlertCaption_contains_name_and_says_test);
+  RUN_TEST(test_trMultiCameraDigest_contains_count_and_list);
   RUN_TEST(test_trCameraOffline_contains_name_and_minutes);
   RUN_TEST(test_trCameraBackOnline);
   RUN_TEST(test_trSubscriptionLost);

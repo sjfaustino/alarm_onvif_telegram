@@ -55,6 +55,21 @@ void checkMotionWatchdog(const CameraConfig& cfg, CameraState& st);
 // checkMotionWatchdog above.
 void checkPendingMotionDigest(const CameraConfig& cfg, CameraState& st);
 
+// Cross-camera correlation digest - distinct from checkPendingMotionDigest
+// above (which tracks repeated motion on ONE camera during its OWN
+// cooldown). This one correlates DIFFERENT cameras alerting close
+// together (a storm, wind, or a scene-wide false-positive AI trigger
+// hitting several sensors at once) into one extra summary message, so a
+// human scanning Telegram sees "this was one correlated event across N
+// cameras" instead of piecing that together from several separately-
+// arriving photo alerts. Purely additive: every camera's own real alert
+// still sends immediately and unmodified regardless of this - see the
+// .cpp's own comment for the full design. No specific camera argument -
+// this checks GLOBAL state, not one camera's; cheap enough to call every
+// cameraTaskFn loop iteration, same as checkPendingMotionDigest above (it
+// doesn't matter which camera's task happens to notice a digest is due).
+void checkMultiCameraAlertDigest();
+
 // Broadcasts an alert if this camera has been responding (see
 // checkCameraOnlineStatus - not OFFLINE) but hasn't held a working
 // subscription in over cfg.offlineThresholdMs, so it can't actually report
@@ -73,6 +88,17 @@ void checkSubscriptionHealth(const CameraConfig& cfg, CameraState& st);
 // Called from cameraTaskFn on cfg.timelapseIntervalMin's own interval,
 // independent of motion/alerts entirely.
 void triggerTimelapseCapture(const CameraConfig& cfg, CameraState& st);
+
+// Manual "Send test alert" button (Cameras dashboard page). Fetches one
+// fresh snapshot and sends it, clearly captioned as a test, to every
+// Telegram user currently subscribed to this camera - see the .cpp's own
+// comment for the full reasoning, including why this deliberately leaves
+// the real motion-alert cooldown/digest state untouched. `outDetail` is
+// set to a human-readable reason on failure. This can block for several
+// seconds (a camera HTTP fetch plus one or more Telegram sends) - callers
+// MUST run it off the calling task (see webserver_cameras.cpp's
+// startTestAlertAsync), never directly from a PsychicHttp route handler.
+bool sendTestAlert(const CameraConfig& cfg, CameraState& st, String& outDetail);
 
 // Sends a message to every user with systemMessages enabled, composed
 // per-recipient by calling `compose(u.language)` - lets each recipient get

@@ -263,6 +263,21 @@ static const unsigned int CAMERA_SNAPSHOT_BURST_MAX = 10;
 // as CAMERA_SNAPSHOT_BURST_MAX above.
 static const uint16_t CAMERA_SNAPSHOT_DIMENSION_MAX = 4096;
 
+// Cross-camera alert-correlation window (telegram.cpp's
+// checkMultiCameraAlertDigest/noteMultiCameraAlert) - how long after the
+// FIRST camera in a burst to keep watching for other, different cameras
+// also alerting before sending one combined summary message. Fixed-length
+// from that first alert, not extended by each new arrival (a sliding
+// window could in principle never close during a long-lasting event,
+// delaying the summary indefinitely). Long enough to catch a scene-wide
+// event (wind, a storm, a shared false-positive AI trigger) crossing
+// several cameras' own independent polling intervals; short enough that
+// "detected together" still reads as one event once the summary arrives.
+// Purely additive - every camera's own real photo alert still sends
+// immediately and unmodified either way, this never delays or suppresses
+// one.
+static const unsigned long MULTI_CAMERA_DIGEST_WINDOW_MS = 30UL * 1000UL;
+
 // Clamp for TelegramUser::maxCommandsPerMinute (Telegram Users page) - just
 // a sanity bound on the number field, same idea as CAMERA_SNAPSHOT_BURST_MAX
 // above. Not safety-critical the way the *_MAX_MS constants are (no

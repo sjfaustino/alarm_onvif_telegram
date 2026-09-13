@@ -29,6 +29,16 @@ struct CameraState {
   String   mediaServiceUrl;
   String   pullPointUrl;
   String   snapshotUri;
+  // RTSP stream URI (ONVIF GetStreamUri, RTP-Unicast/RTSP transport) -
+  // resolved alongside snapshotUri in cameraFetchProfileAndSnapshotUri
+  // (camera.cpp), for the Cameras dashboard page's "open live view"
+  // link. Best-effort and non-fatal: a camera that fails this call still
+  // gets its snapshotUri (motion/alert photos keep working), it just
+  // won't show an RTSP link. Stays empty for a camera using
+  // snapshotUriOverride - that branch never contacts the media service at
+  // all (no profile to ask GetStreamUri about), same limitation as every
+  // other ONVIF-derived field for an overridden camera.
+  String   streamUri;
   String   profileToken;
   bool     subscriptionActive = false;
   unsigned long lastPull  = 0;
@@ -232,7 +242,7 @@ struct CameraState {
   size_t snapshotHistoryCount = 0;
 
   // Guards subscriptionActive, isOffline, alertsEnabled, hasAlerted,
-  // lastAlert, snapshotUri, user, pass, scheduledRevertDueMs,
+  // lastAlert, snapshotUri, streamUri, user, pass, scheduledRevertDueMs,
   // scheduledRevertToOn, pendingConfig, stopRequested, snapshotInFlight,
   // snapshotHistory (+Next/Count), lastContactMs, totalReconnects,
   // reconnectHistory (+Next/Count), offlineHistory (+Next/Count), and

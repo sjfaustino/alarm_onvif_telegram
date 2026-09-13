@@ -266,6 +266,27 @@ bool cameraFetchProfileAndSnapshotUri(const CameraConfig& cfg, CameraState& st) 
   Serial.printf("[%s] Snapshot URI: %s\n", cfg.name.c_str(), resolvedUri.c_str());
   Serial.println("  ^ if this looks wrong (bad IP/port), that's the same GetSnapshotUri "
                   "quirk seen on the XM530 - you may need a snapshotUriOverride for this camera too.");
+
+  // Best-effort, non-fatal - see CameraState::streamUri's own comment.
+  // Reuses the profile token already chosen above, so this is one extra
+  // SOAP call, not a second GetProfiles round trip.
+  String streamAction = "http://www.onvif.org/ver10/media/wsdl/GetStreamUri";
+  String streamBody = "<trt:GetStreamUri><trt:StreamSetup><tt:Stream>RTP-Unicast</tt:Stream>"
+                       "<tt:Transport><tt:Protocol>RTSP</tt:Protocol></tt:Transport></trt:StreamSetup>"
+                       "<trt:ProfileToken>" + xmlEscape(st.profileToken) + "</trt:ProfileToken></trt:GetStreamUri>";
+  String streamResponse = cameraSoapCall(cfg, st, st.mediaServiceUrl, "", streamAction, streamBody);
+  if (streamResponse.length() == 0 || responseHasFault(streamResponse)) {
+    Serial.printf("[%s] GetStreamUri FAILED - no RTSP link will be shown on the dashboard for this "
+                  "camera, motion detection/snapshot alerts are unaffected.\n", cfg.name.c_str());
+    return true;
+  }
+  String resolvedStreamUri = findElementByLocalName(streamResponse, "Uri");
+  resolvedStreamUri.trim();
+  if (resolvedStreamUri.length() > 0) {
+    CameraStateLock lock(st);
+    st.streamUri = resolvedStreamUri;
+    Serial.printf("[%s] Stream URI: %s\n", cfg.name.c_str(), resolvedStreamUri.c_str());
+  }
   return true;
 }
 
@@ -716,6 +737,11 @@ void cameraTaskFn(void* pvParameters) {
     checkSubscriptionHealth(cfg, st); // after checkCameraOnlineStatus - reads its just-updated st.isOffline
     checkMotionWatchdog(cfg, st);
     checkPendingMotionDigest(cfg, st);
+    // Global cross-camera state, not specific to this camera - piggybacks
+    // on every camera task's own poll cadence purely for a regular "is a
+    // digest due yet" heartbeat, same reasoning checkPendingMotionDigest
+    // above already established for this exact call site.
+    checkMultiCameraAlertDigest();
 
     vTaskDelay(pdMS_TO_TICKS(10));
   }

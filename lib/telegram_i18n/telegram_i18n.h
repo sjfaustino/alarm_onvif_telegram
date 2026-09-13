@@ -35,6 +35,15 @@ String trTimelapseCaption(TelegramLang lang, const String& cameraName, const Str
 String trTamperCaption(TelegramLang lang, const String& cameraName, const String& timestamp);
 String trSignalLossMessage(TelegramLang lang, const String& cameraName, const String& timestamp);
 String trMotionDigest(TelegramLang lang, const String& cameraName, uint32_t count, unsigned long elapsedSec);
+// Cross-camera correlation summary (telegram.cpp's checkMultiCameraAlertDigest) -
+// distinct from trMotionDigest above, which is about repeated motion on
+// ONE camera during its own cooldown. cameraList is already comma-joined
+// by the caller - language-neutral, not part of this.
+String trMultiCameraDigest(TelegramLang lang, uint32_t count, const String& cameraList);
+// Manual "Send test alert" button (Cameras dashboard page) - a real photo
+// send through the same recipient list a real motion alert would use,
+// clearly labeled so it's never mistaken for one.
+String trTestAlertCaption(TelegramLang lang, const String& cameraName, const String& timestamp);
 
 // ---- System-message broadcasts (sendTelegramMessage's systemMessages recipients) ----
 

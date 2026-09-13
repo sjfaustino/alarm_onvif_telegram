@@ -175,8 +175,39 @@ BackgroundJobStartOutcome startCameraDiscoveryAsync();
 // (internally locked) - renderCamerasPanel calls this itself.
 String renderCameraDiscoveryStatus();
 
-// True while any of the three background jobs above (test connection, test
-// all, discovery) is running - lets renderShell() (webserver.cpp) decide
-// whether to auto-refresh the Cameras page instead of leaving the user to
-// manually reload.
+// ============================================================
+// Send Test Alert (per camera) - manual, on-demand verification of the
+// full snapshot-fetch/recipient-filtering/Telegram-delivery chain, same
+// "can't run on the calling PsychicHttp task" reasoning as Test
+// Connection/Test All/discovery above. See telegram.h's sendTestAlert for
+// the actual (potentially several-second: one camera HTTP fetch plus one
+// or more TLS sends to Telegram) work.
+// ============================================================
+
+// Starts sendTestAlert(cfg, st) on a background FreeRTOS task instead of
+// the calling task. A no-op (doesn't start a second overlapping run, same
+// "one at a time" rule test-all/discovery/test-connection already follow)
+// if one is already in progress - the return value tells the
+// /cameras/test-alert route handler which of the three outcomes happened,
+// for an accurate banner instead of always assuming success. cfg is
+// heap-copied (freed by the task) - safe to pass a local copy. st is
+// taken by reference, NOT copied: it must be the actual live CameraState
+// for this camera (liveStates[idx]), since sendTestAlert reads its real,
+// already-resolved snapshotUri and credentials - safe to hold a pointer
+// to across the task's lifetime since liveStates is sized once at boot
+// and never freed (same assumption every other cross-task CameraState
+// pointer in this project already relies on).
+BackgroundJobStartOutcome startTestAlertAsync(const CameraConfig& cfg, CameraState& st);
+
+// Renders the current Send-Test-Alert status: "sending in the background"
+// while one is in progress, the last completed run's result once one
+// exists, or "" if none has run yet this boot. Safe to call from any task
+// (internally locked) - renderCamerasPanel calls this itself, so it shows
+// up on a normal page load too, not just right after clicking the button.
+String renderTestAlertStatus();
+
+// True while any of the four background jobs above (test connection, test
+// all, discovery, send test alert) is running - lets renderShell()
+// (webserver.cpp) decide whether to auto-refresh the Cameras page instead
+// of leaving the user to manually reload.
 bool cameraJobsInProgress();

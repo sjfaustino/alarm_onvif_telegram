@@ -47,6 +47,13 @@ String trSignalLossMessage(TelegramLang lang, const String& cameraName, const St
   return "\xE2\x9A\xA0\xEF\xB8\x8F " + cameraName + " - VIDEO SIGNAL LOSS - " + timestamp;
 }
 
+String trTestAlertCaption(TelegramLang lang, const String& cameraName, const String& timestamp) {
+  if (lang == TelegramLang::Portuguese) {
+    return "\xF0\x9F\xA7\xAA " + cameraName + " - ALERTA DE TESTE - " + timestamp;
+  }
+  return "\xF0\x9F\xA7\xAA " + cameraName + " - TEST ALERT - " + timestamp;
+}
+
 String trMotionDigest(TelegramLang lang, const String& cameraName, uint32_t count, unsigned long elapsedSec) {
   if (lang == TelegramLang::Portuguese) {
     return cameraName + ": movimento continuou - mais " + String(count) + " evento(s) nos \xC3\xBAltimos " +
@@ -54,6 +61,14 @@ String trMotionDigest(TelegramLang lang, const String& cameraName, uint32_t coun
   }
   return cameraName + ": motion continued - " + String(count) + " more event(s) in the last " +
          String(elapsedSec) + " second(s).";
+}
+
+String trMultiCameraDigest(TelegramLang lang, uint32_t count, const String& cameraList) {
+  if (lang == TelegramLang::Portuguese) {
+    return "\xE2\x9A\xA0\xEF\xB8\x8F " + String(count) + " c\xC3\xA2meras detetaram movimento em conjunto: " +
+           cameraList;
+  }
+  return "\xE2\x9A\xA0\xEF\xB8\x8F " + String(count) + " cameras detected motion together: " + cameraList;
 }
 
 String trCameraOffline(TelegramLang lang, const String& cameraName, unsigned long minutes) {

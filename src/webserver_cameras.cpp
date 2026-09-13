@@ -1,4 +1,5 @@
 #include "webserver_cameras.h"
+#include "telegram.h" // sendTestAlert
 #include "config.h" // CAMERA_ALERT_COOLDOWN_MAX_MS/CAMERA_OFFLINE_THRESHOLD_MAX_MS/CAMERA_SNAPSHOT_BURST_MAX/CAMERA_SNAPSHOT_DIMENSION_MAX
 #include "format_utils.h"
 #include "webserver_html.h"
@@ -60,6 +61,27 @@ static int findLiveCameraIndex(std::vector<CameraConfig>* liveCameras, const Str
     if ((*liveCameras)[i].name.equalsIgnoreCase(name)) return (int)i;
   }
   return -1;
+}
+
+// Embeds user:pass as rtsp://user:pass@host/... userinfo, so the Cameras
+// page's RTSP link is directly pastable into VLC/an NVR without the
+// viewer needing to already know the camera's credentials - the same
+// ones cfg.user/cfg.pass already store in NVS, not a new exposure of
+// anything. urlEncode()d (not raw) so a ':'/'@' in either one can't break
+// out of the userinfo section and corrupt the rest of the URI. A no-op
+// (returns rawUri unchanged) if there's no username to embed, or the URI
+// already carries its own userinfo (some cameras' GetStreamUri response
+// embeds one directly) - never overwrite credentials the camera itself
+// already chose to include.
+static String buildRtspUriWithCredentials(const String& rawUri, const String& user, const String& pass) {
+  int schemeEnd = rawUri.indexOf("://");
+  if (schemeEnd < 0 || user.length() == 0) return rawUri;
+  int afterScheme = schemeEnd + 3;
+  int nextSlash = rawUri.indexOf('/', afterScheme);
+  String authority = (nextSlash >= 0) ? rawUri.substring(afterScheme, nextSlash) : rawUri.substring(afterScheme);
+  if (authority.indexOf('@') >= 0) return rawUri; // already has credentials embedded
+  return rawUri.substring(0, afterScheme) + urlEncode(user) + ":" + urlEncode(pass) + "@" +
+         rawUri.substring(afterScheme);
 }
 
 // Shared by "Add camera" (v = a fresh default CameraConfig), "Edit camera"
@@ -194,14 +216,17 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
     String liveStatus;
     String lastAlertStr = "never";
     String previewCell = "<span class=\"hint\">(none yet)</span>";
+    String rtspUri; // populated below only if isLive - see CameraState::streamUri's own comment
     // c.enabled (fresh from NVS, not the live cfg) is required here, not
     // just idx>=0 - a torn-down camera (requestCameraStop, disabled/deleted
     // live) keeps its liveCameras/liveStates slot forever (never shrinks),
     // so idx alone can't tell "task exists" from "task existed once, has
     // since exited". c.enabled flips to false the moment the save/delete
     // that triggered the teardown lands in NVS, well before this render
-    // could see anything else.
-    if (idx >= 0 && liveStates && idx < (int)liveStates->size() && c.enabled) {
+    // could see anything else. Also gates the RTSP link and Send-Test-Alert
+    // button below - both need a real, live CameraState to read/act on.
+    bool isLive = idx >= 0 && liveStates && idx < (int)liveStates->size() && c.enabled;
+    if (isLive) {
       // Read under lock - these fields are written by the camera's own
       // task, this render runs on PsychicHttp's task. See
       // CameraState::stateMutex.
@@ -225,6 +250,7 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
         revertDueMs = st.scheduledRevertDueMs;
         revertToOn = st.scheduledRevertToOn;
         totalReconnects = st.totalReconnects;
+        rtspUri = st.streamUri;
         for (size_t i = 0; i < st.reconnectHistoryCount; i++) {
           if (nowMs - st.reconnectHistory[i] < 24UL * 3600UL * 1000UL) recentReconnects++;
         }
@@ -397,6 +423,34 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
     html += "<a class=\"icon-btn secondary\" href=\"http://" + htmlEscape(hostOnly) +
             "/\" target=\"_blank\" title=\"Open camera's web UI\" aria-label=\"Open camera's web UI\">"
             "&#8599;</a>";
+    // RTSP live-view link, only once the standard ONVIF flow has actually
+    // resolved a stream URI (cameraFetchProfileAndSnapshotUri, camera.cpp) -
+    // see CameraState::streamUri's own comment for why a camera using
+    // snapshotUriOverride never gets one here. Credentials embedded
+    // (rtsp://user:pass@host/...) so this is directly pastable into VLC/an
+    // NVR without the viewer having to already know them - the same
+    // credentials cfg.user/cfg.pass already stores in NVS, not a new
+    // exposure. htmlEscape() here is load-bearing, not defensive
+    // boilerplate: rawUri came back from this camera's own SOAP response,
+    // which - like deviceServiceUrl above - a rogue/compromised camera
+    // controls entirely.
+    if (rtspUri.length() > 0) {
+      String rtspWithCreds = buildRtspUriWithCredentials(rtspUri, c.user, c.pass);
+      html += " <a class=\"icon-btn secondary\" href=\"" + htmlEscape(rtspWithCreds) +
+              "\" title=\"Open live RTSP stream (e.g. in VLC)\" aria-label=\"Open live RTSP stream\">"
+              "&#9654;</a>";
+    }
+    if (isLive) {
+      // Own <form>, not just a link - this is a real POST that fetches a
+      // fresh snapshot and sends it to Telegram, not a passive navigation.
+      // Fires and returns immediately (startTestAlertAsync, background
+      // task) - see that function's own comment for why this can't run
+      // synchronously on this request-handling task.
+      html += " <form method=\"POST\" action=\"/cameras/test-alert\" style=\"display:inline;\">"
+              "<input type=\"hidden\" name=\"name\" value=\"" + htmlEscape(c.name) + "\">"
+              "<button type=\"submit\" class=\"icon-btn secondary\" title=\"Send test alert\" "
+              "aria-label=\"Send test alert\">\xF0\x9F\xA7\xAA</button></form>";
+    }
     html += renderEditDeleteActions("/cameras/edit?name=", "/delete", c.name) + "</div></td></tr>";
     rowIdx++;
   }
@@ -483,6 +537,7 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
   }
 
   html += renderTestConnectionStatus();
+  html += renderTestAlertStatus();
   html += renderCameraForm(prefill ? *prefill : CameraConfig(), isEdit);
 
   html += "<p class=\"hint\">Adding, editing, or deleting a camera updates storage immediately, "
@@ -882,6 +937,67 @@ String renderTestConnectionStatus() {
   return "";
 }
 
+// ============================================================
+// Send Test Alert background wrapper - see webserver_cameras.h's
+// startTestAlertAsync comment and telegram.h's sendTestAlert for why this
+// can't run synchronously on the calling (PsychicHttp) task.
+// ============================================================
+
+struct TestAlertResult {
+  bool ok = false;
+  String cameraName;
+  String detail; // failure reason - "" on success
+};
+
+static BackgroundJob<TestAlertResult> g_testAlertJob;
+
+struct TestAlertTaskParams {
+  CameraConfig cfg; // heap-copied snapshot - only cfg.name is actually read by sendTestAlert
+  CameraState* st;  // NOT owned - must be the live CameraState (liveStates[idx]), see startTestAlertAsync's comment
+};
+
+static void testAlertTask(void* param) {
+  TestAlertTaskParams* p = static_cast<TestAlertTaskParams*>(param);
+  TestAlertResult r;
+  r.cameraName = p->cfg.name;
+  r.ok = sendTestAlert(p->cfg, *p->st, r.detail);
+  delete p;
+  g_testAlertJob.finish(r);
+  vTaskDelete(nullptr);
+}
+
+BackgroundJobStartOutcome startTestAlertAsync(const CameraConfig& cfg, CameraState& st) {
+  if (!g_testAlertJob.tryStart()) return BackgroundJobStartOutcome::AlreadyRunning; // one at a time - a second click while one's in flight is a no-op
+
+  TestAlertTaskParams* params = new TestAlertTaskParams{cfg, &st};
+  // Same stack size as the other camera background tasks above - comparable
+  // work (one HTTP fetch, one or more TLS sends to Telegram).
+  BaseType_t created = xTaskCreate(testAlertTask, "testAlert", 10240, params, tskIDLE_PRIORITY + 1, nullptr);
+  if (created != pdPASS) {
+    delete params; // never handed to a task, so nothing else will free it
+    g_testAlertJob.cancelStart();
+    Serial.println("[webserver_cameras] ERROR: failed to start the Send Test Alert task (out of memory?) "
+                    "- try again once memory frees up.");
+    return BackgroundJobStartOutcome::FailedToStart;
+  }
+  return BackgroundJobStartOutcome::Started;
+}
+
+String renderTestAlertStatus() {
+  auto st = g_testAlertJob.status();
+  if (st.inProgress) {
+    return "<p class=\"hint\">Sending test alert in the background - reload this page in a moment to "
+           "see the result. The rest of the dashboard stays responsive to everyone else in the "
+           "meantime.</p>";
+  }
+  if (!st.hasResult) return "";
+  if (st.result.ok) {
+    return "<p>Test alert sent for \"" + htmlEscape(st.result.cameraName) + "\".</p>";
+  }
+  return "<p>Test alert FAILED for \"" + htmlEscape(st.result.cameraName) + "\": " +
+         htmlEscape(st.result.detail) + "</p>";
+}
+
 // Runs a read-only subset of testCameraConnection's ONVIF call sequence,
 // packaged as a condensed CameraTestResult - a separate function rather
 // than reusing testCameraConnection because its caller
@@ -1156,5 +1272,5 @@ String renderCameraDiscoveryStatus() {
 
 bool cameraJobsInProgress() {
   return g_testConnectionJob.status().inProgress || g_testAllJob.status().inProgress ||
-         g_discoveryJob.status().inProgress;
+         g_discoveryJob.status().inProgress || g_testAlertJob.status().inProgress;
 }

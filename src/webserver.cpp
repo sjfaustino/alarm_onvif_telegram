@@ -740,6 +740,51 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
             .c_str());
   });
 
+  server.on("/cameras/test-alert", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
+    String name = request->getParam("name", "");
+    name.trim();
+
+    CameraConfig cfg;
+    bool found = false;
+    for (auto& c : loadCameras()) {
+      if (c.name.equalsIgnoreCase(name)) { cfg = c; found = true; break; }
+    }
+
+    int idx = -1;
+    if (g_liveCameras) {
+      for (size_t i = 0; i < g_liveCameras->size(); i++) {
+        if ((*g_liveCameras)[i].name.equalsIgnoreCase(name)) { idx = (int)i; break; }
+      }
+    }
+
+    String banner;
+    if (!found || idx < 0 || !g_liveStates || idx >= (int)g_liveStates->size() || !(*g_liveCameras)[idx].enabled) {
+      // Same reasoning findLiveCameraIndex's own comment (webserver_cameras.cpp)
+      // gives for "was added since the last reboot" / "disabled" - there's no
+      // live CameraState to actually send through in either case.
+      banner = "Camera \"" + htmlEscape(name) + "\" isn't currently running (disabled, or added since "
+               "the last reboot) - nothing to test. Not sent.";
+    } else {
+      // Kicks off a background task and returns immediately - see
+      // startTestAlertAsync's own comment (webserver_cameras.h) for why this
+      // must never run synchronously on this request-handling task. cfg is
+      // this loop's own local copy (heap-copied again internally by
+      // startTestAlertAsync); (*g_liveStates)[idx] is passed by reference -
+      // it must be the real, live CameraState, not a copy, since
+      // sendTestAlert needs its actually-resolved snapshotUri/credentials.
+      banner = backgroundJobBanner(
+          startTestAlertAsync(cfg, (*g_liveStates)[idx]),
+          "Sending test alert in the background - reload this page in a moment to see the result.",
+          "A test alert is already being sent in the background - reload in a moment to see its result.",
+          "Could not start sending the test alert - the device is low on memory right now. Try again in "
+          "a moment.");
+    }
+    return response->send(
+        200, "text/html",
+        renderShell(Tab::Cameras, banner, renderCamerasPanel(nullptr, false, g_liveCameras, g_liveStates))
+            .c_str());
+  });
+
   server.on("/cameras/mute-all", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
     String duration = request->getParam("duration", "");
     duration.trim();
