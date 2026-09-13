@@ -87,6 +87,50 @@ void test_parseTelegramUpdates_message_without_text(void) {
   TEST_ASSERT_EQUAL_STRING("", updates[0].text.c_str());
 }
 
+// A document (file) upload - the /restore command's second step. Its own
+// accompanying text arrives as "caption", not "text" - text must stay
+// empty even though the sender typed something alongside the file.
+void test_parseTelegramUpdates_document_upload(void) {
+  String body = R"({"ok":true,"result":[
+    {"update_id":11,"message":{"chat":{"id":42},"caption":"/restore",
+     "document":{"file_id":"FILE123","file_name":"camera-monitor-config.txt"}}}
+  ]})";
+  std::vector<TelegramUpdate> updates = parseTelegramUpdates(body);
+  TEST_ASSERT_EQUAL_INT(1, (int)updates.size());
+  TEST_ASSERT_TRUE(updates[0].hasDocument);
+  TEST_ASSERT_EQUAL_STRING("FILE123", updates[0].documentFileId.c_str());
+  TEST_ASSERT_EQUAL_STRING("camera-monitor-config.txt", updates[0].documentFileName.c_str());
+  TEST_ASSERT_EQUAL_STRING("/restore", updates[0].documentCaption.c_str());
+  TEST_ASSERT_EQUAL_STRING("", updates[0].text.c_str());
+}
+
+// A document with no caption at all - the "arm with /restore first, then
+// send the file separately" flow. documentCaption must stay empty, not
+// crash or default to something else.
+void test_parseTelegramUpdates_document_without_caption(void) {
+  String body = R"({"ok":true,"result":[
+    {"update_id":12,"message":{"chat":{"id":42},
+     "document":{"file_id":"FILE456","file_name":"backup.txt"}}}
+  ]})";
+  std::vector<TelegramUpdate> updates = parseTelegramUpdates(body);
+  TEST_ASSERT_TRUE(updates[0].hasDocument);
+  TEST_ASSERT_EQUAL_STRING("", updates[0].documentCaption.c_str());
+}
+
+// A plain text message (no document at all) must leave hasDocument false
+// and documentFileId/documentFileName/documentCaption all empty - the
+// document fields shouldn't leak a stale value from a previous update
+// (each TelegramUpdate is freshly constructed, but this pins that
+// contract explicitly).
+void test_parseTelegramUpdates_text_message_has_no_document(void) {
+  String body = R"({"ok":true,"result":[
+    {"update_id":13,"message":{"chat":{"id":42},"text":"/status"}}
+  ]})";
+  std::vector<TelegramUpdate> updates = parseTelegramUpdates(body);
+  TEST_ASSERT_FALSE(updates[0].hasDocument);
+  TEST_ASSERT_EQUAL_STRING("", updates[0].documentFileId.c_str());
+}
+
 // An inline-keyboard button tap - callback_query, not message. chatId
 // comes from callback_query.message.chat.id (the chat the picker message
 // was sent to), same field names/roles as a normal message update.
@@ -244,6 +288,10 @@ void test_requiredPermissionForCommand_backup_needs_backup(void) {
   TEST_ASSERT_TRUE(TelegramCommandPermission::Backup == requiredPermissionForCommand(TelegramCommand::Backup));
 }
 
+void test_requiredPermissionForCommand_restore_needs_restore(void) {
+  TEST_ASSERT_TRUE(TelegramCommandPermission::Restore == requiredPermissionForCommand(TelegramCommand::Restore));
+}
+
 void test_requiredPermissionForCommand_unknown_needs_unknown(void) {
   TEST_ASSERT_TRUE(TelegramCommandPermission::Unknown == requiredPermissionForCommand(TelegramCommand::Unknown));
 }
@@ -274,6 +322,12 @@ void test_parseTelegramCommand_backup(void) {
   ParsedTelegramCommand p = parseTelegramCommand("/backup");
   TEST_ASSERT_TRUE(TelegramCommand::Backup == p.command);
   TEST_ASSERT_TRUE(TelegramCommandPermission::Backup == p.requiredPermission);
+}
+
+void test_parseTelegramCommand_restore(void) {
+  ParsedTelegramCommand p = parseTelegramCommand("/restore");
+  TEST_ASSERT_TRUE(TelegramCommand::Restore == p.command);
+  TEST_ASSERT_TRUE(TelegramCommandPermission::Restore == p.requiredPermission);
 }
 
 void test_parseTelegramCommand_on_extracts_and_trims_camera_name(void) {
@@ -542,6 +596,7 @@ void test_commandDisplayName_every_command(void) {
   TEST_ASSERT_EQUAL_STRING("/log", commandDisplayName(TelegramCommand::Log).c_str());
   TEST_ASSERT_EQUAL_STRING("/lang", commandDisplayName(TelegramCommand::Lang).c_str());
   TEST_ASSERT_EQUAL_STRING("/backup", commandDisplayName(TelegramCommand::Backup).c_str());
+  TEST_ASSERT_EQUAL_STRING("/restore", commandDisplayName(TelegramCommand::Restore).c_str());
   TEST_ASSERT_EQUAL_STRING("", commandDisplayName(TelegramCommand::Unknown).c_str());
 }
 
@@ -553,6 +608,9 @@ int main(int argc, char** argv) {
   RUN_TEST(test_parseTelegramUpdates_unescapes_text_field);
   RUN_TEST(test_parseTelegramUpdates_update_without_message_still_returns_updateId);
   RUN_TEST(test_parseTelegramUpdates_message_without_text);
+  RUN_TEST(test_parseTelegramUpdates_document_upload);
+  RUN_TEST(test_parseTelegramUpdates_document_without_caption);
+  RUN_TEST(test_parseTelegramUpdates_text_message_has_no_document);
   RUN_TEST(test_parseTelegramUpdates_callback_query);
   RUN_TEST(test_parseTelegramUpdates_callback_query_without_message);
   RUN_TEST(test_parseTelegramUpdates_empty_result_array);
@@ -572,11 +630,13 @@ int main(int argc, char** argv) {
   RUN_TEST(test_requiredPermissionForCommand_snap_needs_snap);
   RUN_TEST(test_requiredPermissionForCommand_reset_needs_reset);
   RUN_TEST(test_requiredPermissionForCommand_backup_needs_backup);
+  RUN_TEST(test_requiredPermissionForCommand_restore_needs_restore);
   RUN_TEST(test_requiredPermissionForCommand_unknown_needs_unknown);
   RUN_TEST(test_parseTelegramCommand_status);
   RUN_TEST(test_parseTelegramCommand_uptime);
   RUN_TEST(test_parseTelegramCommand_reset);
   RUN_TEST(test_parseTelegramCommand_backup);
+  RUN_TEST(test_parseTelegramCommand_restore);
   RUN_TEST(test_parseTelegramCommand_on_extracts_and_trims_camera_name);
   RUN_TEST(test_parseTelegramCommand_off);
   RUN_TEST(test_parseTelegramCommand_snap);

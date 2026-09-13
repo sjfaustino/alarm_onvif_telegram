@@ -89,6 +89,21 @@ static const unsigned long TELEGRAM_NET_MUTEX_TIMEOUT_MS = 45000UL;
 static const size_t TELEGRAM_RETRY_QUEUE_CAPACITY = 20;
 static const unsigned long TELEGRAM_RETRY_FLUSH_INTERVAL_MS = 60UL * 1000UL;      // 1 minute
 static const unsigned long TELEGRAM_RETRY_MAX_AGE_MS = 24UL * 60UL * 60UL * 1000UL; // 24 hours
+
+// /restore command (telegram.cpp) - how long a bare "/restore" stays
+// armed, waiting for the actual file to arrive as a separate message, and
+// the sanity cap on that file's size (a config export is at most a few
+// tens of KB even with many cameras/users - anything wildly larger than
+// this is either the wrong file entirely or an attempted abuse of the
+// board's limited heap, rejected outright before it's ever fully
+// downloaded).
+static const unsigned long RESTORE_PENDING_WINDOW_MS = 5UL * 60UL * 1000UL; // 5 minutes
+// Generous headroom over "a few tens of KB", not a round "big enough"
+// number - this String is buffered fully in internal heap (not PSRAM),
+// which this board has far less of, so the cap stays close to what a
+// real export actually needs rather than as large as the Bot API would
+// technically allow.
+static const size_t RESTORE_MAX_FILE_BYTES = 64UL * 1024UL; // 64KB
 // How often main.cpp's loop() re-checks NVS usage (checkNvsUsage) - see
 // NVS_USAGE_WARN_PERCENT's own comment for why this exists at all.
 // Independent of HEARTBEAT_INTERVAL_MS's much longer cadence: NVS usage

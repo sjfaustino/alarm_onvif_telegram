@@ -29,6 +29,7 @@ static TelegramUser sampleUser() {
   u.maxCommandsPerMinute = 10;
   u.language = TelegramLang::Portuguese;
   u.canBackup = true;
+  u.canRestore = true;
   return u;
 }
 
@@ -50,6 +51,7 @@ void test_round_trip_preserves_every_field(void) {
   TEST_ASSERT_EQUAL_UINT32(original.maxCommandsPerMinute, restored.maxCommandsPerMinute);
   TEST_ASSERT_TRUE(original.language == restored.language);
   TEST_ASSERT_EQUAL(original.canBackup, restored.canBackup);
+  TEST_ASSERT_EQUAL(original.canRestore, restored.canRestore);
   TEST_ASSERT_EQUAL_INT(2, (int)restored.cameraNames.size());
   TEST_ASSERT_EQUAL_STRING("D01-FrontDoor", restored.cameraNames[0].c_str());
   TEST_ASSERT_EQUAL_STRING("D02-BackGate", restored.cameraNames[1].c_str());
@@ -173,22 +175,50 @@ void test_v4_exact_field_count_is_accepted(void) {
   TEST_ASSERT_FALSE(restored.canBackup);
 }
 
-// ---- Version TELEGRAM_USER_SCHEMA_VERSION (current, strict) ----
+// ---- Version 5 (superseded by V6's canRestore, still read for migration) ----
 
-// The actual fix this versioning scheme exists for: a record tagged as the
-// *current* schema version must have exactly the current field count - the
-// old 10-field V4 layout, explicitly tagged as the current (V5) version, is
-// corruption, not "an older save" (that interpretation is scoped to
-// explicit older version numbers only). See test_camera_serialize's
-// equivalent test for the full rationale.
+// A record tagged as version 5 keeps parsing under V5's own 11-field
+// layout even though TELEGRAM_USER_SCHEMA_VERSION has moved on to 6 -
+// lets an un-migrated NVS record from before canRestore existed keep
+// loading correctly (telegram_users.cpp re-saves it as the current
+// version on its next write). Tagged explicitly as literal version 5,
+// not TELEGRAM_USER_SCHEMA_VERSION - V5 is a permanent, never-edited
+// historical branch, same as V1-V4 above.
 void test_v5_wrong_field_count_is_rejected_not_reinterpreted(void) {
   String tenFields = joinFields({"User", "42", "1", "", "1", "1", "0", "1", "15", "1"}); // missing canBackup
-  TelegramUser restored = deserializeUser(tenFields, TELEGRAM_USER_SCHEMA_VERSION);
+  TelegramUser restored = deserializeUser(tenFields, 5);
   TEST_ASSERT_EQUAL_STRING("", restored.name.c_str());
 }
 
 void test_v5_exact_field_count_is_accepted(void) {
   String exact = joinFields({"User", "42", "1", "", "1", "1", "0", "1", "15", "1", "1"}); // 11 fields, canBackup=true
+  TelegramUser restored = deserializeUser(exact, 5);
+  TEST_ASSERT_EQUAL_STRING("User", restored.name.c_str());
+  TEST_ASSERT_FALSE(restored.canSnap);
+  TEST_ASSERT_TRUE(restored.canReset);
+  TEST_ASSERT_EQUAL_UINT32(15, restored.maxCommandsPerMinute);
+  TEST_ASSERT_TRUE(TelegramLang::Portuguese == restored.language);
+  TEST_ASSERT_TRUE(restored.canBackup);
+  // canRestore didn't exist in V5 yet - must default to false (TelegramUser's own default).
+  TEST_ASSERT_FALSE(restored.canRestore);
+}
+
+// ---- Version TELEGRAM_USER_SCHEMA_VERSION (current, strict) ----
+
+// The actual fix this versioning scheme exists for: a record tagged as the
+// *current* schema version must have exactly the current field count - the
+// old 11-field V5 layout, explicitly tagged as the current (V6) version, is
+// corruption, not "an older save" (that interpretation is scoped to
+// explicit older version numbers only). See test_camera_serialize's
+// equivalent test for the full rationale.
+void test_v6_wrong_field_count_is_rejected_not_reinterpreted(void) {
+  String elevenFields = joinFields({"User", "42", "1", "", "1", "1", "0", "1", "15", "1", "1"}); // missing canRestore
+  TelegramUser restored = deserializeUser(elevenFields, TELEGRAM_USER_SCHEMA_VERSION);
+  TEST_ASSERT_EQUAL_STRING("", restored.name.c_str());
+}
+
+void test_v6_exact_field_count_is_accepted(void) {
+  String exact = joinFields({"User", "42", "1", "", "1", "1", "0", "1", "15", "1", "1", "1"}); // 12 fields, canRestore=true
   TelegramUser restored = deserializeUser(exact, TELEGRAM_USER_SCHEMA_VERSION);
   TEST_ASSERT_EQUAL_STRING("User", restored.name.c_str());
   TEST_ASSERT_FALSE(restored.canSnap);
@@ -196,10 +226,11 @@ void test_v5_exact_field_count_is_accepted(void) {
   TEST_ASSERT_EQUAL_UINT32(15, restored.maxCommandsPerMinute);
   TEST_ASSERT_TRUE(TelegramLang::Portuguese == restored.language);
   TEST_ASSERT_TRUE(restored.canBackup);
+  TEST_ASSERT_TRUE(restored.canRestore);
 }
 
 void test_unknown_future_version_falls_back_to_newest_known_layout(void) {
-  String record = joinFields({"User", "42", "1", "", "1", "1", "1", "1", "20", "1", "1"}); // 11 fields
+  String record = joinFields({"User", "42", "1", "", "1", "1", "1", "1", "20", "1", "1", "1"}); // 12 fields
   TelegramUser restored = deserializeUser(record, (uint16_t)(TELEGRAM_USER_SCHEMA_VERSION + 1));
   TEST_ASSERT_EQUAL_STRING("User", restored.name.c_str());
   TEST_ASSERT_TRUE(restored.canSnap);
@@ -207,6 +238,7 @@ void test_unknown_future_version_falls_back_to_newest_known_layout(void) {
   TEST_ASSERT_EQUAL_UINT32(20, restored.maxCommandsPerMinute);
   TEST_ASSERT_TRUE(TelegramLang::Portuguese == restored.language);
   TEST_ASSERT_TRUE(restored.canBackup);
+  TEST_ASSERT_TRUE(restored.canRestore);
 }
 
 // ---- telegramUserWantsCamera ----
@@ -247,6 +279,8 @@ int main(int argc, char** argv) {
   RUN_TEST(test_v4_exact_field_count_is_accepted);
   RUN_TEST(test_v5_wrong_field_count_is_rejected_not_reinterpreted);
   RUN_TEST(test_v5_exact_field_count_is_accepted);
+  RUN_TEST(test_v6_wrong_field_count_is_rejected_not_reinterpreted);
+  RUN_TEST(test_v6_exact_field_count_is_accepted);
   RUN_TEST(test_unknown_future_version_falls_back_to_newest_known_layout);
   RUN_TEST(test_wantsCamera_true_when_allCameras);
   RUN_TEST(test_wantsCamera_true_for_listed_camera_case_insensitive);

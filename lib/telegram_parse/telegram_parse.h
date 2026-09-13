@@ -27,6 +27,20 @@ struct TelegramUpdate {
   bool hasCallbackQuery = false;
   String callbackQueryId; // needed to answer it (clears the button's loading spinner)
   String callbackData;    // e.g. "off|D01-FrontDoor" - see telegram.cpp's handleTelegramCallbackQuery
+
+  // Set for a document (file) upload - chatId/hasChatId are populated the
+  // same way as a typed message, but the text (if any) the sender typed
+  // alongside the file arrives in Telegram's own "caption" field, not
+  // "text" - captured here as documentCaption, separately, rather than
+  // reusing `text` for it. documentFileId is what the Bot API's getFile
+  // method needs to resolve a downloadable path; documentFileName is the
+  // uploader's own filename, informational only (never used for anything
+  // security-relevant - see telegram.cpp's /restore flow, the only
+  // consumer of this).
+  bool hasDocument = false;
+  String documentFileId;
+  String documentFileName;
+  String documentCaption;
 };
 
 // Parses a Telegram getUpdates response body (JSON only - the caller
@@ -54,7 +68,7 @@ std::vector<size_t> matchCamerasByPrefix(const CameraConfig cameras[], size_t nu
 
 // The specific command a message's text was recognized as - Unknown means
 // it isn't a recognized command at all.
-enum class TelegramCommand { Unknown, Status, Uptime, Reset, On, Off, Snap, Help, Health, Log, Lang, Backup };
+enum class TelegramCommand { Unknown, Status, Uptime, Reset, On, Off, Snap, Help, Health, Log, Lang, Backup, Restore };
 
 // Which TelegramUser permission a command requires. The single source of
 // truth handleTelegramCommand's authorization check is built from, instead
@@ -64,7 +78,7 @@ enum class TelegramCommand { Unknown, Status, Uptime, Reset, On, Off, Snap, Help
 // default case - a new TelegramCommand added without a case here is a
 // build failure (-Werror=switch, scoped to this module's own
 // library.json, not project-wide - see platformio.ini's comment).
-enum class TelegramCommandPermission { Unknown, Command, Snap, Reset, Backup };
+enum class TelegramCommandPermission { Unknown, Command, Snap, Reset, Backup, Restore };
 TelegramCommandPermission requiredPermissionForCommand(TelegramCommand command);
 
 // One recognized command, already fully parsed. command is Unknown (and

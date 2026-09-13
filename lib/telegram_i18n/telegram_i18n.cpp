@@ -435,8 +435,34 @@ String trBackupFailed(TelegramLang lang) {
   return "\xE2\x9A\xA0\xEF\xB8\x8F Failed to send the backup - try again.";
 }
 
+String trRestorePrompt(TelegramLang lang) {
+  if (lang == TelegramLang::Portuguese) {
+    return "\xE2\x9A\xA0\xEF\xB8\x8F Envie agora o ficheiro de configura\xC3\xA7\xC3\xA3o como documento "
+           "(tem 5 minutos). Isto vai SUBSTITUIR c\xC3\xA2maras/utilizadores/definir\xC3\xB5""es de rede "
+           "ap\xC3\xB3s reiniciar. S\xC3\xB3 ficheiros exportados por este ou um firmware mais recente "
+           "podem ser restaurados.";
+  }
+  return "\xE2\x9A\xA0\xEF\xB8\x8F Send the config file now, as a document (you have 5 minutes). This "
+         "will REPLACE cameras/users/network settings after a reboot. Only a file exported by this "
+         "build or later can be restored.";
+}
+
+String trRestoreExpired(TelegramLang lang) {
+  if (lang == TelegramLang::Portuguese) {
+    return "\xE2\x9A\xA0\xEF\xB8\x8F Tempo esgotado - envie /restore novamente antes de anexar o ficheiro.";
+  }
+  return "\xE2\x9A\xA0\xEF\xB8\x8F Restore window expired - send /restore again before attaching the file.";
+}
+
+String trRestoreResult(TelegramLang lang, const String& resultSummary) {
+  if (lang == TelegramLang::Portuguese) {
+    return "\xF0\x9F\x93\xA5 Restauro: " + resultSummary;
+  }
+  return "\xF0\x9F\x93\xA5 Restore: " + resultSummary;
+}
+
 String trHelpText(TelegramLang lang, uint16_t eventLogCapacity, uint16_t maxDurationMinutes,
-                    bool canCommand, bool canSnap, bool canReset, bool canBackup) {
+                    bool canCommand, bool canSnap, bool canReset, bool canBackup, bool canRestore) {
   bool pt = lang == TelegramLang::Portuguese;
   if (pt) {
     return
@@ -453,6 +479,9 @@ String trHelpText(TelegramLang lang, uint16_t eventLogCapacity, uint16_t maxDura
         "/reset - reinicia a placa imediatamente\n"
         "/backup - envia a configura\xC3\xA7\xC3\xA3o atual como ficheiro (inclui utilizador/palavra-passe "
         "de cada c\xC3\xA2mara, nunca a palavra-passe WiFi - use com cuidado)\n"
+        "/restore - envia um ficheiro de c\xC3\xB3pia de seguran\xC3\xA7" "a para o bot para o aplicar - "
+        "substitui c\xC3\xA2maras/utilizadores/definir\xC3\xB5""es de rede. O comando mais disruptivo "
+        "dispon\xC3\xAD" "vel - use com extremo cuidado.\n"
         "/lang [en|pt] - muda o seu idioma (sem argumento mostra um menu)\n"
         "/help - esta mensagem\n\n"
         "<c\xC3\xA2mara> corresponde por nome ou prefixo; \"all\" aplica a todas as c\xC3\xA2maras "
@@ -462,7 +491,8 @@ String trHelpText(TelegramLang lang, uint16_t eventLogCapacity, uint16_t maxDura
         "ocorr\xC3\xAAncia - amanh\xC3\xA3 se essa hora j\xC3\xA1 passou hoje). Se omitido, \xC3\xA9 "
         "permanente.\n\n"
         "As suas permiss\xC3\xB5""es: canCommand=" + yesNo(pt, canCommand) + ", canSnap=" + yesNo(pt, canSnap) +
-        ", canReset=" + yesNo(pt, canReset) + ", canBackup=" + yesNo(pt, canBackup);
+        ", canReset=" + yesNo(pt, canReset) + ", canBackup=" + yesNo(pt, canBackup) +
+        ", canRestore=" + yesNo(pt, canRestore);
   }
   return
       "/status - list every camera's alert status\n"
@@ -478,6 +508,8 @@ String trHelpText(TelegramLang lang, uint16_t eventLogCapacity, uint16_t maxDura
       "/reset - reboot the board immediately\n"
       "/backup - sends the current config as a file (includes each camera's own username/password, "
       "never the WiFi password - handle with care)\n"
+      "/restore - upload a backup file to the bot to apply it - replaces cameras/users/network "
+      "settings. The single most disruptive command available - use with extreme care.\n"
       "/lang [en|pt] - change your language (no argument shows a picker)\n"
       "/help - this message\n\n"
       "<camera> matches by name or prefix; \"all\" applies to every enabled camera.\n"
@@ -485,7 +517,8 @@ String trHelpText(TelegramLang lang, uint16_t eventLogCapacity, uint16_t maxDura
       "clock time like \"23:00\" (next occurrence - tomorrow if that time already passed today). Omitted "
       "means permanent.\n\n"
       "Your permissions: canCommand=" + yesNo(pt, canCommand) + ", canSnap=" + yesNo(pt, canSnap) +
-      ", canReset=" + yesNo(pt, canReset) + ", canBackup=" + yesNo(pt, canBackup);
+      ", canReset=" + yesNo(pt, canReset) + ", canBackup=" + yesNo(pt, canBackup) +
+      ", canRestore=" + yesNo(pt, canRestore);
 }
 
 String trHealthHeader(TelegramLang lang) {

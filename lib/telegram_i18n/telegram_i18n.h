@@ -123,8 +123,22 @@ String trRebootingNow(TelegramLang lang);
 // this just tells the sender to try again rather than being retry-queued).
 String trBackupCaption(TelegramLang lang);
 String trBackupFailed(TelegramLang lang);
+// /restore command - trRestorePrompt asks the sender to send the config
+// file now (armed by a bare "/restore"); trRestoreExpired covers the
+// pending-window-lapsed case. Not-authorized reuses trNotAuthorized above
+// (commandDisplayName(TelegramCommand::Restore)) rather than a dedicated
+// function - same message shape as every other command's rejection. See
+// telegram.cpp's own comment on the full two-step (or one-step,
+// caption="/restore") design.
+String trRestorePrompt(TelegramLang lang);
+String trRestoreExpired(TelegramLang lang);
+// resultSummary is already-composed, language-neutral prose (counts of
+// what was imported/skipped) - same webserver_security.h
+// renderImportResultBanner text the dashboard's own Import shows, reused
+// as-is rather than re-translated a second time.
+String trRestoreResult(TelegramLang lang, const String& resultSummary);
 String trHelpText(TelegramLang lang, uint16_t eventLogCapacity, uint16_t maxDurationMinutes,
-                    bool canCommand, bool canSnap, bool canReset, bool canBackup);
+                    bool canCommand, bool canSnap, bool canReset, bool canBackup, bool canRestore);
 String trHealthHeader(TelegramLang lang);
 String trFreePsramLine(TelegramLang lang, uint32_t freeBytes);
 // "SD storage: {sdDetailText}" - sdDetailText is one of the three below, pre-localized by the caller.

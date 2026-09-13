@@ -291,20 +291,23 @@ void test_trBackupCaption_and_trBackupFailed_differ_by_language(void) {
 }
 
 void test_trHelpText_contains_dynamic_values_and_permissions(void) {
-  String en = trHelpText(TelegramLang::English, 50, 720, true, false, true, false);
+  String en = trHelpText(TelegramLang::English, 50, 720, true, false, true, false, false);
   TEST_ASSERT_TRUE(en.indexOf("50") >= 0);
   TEST_ASSERT_TRUE(en.indexOf("720") >= 0);
   TEST_ASSERT_TRUE(en.indexOf("canCommand=yes") >= 0);
   TEST_ASSERT_TRUE(en.indexOf("canSnap=no") >= 0);
   TEST_ASSERT_TRUE(en.indexOf("canReset=yes") >= 0);
   TEST_ASSERT_TRUE(en.indexOf("canBackup=no") >= 0);
+  TEST_ASSERT_TRUE(en.indexOf("canRestore=no") >= 0);
   TEST_ASSERT_TRUE(en.indexOf("/backup") >= 0);
+  TEST_ASSERT_TRUE(en.indexOf("/restore") >= 0);
 
-  String pt = trHelpText(TelegramLang::Portuguese, 50, 720, true, false, true, false);
+  String pt = trHelpText(TelegramLang::Portuguese, 50, 720, true, false, true, false, false);
   TEST_ASSERT_TRUE(pt.indexOf("50") >= 0);
   TEST_ASSERT_TRUE(pt.indexOf("canCommand=sim") >= 0);
   TEST_ASSERT_TRUE(pt.indexOf("canSnap=n\xC3\xA3o") >= 0);
   TEST_ASSERT_TRUE(pt.indexOf("canBackup=n\xC3\xA3o") >= 0);
+  TEST_ASSERT_TRUE(pt.indexOf("canRestore=n\xC3\xA3o") >= 0);
   TEST_ASSERT_TRUE(en != pt);
 }
 
@@ -449,10 +452,20 @@ void test_trLanguageChangeFailed(void) {
 }
 
 void test_trHelpText_mentions_lang_command(void) {
-  String en = trHelpText(TelegramLang::English, 50, 720, true, true, true, true);
+  String en = trHelpText(TelegramLang::English, 50, 720, true, true, true, true, true);
   TEST_ASSERT_TRUE(en.indexOf("/lang") >= 0);
-  String pt = trHelpText(TelegramLang::Portuguese, 50, 720, true, true, true, true);
+  String pt = trHelpText(TelegramLang::Portuguese, 50, 720, true, true, true, true, true);
   TEST_ASSERT_TRUE(pt.indexOf("/lang") >= 0);
+}
+
+void test_trRestorePrompt_and_trRestoreExpired_differ_by_language(void) {
+  TEST_ASSERT_TRUE(trRestorePrompt(TelegramLang::English) != trRestorePrompt(TelegramLang::Portuguese));
+  TEST_ASSERT_TRUE(trRestoreExpired(TelegramLang::English) != trRestoreExpired(TelegramLang::Portuguese));
+}
+
+void test_trRestoreResult_contains_summary(void) {
+  String en = trRestoreResult(TelegramLang::English, "Imported 3 camera(s).");
+  TEST_ASSERT_TRUE(en.indexOf("Imported 3 camera(s).") >= 0);
 }
 
 int main(int argc, char** argv) {
@@ -513,5 +526,7 @@ int main(int argc, char** argv) {
   RUN_TEST(test_trUnknownLanguageArg_contains_the_bad_argument);
   RUN_TEST(test_trLanguageChangeFailed);
   RUN_TEST(test_trHelpText_mentions_lang_command);
+  RUN_TEST(test_trRestorePrompt_and_trRestoreExpired_differ_by_language);
+  RUN_TEST(test_trRestoreResult_contains_summary);
   return UNITY_END();
 }

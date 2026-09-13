@@ -44,6 +44,23 @@ std::vector<TelegramUpdate> parseTelegramUpdates(const String& jsonBody, String*
       if (text != nullptr) {
         u.text = String(text);
       }
+
+      JsonObject document = message["document"];
+      if (!document.isNull()) {
+        const char* fileId = document["file_id"];
+        if (fileId != nullptr) {
+          u.documentFileId = String(fileId);
+          u.hasDocument = true;
+        }
+        const char* fileName = document["file_name"];
+        if (fileName != nullptr) u.documentFileName = String(fileName);
+        // A document's own accompanying text arrives as "caption", not
+        // "text" (which stays absent on a document message) - see
+        // TelegramUpdate::documentCaption's own comment for why this
+        // isn't folded into `text` above.
+        const char* caption = message["caption"];
+        if (caption != nullptr) u.documentCaption = String(caption);
+      }
     }
 
     JsonObject callbackQuery = update["callback_query"];
@@ -109,6 +126,7 @@ TelegramCommandPermission requiredPermissionForCommand(TelegramCommand command) 
     case TelegramCommand::Snap: return TelegramCommandPermission::Snap;
     case TelegramCommand::Reset: return TelegramCommandPermission::Reset;
     case TelegramCommand::Backup: return TelegramCommandPermission::Backup;
+    case TelegramCommand::Restore: return TelegramCommandPermission::Restore;
     case TelegramCommand::Unknown:
     case TelegramCommand::Help:
     // A user's own display language is a personal preference, not camera
@@ -151,6 +169,8 @@ ParsedTelegramCommand parseTelegramCommand(const String& text) {
     result.command = TelegramCommand::Reset;
   } else if (lower == "/backup") {
     result.command = TelegramCommand::Backup;
+  } else if (lower == "/restore") {
+    result.command = TelegramCommand::Restore;
   } else if (lower == "/help") {
     result.command = TelegramCommand::Help;
   } else if (lower == "/health") {
@@ -255,6 +275,7 @@ String commandDisplayName(TelegramCommand command) {
     case TelegramCommand::Log:    return "/log";
     case TelegramCommand::Lang:   return "/lang";
     case TelegramCommand::Backup: return "/backup";
+    case TelegramCommand::Restore: return "/restore";
     case TelegramCommand::Unknown: return "";
   }
   return ""; // unreachable if every enumerator above is handled

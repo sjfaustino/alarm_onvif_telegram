@@ -50,6 +50,17 @@ struct TelegramUser {
   // turned on deliberately even for the first user.
   bool canBackup = false;
 
+  // May send /restore (uploads a config-export file back to the bot and
+  // applies it - webserver_security.h's applyConfigImport, the same
+  // machinery the dashboard's own Security page Import uses). Independent
+  // of every permission above and, like canReset/canBackup, NOT granted
+  // to the auto-seeded Admin user by default - applying a config
+  // overwrite is arguably the single most disruptive thing any Telegram
+  // command can do (it can replace every camera, user, and network
+  // setting in one shot), so this is opt-in even more deliberately than
+  // canBackup's own "just reads credentials out" risk.
+  bool canRestore = false;
+
   // Enforced as a minimum gap between this user's commands
   // (60000/maxCommandsPerMinute ms - see telegram.cpp's rate-limit check in
   // handleTelegramCommand), not a true rolling-window count: O(1) in-RAM

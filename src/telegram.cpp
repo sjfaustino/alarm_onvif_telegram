@@ -12,7 +12,7 @@
 #include "sd_store.h"
 #include "quiet_hours.h"
 #include "telegram_retry_queue.h" // enqueueFailedTelegramMessage
-#include "webserver_security.h" // buildConfigExport - /backup command
+#include "webserver_security.h" // buildConfigExport/applyConfigImport/renderImportResultBanner - /backup, /restore commands
 #include <esp_task_wdt.h>
 #include <ArduinoJson.h>
 #include <WiFi.h>
@@ -1644,6 +1644,22 @@ static void sendCameraPickerKeyboard(const TelegramUser& sender, TelegramCommand
   }
 }
 
+// /restore's own pending-arm state - a bare "/restore" (see the
+// TelegramCommand::Restore case below) sets this so the NEXT document
+// upload from the SAME chat, within RESTORE_PENDING_WINDOW_MS
+// (config.h), is treated as the file to restore from - see
+// handleTelegramDocument's own comment for the full two-step (or
+// one-step, caption="/restore") design. Single-slot, not a per-chat map -
+// same "one at a time, not a queue" simplicity as this project's
+// BackgroundJob<T> elsewhere; only one admin is ever expected to be
+// mid-restore at once, and a second /restore from a different chat while
+// one is already pending simply replaces it. Same-task-only:
+// pollTelegramCommands (the sole caller of both handleTelegramCommand and
+// handleTelegramDocument) only ever runs from loop()'s own task, so no
+// lock is needed.
+static String g_pendingRestoreChatId; // "" = none armed
+static unsigned long g_pendingRestoreExpiresAtMs = 0;
+
 // lastUpdateId is this poll's running highest update_id, already advanced
 // past `text`'s own update - passed through so the Reset case can persist
 // it immediately, before ESP.restart() (see this section's top comment).
@@ -1666,6 +1682,7 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
     case TelegramCommandPermission::Snap:    authorized = sender.canSnap;    break;
     case TelegramCommandPermission::Reset:   authorized = sender.canReset;   break;
     case TelegramCommandPermission::Backup:  authorized = sender.canBackup;  break;
+    case TelegramCommandPermission::Restore: authorized = sender.canRestore; break;
     case TelegramCommandPermission::Unknown: authorized = false;             break;
   }
   // Logged here for every command now, including /status/uptime/reset -
@@ -1762,6 +1779,13 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
       return;
     }
 
+    case TelegramCommand::Restore:
+      Serial.printf("[Telegram] Restore armed by user \"%s\" via /restore.\n", sender.name.c_str());
+      g_pendingRestoreChatId = sender.chatId;
+      g_pendingRestoreExpiresAtMs = millis() + RESTORE_PENDING_WINDOW_MS;
+      sendTelegramMessageTo(sender.chatId, trRestorePrompt(sender.language));
+      return;
+
     case TelegramCommand::On:
     case TelegramCommand::Off:
     case TelegramCommand::Snap:
@@ -1770,7 +1794,8 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
     case TelegramCommand::Help: {
       Serial.printf("[Telegram] Replying to user \"%s\" with /help.\n", sender.name.c_str());
       String msg = trHelpText(sender.language, (uint16_t)EVENT_LOG_CAPACITY, MAX_DURATION_MINUTES,
-                               sender.canCommand, sender.canSnap, sender.canReset, sender.canBackup);
+                               sender.canCommand, sender.canSnap, sender.canReset, sender.canBackup,
+                               sender.canRestore);
       sendTelegramMessageTo(sender.chatId, msg);
       return;
     }
@@ -2075,6 +2100,163 @@ void checkScheduledAlertReverts(const CameraConfig cameras[], CameraState states
   }
 }
 
+// Bot API's own two-step file download (https://core.telegram.org/bots/api#getfile):
+// getFile resolves fileId to a short-lived file_path, then a second GET
+// to a different URL path (same host, so the same TELEGRAM_ROOT_CA
+// applies) actually returns the bytes - two separate HTTPS round trips,
+// not something this project chose, that's just how the Bot API works.
+// Bounded by RESTORE_MAX_FILE_BYTES (config.h), checked against getFile's
+// own reported file_size before ever starting the download, and again
+// against the download response's own Content-Length before buffering
+// it - a config export is at most a few tens of KB even with many
+// cameras/users, so anything wildly larger is rejected outright rather
+// than risking a large heap allocation from an oversized upload. Returns
+// "" (Serial-only, no user-facing alert here - handleTelegramDocument
+// composes that) on any failure: getFile itself failing, an oversized
+// file, or the download failing.
+static String downloadTelegramDocument(const String& fileId) {
+  TelegramNetLock netLock;
+  if (!netLock.held()) {
+    Serial.println("[Telegram] downloadTelegramDocument: timed out waiting for Telegram send capacity.");
+    return "";
+  }
+
+  WiFiClientSecure client;
+  client.setCACert(TELEGRAM_ROOT_CA);
+  client.setHandshakeTimeout(HTTP_TIMEOUT_MS / 1000); // seconds, not ms - see sendTelegramPhotoBuffered's comment
+
+  String filePath;
+  {
+    HTTPClient http;
+    String url = "https://api.telegram.org/bot" + String(TELEGRAM_BOT_TOKEN) + "/getFile?file_id=" + fileId;
+    if (!http.begin(client, url)) {
+      Serial.println("[Telegram] downloadTelegramDocument: getFile http.begin() failed.");
+      return "";
+    }
+    http.setTimeout(HTTP_TIMEOUT_MS);
+    int code = http.GET();
+    if (code != 200) {
+      Serial.printf("[Telegram] downloadTelegramDocument: getFile HTTP %d\n", code);
+      http.end();
+      return "";
+    }
+    String body = http.getString();
+    http.end();
+
+    JsonDocument doc;
+    // .c_str(), not body directly - same ArduinoJson/ArduinoFake reasoning
+    // as parseTelegramUpdates (lib/telegram_parse).
+    if (deserializeJson(doc, body.c_str()) != DeserializationError::Ok || !(doc["ok"] | false)) {
+      Serial.println("[Telegram] downloadTelegramDocument: getFile response wasn't valid/ok.");
+      return "";
+    }
+    long fileSize = doc["result"]["file_size"] | 0L;
+    if (fileSize > (long)RESTORE_MAX_FILE_BYTES) {
+      Serial.printf("[Telegram] downloadTelegramDocument: file too large (%ld bytes, max %u).\n", fileSize,
+                    (unsigned)RESTORE_MAX_FILE_BYTES);
+      return "";
+    }
+    const char* path = doc["result"]["file_path"];
+    if (path == nullptr) {
+      Serial.println("[Telegram] downloadTelegramDocument: getFile response had no file_path.");
+      return "";
+    }
+    filePath = String(path);
+  }
+
+  HTTPClient http;
+  String downloadUrl = "https://api.telegram.org/file/bot" + String(TELEGRAM_BOT_TOKEN) + "/" + filePath;
+  if (!http.begin(client, downloadUrl)) {
+    Serial.println("[Telegram] downloadTelegramDocument: download http.begin() failed.");
+    return "";
+  }
+  http.setTimeout(HTTP_TIMEOUT_MS);
+  int code = http.GET();
+  if (code != 200) {
+    Serial.printf("[Telegram] downloadTelegramDocument: download HTTP %d\n", code);
+    http.end();
+    return "";
+  }
+  int len = http.getSize();
+  if (len > (int)RESTORE_MAX_FILE_BYTES) {
+    Serial.printf("[Telegram] downloadTelegramDocument: download too large (%d bytes, max %u).\n", len,
+                  (unsigned)RESTORE_MAX_FILE_BYTES);
+    http.end();
+    return "";
+  }
+  String content = http.getString();
+  http.end();
+  return content;
+}
+
+// The /restore flow's second step - a document (file) upload. Two ways to
+// trigger an actual restore attempt, both requiring sender.canRestore
+// (checked here explicitly, not just by the coarse "has at least one
+// permission" gate pollTelegramCommands already applied before ever
+// calling this):
+//   - One-step: the document's own caption is exactly "/restore" - no
+//     prior arming needed, for a sender who attaches the file and types
+//     the command in the same message.
+//   - Two-step: a bare "/restore" (TelegramCommand::Restore, above) armed
+//     g_pendingRestoreChatId for this exact chat, and this document
+//     arrived within RESTORE_PENDING_WINDOW_MS of that.
+// Any OTHER document (no matching caption, no valid pending arm) is
+// silently ignored - same "not something we act on" treatment
+// pollTelegramCommands already gives a captionless sticker/photo -
+// EXCEPT when this chat had armed a restore that has since expired, which
+// gets an explicit trRestoreExpired reply instead of silence, since that
+// is specifically the "I was following the flow but took too long" case
+// worth explaining rather than leaving a confused sender guessing.
+static void handleTelegramDocument(const TelegramUser& sender, const TelegramUpdate& update) {
+  String caption = update.documentCaption;
+  caption.trim();
+  caption.toLowerCase();
+  bool captionSaysRestore = caption == "/restore";
+
+  bool pendingMatchesThisChat = g_pendingRestoreChatId.length() > 0 && g_pendingRestoreChatId == sender.chatId;
+  bool pendingStillValid = pendingMatchesThisChat && (long)(millis() - g_pendingRestoreExpiresAtMs) < 0;
+
+  if (!captionSaysRestore && !pendingStillValid) {
+    if (pendingMatchesThisChat) { // was armed for this chat, but the window has since lapsed
+      g_pendingRestoreChatId = "";
+      sendTelegramMessageTo(sender.chatId, trRestoreExpired(sender.language));
+    }
+    return; // not a restore request at all - e.g. an unrelated file upload
+  }
+
+  // Consumed regardless of outcome below - a stale arm must never survive
+  // to (mis)match a LATER, unrelated document from the same chat.
+  if (pendingMatchesThisChat) g_pendingRestoreChatId = "";
+
+  if (!sender.canRestore) {
+    Serial.printf("[Telegram] User \"%s\" not authorized for /restore.\n", sender.name.c_str());
+    sendTelegramMessageTo(sender.chatId, trNotAuthorized(sender.language, commandDisplayName(TelegramCommand::Restore)));
+    return;
+  }
+
+  Serial.printf("[Telegram] Restore file received from user \"%s\" (%s) - downloading...\n", sender.name.c_str(),
+                update.documentFileName.c_str());
+  String content = downloadTelegramDocument(update.documentFileId);
+  if (content.length() == 0) {
+    Serial.printf("[Telegram] Restore download for user \"%s\" failed.\n", sender.name.c_str());
+    sendTelegramMessageTo(sender.chatId, trBackupFailed(sender.language)); // same generic "try again" wording
+    return;
+  }
+
+  ConfigImportApplyResult result = applyConfigImport(content);
+  String summary = renderImportResultBanner(result);
+  // The dashboard's own Import banner embeds one HTML link (to
+  // /import/backup) - meaningless (and would show as literal, unrendered
+  // markup) in a plain-text Telegram message, so it's swapped for
+  // equivalent plain-text guidance here. Targeted, not a general HTML
+  // stripper: this is the one and only piece of markup
+  // renderImportResultBanner ever emits (see its own comment).
+  summary.replace("<a href=\"/import/backup\">download it</a>", "download it from the dashboard's Security page");
+  Serial.printf("[Telegram] Restore applied for user \"%s\": %s\n", sender.name.c_str(), summary.c_str());
+  logEvent("Config restored via Telegram by " + sender.name);
+  sendTelegramMessageTo(sender.chatId, trRestoreResult(sender.language, summary));
+}
+
 void pollTelegramCommands(const CameraConfig cameras[], CameraState states[], size_t numCameras) {
   // -1 sentinel: load the real value from NVS on this function's first
   // call only, rather than starting at 0 every boot - see this section's
@@ -2165,11 +2347,13 @@ void pollTelegramCommands(const CameraConfig cameras[], CameraState states[], si
     for (auto& u : users) {
       if (chatIdMatches(u.chatId, upd.chatId)) { sender = &u; break; }
     }
-    // canCommand, canSnap, and canReset are independent permissions (see
-    // TelegramUser) - a sender needs at least one of them to reach
-    // handleTelegramCommand at all; which specific commands that actually
-    // unlocks is decided there, per-command.
-    if (!sender || !(sender->canCommand || sender->canSnap || sender->canReset)) {
+    // canCommand, canSnap, canReset, canBackup, and canRestore are
+    // independent permissions (see TelegramUser) - a sender needs at
+    // least one of them to reach handleTelegramCommand/
+    // handleTelegramDocument at all; which specific commands that
+    // actually unlocks is decided there, per-command.
+    if (!sender || !(sender->canCommand || sender->canSnap || sender->canReset || sender->canBackup ||
+                      sender->canRestore)) {
       if (sender) {
         Serial.printf("[Telegram] Ignored command from %s (not authorized to send commands)\n",
                       sender->name.c_str());
@@ -2182,6 +2366,15 @@ void pollTelegramCommands(const CameraConfig cameras[], CameraState states[], si
 
     if (upd.hasCallbackQuery) {
       handleTelegramCallbackQuery(*sender, upd, cameras, states, numCameras);
+      continue;
+    }
+
+    // Checked before the text-length short-circuit below - a document
+    // upload legitimately has an empty upd.text (its own accompanying
+    // text arrives as documentCaption instead, see TelegramUpdate's own
+    // comment), so this would otherwise never be reached.
+    if (upd.hasDocument) {
+      handleTelegramDocument(*sender, upd);
       continue;
     }
 
