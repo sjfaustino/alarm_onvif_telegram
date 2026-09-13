@@ -55,6 +55,10 @@ String trNvsUsageWarning(TelegramLang lang, unsigned pct);
 String trWifiWeakWarning(TelegramLang lang, int rssi);
 String trHeapLowWarning(TelegramLang lang, uint32_t baselineBytes, uint32_t maxAllocBytes);
 String trCameraTaskSpawnFailure(TelegramLang lang, const String& cameraName);
+// hasRtc picks whether the message reassures that a fallback (RTC-seeded)
+// time is still in use, or warns that the system clock has no time
+// source at all - see main.cpp's setupTime() for when each applies.
+String trNtpSyncFailed(TelegramLang lang, bool hasRtc);
 String trInternetOutageAlert(TelegramLang lang);
 String trBridgeOutageAlert(TelegramLang lang);
 // Sent once connectivity is confirmed restored, not when the outage began

@@ -50,6 +50,13 @@ static unsigned long lastWifiRssiCheckMs = 0;
 // Same alert-once-per-transition/re-arm shape as g_nvsUsageAlerted above,
 // for checkWifiSignal() instead of checkNvsUsage().
 static bool g_wifiRssiWeakAlerted = false;
+// Same alert-once-per-transition/re-arm shape as g_nvsUsageAlerted/
+// g_wifiRssiWeakAlerted above, for setupTime()'s own NTP sync failure -
+// re-armed (set back false) the next time a sync actually succeeds, so a
+// sustained outage (e.g. NTP blocked by a firewall) alerts once per
+// startMonitoring()/reconnect stretch rather than on every single retry
+// loop that calls setupTime() again.
+static bool g_ntpSyncFailedAlerted = false;
 static unsigned long lastNetWatchdogCheckMs = 0;
 static unsigned long lastBridgeWatchdogCheckMs = 0;
 static unsigned long lastPowerMonitorCheckMs = 0;
@@ -351,11 +358,18 @@ static void setupTime() {
           Serial.println("[rtc_store] WARNING: failed to write corrected time to the RTC.");
         }
       }
+      g_ntpSyncFailedAlerted = false; // re-arm - see its own comment
       return;
     }
     Serial.print(".");
   }
   Serial.println("\nWARNING: NTP synchronization failed.");
+  logEvent(String("NTP sync failed") + (rtcActive() ? " - using RTC time" : " - no RTC fallback configured"));
+  if (!g_ntpSyncFailedAlerted) {
+    g_ntpSyncFailedAlerted = true;
+    bool hasRtc = rtcActive();
+    sendTelegramMessage([hasRtc](TelegramLang lang) { return trNtpSyncFailed(lang, hasRtc); });
+  }
 }
 
 // Periodic "still alive" ping - a missing heartbeat (or an unexpected boot

@@ -204,11 +204,98 @@ static String renderCameraForm(const CameraConfig& v, bool isEdit) {
   return html;
 }
 
+// One-glance aggregate health summary shown above the per-camera table -
+// answers "is everything OK?" without scanning every row, most useful
+// once there are more than a handful of cameras configured. A separate,
+// lightweight pass over cams/liveStates rather than folded into the much
+// longer per-row loop below - keeps both independently simple to read and
+// reorder. Categories mirror that loop's own status classification
+// exactly (offline/subscribed/not-live), so the counts always agree with
+// what the table itself shows below them. "" (nothing rendered) if there
+// are no cameras configured at all - an empty summary bar above an empty
+// table would just be noise.
+static String renderCameraHealthSummary(const std::vector<CameraConfig>& cams,
+                                         std::vector<CameraConfig>* liveCameras,
+                                         std::vector<CameraState>* liveStates) {
+  if (cams.empty()) return "";
+
+  size_t disabledCount = 0, notRunningCount = 0, onlineCount = 0, notSubscribedCount = 0,
+         offlineCount = 0, mutedCount = 0;
+  unsigned long nowMs = millis();
+  bool haveLastMotion = false;
+  unsigned long lastMotionAgoMs = 0;
+  String lastMotionCamera;
+
+  for (auto& c : cams) {
+    if (!c.enabled) { disabledCount++; continue; }
+
+    int idx = findLiveCameraIndex(liveCameras, c.name);
+    bool isLive = idx >= 0 && liveStates && idx < (int)liveStates->size();
+    if (!isLive) { notRunningCount++; continue; } // enabled, but no reboot yet to spawn its task
+
+    CameraState& st = (*liveStates)[idx];
+    bool offline, subscribed, alertsEnabled, hasAlerted;
+    uint32_t lastAlert;
+    {
+      CameraStateLock lock(st);
+      offline = st.isOffline;
+      subscribed = st.subscriptionActive;
+      alertsEnabled = st.alertsEnabled;
+      hasAlerted = st.hasAlerted;
+      lastAlert = st.lastAlert;
+    }
+    // Same three-state classification as the per-row badge below (OFFLINE/
+    // ONLINE/NOT SUBSCRIBED) - see that code's own comment for why these
+    // are genuinely different situations, not degrees of the same one.
+    if (offline) offlineCount++;
+    else if (subscribed) onlineCount++;
+    else notSubscribedCount++;
+    if (!alertsEnabled) mutedCount++; // independent of the three above - a muted camera can be any of them
+
+    if (hasAlerted) {
+      unsigned long agoMs = nowMs - lastAlert;
+      if (!haveLastMotion || agoMs < lastMotionAgoMs) {
+        haveLastMotion = true;
+        lastMotionAgoMs = agoMs;
+        lastMotionCamera = c.name;
+      }
+    }
+  }
+
+  String html = "<p>";
+  if (onlineCount > 0) {
+    html += "<span class=\"badge badge-on\">" + String((unsigned)onlineCount) + " online</span> ";
+  }
+  if (offlineCount > 0) {
+    html += "<span class=\"badge badge-offline\">" + String((unsigned)offlineCount) + " offline</span> ";
+  }
+  if (notSubscribedCount > 0) {
+    html += "<span class=\"badge badge-warn\">" + String((unsigned)notSubscribedCount) + " not subscribed</span> ";
+  }
+  if (notRunningCount > 0) {
+    html += "<span class=\"badge badge-warn\">" + String((unsigned)notRunningCount) +
+            " not running (reboot needed)</span> ";
+  }
+  if (disabledCount > 0) {
+    html += "<span class=\"badge badge-off\">" + String((unsigned)disabledCount) + " disabled</span> ";
+  }
+  if (mutedCount > 0) {
+    html += "<span class=\"badge badge-off\">" + String((unsigned)mutedCount) + " muted</span> ";
+  }
+  if (haveLastMotion) {
+    html += "&mdash; last motion: " + htmlEscape(lastMotionCamera) + ", " +
+            formatElapsedSince(nowMs - lastMotionAgoMs, nowMs);
+  }
+  html += "</p>";
+  return html;
+}
+
 String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
                            std::vector<CameraConfig>* liveCameras, std::vector<CameraState>* liveStates) {
   std::vector<CameraConfig> cams = loadCameras();
 
   String html = "<h1>Cameras</h1>";
+  html += renderCameraHealthSummary(cams, liveCameras, liveStates);
   html += "<table><tr><th>Name</th><th>Device Service URL</th><th>Enabled</th>"
           "<th>Live Status</th><th>Last Alert</th><th>Preview</th><th>Notes</th><th></th></tr>";
   size_t rowIdx = 0; // unique per-row DOM id source for the latency toggle below - findLiveCameraIndex's
