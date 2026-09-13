@@ -128,6 +128,21 @@ struct CameraConfig {
   // way to request a resolution).
   uint16_t snapshotMaxWidth = 0;
   uint16_t snapshotMaxHeight = 0;
+
+  // Opt-OUT (default true), unlike petAlertsEnabled's opt-in above - a
+  // PeopleDetect/VehicleDetect event is exactly the security signal this
+  // project exists to alert on, so upgrading to a firmware version that
+  // adds these must never silently stop alerting on a real detection
+  // nobody asked to mute. Exists for the opposite, narrower case: a
+  // camera facing a busy street getting spammed with vehicle alerts (or
+  // one that only cares about vehicles muting person alerts instead).
+  // Plain MotionAlarm/CellMotionDetector has no finer classification to
+  // opt out of - only a camera whose own AI actually distinguishes
+  // person/vehicle can be selectively muted this way; see camera.cpp's
+  // parseEvents for where this is checked, and MotionDetectionKind
+  // (telegram_i18n.h) for the classification itself.
+  bool personAlertsEnabled = true;
+  bool vehicleAlertsEnabled = true;
 };
 
 // Loads the camera list from NVS, seeding once from CAMERA_SEED in

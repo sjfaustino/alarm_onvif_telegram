@@ -58,7 +58,9 @@ String serializeCamera(const CameraConfig& c) {
   s += (c.petAlertsEnabled ? "1" : "0");                s += FIELD_SEP;
   s += (c.petAlertsTextOnly ? "1" : "0");               s += FIELD_SEP;
   s += String(c.snapshotMaxWidth);                      s += FIELD_SEP;
-  s += String(c.snapshotMaxHeight);
+  s += String(c.snapshotMaxHeight);                     s += FIELD_SEP;
+  s += (c.personAlertsEnabled ? "1" : "0");             s += FIELD_SEP;
+  s += (c.vehicleAlertsEnabled ? "1" : "0");
   return s;
 }
 
@@ -290,6 +292,50 @@ static CameraConfig deserializeCameraV6(const std::vector<String>& fields) {
   return c;
 }
 
+// Version 7 (CAMERA_SCHEMA_VERSION): V6's 26 fields plus personAlertsEnabled
+// (1) and vehicleAlertsEnabled (1), appended - 28 fields total. Requires
+// an exact field count, same reasoning as V1-V6's own comments. Unlike
+// every other appended bool in this file, an EMPTY field here still
+// means "true" (CameraConfig's own default), not "false" - see
+// personAlertsEnabled's own comment (camera_store.h) for why this one
+// specifically must default the opposite way; in practice a real V7
+// record always writes an explicit "1"/"0", this only matters for a
+// hand-edited/imported record with a blank field.
+static CameraConfig deserializeCameraV7(const std::vector<String>& fields) {
+  CameraConfig c;
+  if (fields.size() != 28) return c; // malformed - caller skips entries with an empty name
+
+  c.name                          = fields[0];
+  c.deviceServiceUrl              = fields[1];
+  c.enabled                       = fields[2] == "1";
+  c.useWSSecurity                 = fields[3] == "1";
+  c.includeInitialTerminationTime = fields[4] == "1";
+  c.includeReplyToAnonymous       = fields[5] == "1";
+  c.snapshotUriOverride           = fields[6];
+  c.preferredProfileKeyword       = fields[7];
+  c.user                          = fields[8];
+  c.pass                          = fields[9];
+  c.notes                         = fields[10];
+  if (fields[11].length() > 0) c.alertCooldownMs    = (unsigned long)fields[11].toInt();
+  if (fields[12].length() > 0) c.offlineThresholdMs  = (unsigned long)fields[12].toInt();
+  if (fields[13].length() > 0) c.snapshotBurstCount  = (unsigned int)fields[13].toInt();
+  c.quietHoursEnabled              = fields[14] == "1";
+  if (fields[15].length() > 0) c.quietStartMinute    = (uint16_t)fields[15].toInt();
+  if (fields[16].length() > 0) c.quietEndMinute      = (uint16_t)fields[16].toInt();
+  if (fields[17].length() > 0) c.motionWatchdogHours = (uint16_t)fields[17].toInt();
+  if (fields[18].length() > 0) c.timelapseIntervalMin = (uint16_t)fields[18].toInt();
+  if (fields[19].length() > 0) c.pollIntervalMs      = (unsigned long)fields[19].toInt();
+  c.timelapseSendToTelegram        = fields[20] == "1";
+  if (fields[21].length() > 0) c.retentionDays       = (uint16_t)fields[21].toInt();
+  c.petAlertsEnabled                = fields[22] == "1";
+  c.petAlertsTextOnly               = fields[23] == "1";
+  if (fields[24].length() > 0) c.snapshotMaxWidth    = (uint16_t)fields[24].toInt();
+  if (fields[25].length() > 0) c.snapshotMaxHeight   = (uint16_t)fields[25].toInt();
+  if (fields[26].length() > 0) c.personAlertsEnabled  = fields[26] == "1";
+  if (fields[27].length() > 0) c.vehicleAlertsEnabled = fields[27] == "1";
+  return c;
+}
+
 CameraConfig deserializeCamera(const String& record, uint16_t recordVersion) {
   std::vector<String> fields = splitFields(record);
 
@@ -299,14 +345,15 @@ CameraConfig deserializeCamera(const String& record, uint16_t recordVersion) {
   if (recordVersion == 3) return deserializeCameraV3(fields);
   if (recordVersion == 4) return deserializeCameraV4(fields);
   if (recordVersion == 5) return deserializeCameraV5(fields);
-  if (recordVersion == CAMERA_SCHEMA_VERSION) return deserializeCameraV6(fields);
+  if (recordVersion == 6) return deserializeCameraV6(fields);
+  if (recordVersion == CAMERA_SCHEMA_VERSION) return deserializeCameraV7(fields);
 
   // Unknown version, newer than anything this firmware knows about (most
   // likely: downgraded after a later firmware version changed the layout).
   // Best-effort fall through to the newest known layout instead of
   // discarding the record outright - camera_store.cpp logs a clear
   // warning when this happens so it doesn't go unnoticed.
-  return deserializeCameraV6(fields);
+  return deserializeCameraV7(fields);
 }
 
 size_t cameraRecordFieldCount(const String& record) {

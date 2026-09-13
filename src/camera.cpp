@@ -418,7 +418,20 @@ static void parseEvents(const CameraConfig& cfg, CameraState& st, const String& 
     } else if (ev.vehicleDetect && topicReportedTrue(xml, "VehicleDetect")) {
       kind = MotionDetectionKind::Vehicle;
     }
-    triggerMotionAlert(cfg, st, false, kind);
+    // Person/vehicle alerts can be opted OUT per-camera (e.g. one facing a
+    // busy street getting spammed with vehicle alerts) - see
+    // CameraConfig::personAlertsEnabled's own comment (camera_store.h)
+    // for why these default to true, the opposite of petAlertsEnabled's
+    // opt-in default. Plain motion (kind == Generic) has no finer
+    // classification to opt out of, so it always alerts here regardless -
+    // same as before this feature existed.
+    if (kind == MotionDetectionKind::Person && !cfg.personAlertsEnabled) {
+      logEvent(cfg.name + ": person detected (alerts off)");
+    } else if (kind == MotionDetectionKind::Vehicle && !cfg.vehicleAlertsEnabled) {
+      logEvent(cfg.name + ": vehicle detected (alerts off)");
+    } else {
+      triggerMotionAlert(cfg, st, false, kind);
+    }
   } else if (ev.dogCatDetect && topicReportedTrue(xml, "DogCatDetect")) {
     // Pet-only event (no person/vehicle/motion topic also fired in this
     // same batch - motionEventFired above would have already handled it
