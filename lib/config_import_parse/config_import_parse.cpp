@@ -122,6 +122,56 @@ static bool parseSdSettingsLineV2(const String& line, SdSettings& out) {
   return true;
 }
 
+static std::vector<String> splitFieldsBySep(const String& line, char sep) {
+  std::vector<String> fields;
+  int start = 0;
+  for (int i = 0; i <= (int)line.length(); i++) {
+    if (i == (int)line.length() || line[i] == sep) {
+      fields.push_back(line.substring(start, i));
+      start = i + 1;
+    }
+  }
+  return fields;
+}
+
+// "<enabled 0/1>\x1F<pin>\x1F<activeLow 0/1>\x1F<outageThresholdMs>\x1F<pulseDurationMs>" -
+// one version so far (matches NetWatchdogSettings' own current field list;
+// bump and add a V2 the same way SDSETTINGS did if that ever changes).
+static bool parseNetWatchdogLineV1(const String& line, NetWatchdogSettings& out) {
+  std::vector<String> f = splitFieldsBySep(line, SD_FIELD_SEP);
+  if (f.size() != 5 || f[0].length() == 0) return false;
+  out.enabled = f[0] == "1";
+  out.pin = f[1].toInt();
+  out.activeLow = f[2] == "1";
+  out.outageThresholdMs = (uint32_t)f[3].toInt();
+  out.pulseDurationMs = (uint32_t)f[4].toInt();
+  return true;
+}
+
+// "<enabled 0/1>\x1F<cameraA>\x1F<cameraB>\x1F<pin>\x1F<activeLow 0/1>\x1F<outageThresholdMs>\x1F<pulseDurationMs>"
+static bool parseBridgeWatchdogLineV1(const String& line, BridgeWatchdogSettings& out) {
+  std::vector<String> f = splitFieldsBySep(line, SD_FIELD_SEP);
+  if (f.size() != 7 || f[0].length() == 0) return false;
+  out.enabled = f[0] == "1";
+  out.cameraA = f[1];
+  out.cameraB = f[2];
+  out.pin = f[3].toInt();
+  out.activeLow = f[4] == "1";
+  out.outageThresholdMs = (uint32_t)f[5].toInt();
+  out.pulseDurationMs = (uint32_t)f[6].toInt();
+  return true;
+}
+
+// "<enabled 0/1>\x1F<pin>\x1F<activeHigh 0/1>"
+static bool parsePowerMonitorLineV1(const String& line, PowerMonitorSettings& out) {
+  std::vector<String> f = splitFieldsBySep(line, SD_FIELD_SEP);
+  if (f.size() != 3 || f[0].length() == 0) return false;
+  out.enabled = f[0] == "1";
+  out.pin = f[1].toInt();
+  out.activeHigh = f[2] == "1";
+  return true;
+}
+
 ConfigImportResult parseConfigImport(const String& text) {
   ConfigImportResult result;
   std::vector<String> lines = splitLines(text);
@@ -176,6 +226,36 @@ ConfigImportResult parseConfigImport(const String& text) {
         if (parsed) {
           result.sdSettings = s;
           result.sdSettingsFound = true;
+        }
+        break; // exactly one data line expected
+      }
+    } else if (currentSection == "NETWATCHDOG") {
+      for (auto& l : sectionLines) {
+        if (l.length() == 0) continue;
+        NetWatchdogSettings s;
+        if (currentVersion == 1 && parseNetWatchdogLineV1(l, s)) {
+          result.netWatchdogSettings = s;
+          result.netWatchdogFound = true;
+        }
+        break; // exactly one data line expected
+      }
+    } else if (currentSection == "BRIDGEWATCHDOG") {
+      for (auto& l : sectionLines) {
+        if (l.length() == 0) continue;
+        BridgeWatchdogSettings s;
+        if (currentVersion == 1 && parseBridgeWatchdogLineV1(l, s)) {
+          result.bridgeWatchdogSettings = s;
+          result.bridgeWatchdogFound = true;
+        }
+        break; // exactly one data line expected
+      }
+    } else if (currentSection == "POWERMONITOR") {
+      for (auto& l : sectionLines) {
+        if (l.length() == 0) continue;
+        PowerMonitorSettings s;
+        if (currentVersion == 1 && parsePowerMonitorLineV1(l, s)) {
+          result.powerMonitorSettings = s;
+          result.powerMonitorFound = true;
         }
         break; // exactly one data line expected
       }

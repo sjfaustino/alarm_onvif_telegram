@@ -5,6 +5,9 @@
 #include "telegram_user_serialize.h"
 #include "network_serialize.h"
 #include "sd_store.h" // SdSettings
+#include "net_watchdog.h" // NetWatchdogSettings
+#include "bridge_watchdog.h" // BridgeWatchdogSettings
+#include "power_monitor.h" // PowerMonitorSettings
 
 // Pure text-in/struct-out parser for the machine-readable blocks
 // buildConfigExport() (webserver_security.cpp) appends after each of its
@@ -70,6 +73,18 @@ struct ConfigImportResult {
 
   bool sdSettingsFound = false;
   SdSettings sdSettings;
+
+  // Same single-record reasoning as networkFound/sdSettingsFound above -
+  // none of these three carry a secret, but a blank/malformed line is
+  // still not trusted as "found".
+  bool netWatchdogFound = false;
+  NetWatchdogSettings netWatchdogSettings;
+
+  bool bridgeWatchdogFound = false;
+  BridgeWatchdogSettings bridgeWatchdogSettings;
+
+  bool powerMonitorFound = false;
+  PowerMonitorSettings powerMonitorSettings;
 };
 
 ConfigImportResult parseConfigImport(const String& text);

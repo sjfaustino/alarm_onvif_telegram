@@ -31,6 +31,9 @@ struct ConfigImportApplyResult {
   bool usersImported = false;      size_t userCount = 0;
   bool networkImported = false;
   bool sdSettingsImported = false;
+  bool netWatchdogImported = false;
+  bool bridgeWatchdogImported = false;
+  bool powerMonitorImported = false;
   bool anyDomainFound = false; // false means the file had no recognizable machine block at all
   // True if the Cameras/Telegram Users section was present but REJECTED
   // outright (config_import_parse.h's ConfigImportResult::

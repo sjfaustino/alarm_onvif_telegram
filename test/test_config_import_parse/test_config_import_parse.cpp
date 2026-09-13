@@ -49,6 +49,17 @@ static String fullExportText() {
   text += "\n--- Storage ---\n[prose omitted]\n";
   text += "### SDSETTINGS v2\n";
   text += "1" + String((char)0x1F) + "168" + String((char)0x1F) + "45\n";
+  text += "\n--- Internet Watchdog ---\n[prose omitted]\n";
+  text += "### NETWATCHDOG v1\n";
+  text += "1" + String((char)0x1F) + "4" + String((char)0x1F) + "1" + String((char)0x1F) + "300000" +
+          String((char)0x1F) + "10000\n";
+  text += "\n--- Camera Bridge Watchdog ---\n[prose omitted]\n";
+  text += "### BRIDGEWATCHDOG v1\n";
+  text += "1" + String((char)0x1F) + "D01-Front" + String((char)0x1F) + "D02-Back" + String((char)0x1F) +
+          "5" + String((char)0x1F) + "1" + String((char)0x1F) + "300000" + String((char)0x1F) + "10000\n";
+  text += "\n--- 220V Power Monitor ---\n[prose omitted]\n";
+  text += "### POWERMONITOR v1\n";
+  text += "1" + String((char)0x1F) + "6" + String((char)0x1F) + "0\n";
   return text;
 }
 
@@ -74,6 +85,24 @@ void test_full_export_all_sections_found_and_parsed(void) {
   TEST_ASSERT_TRUE(r.sdSettings.enabled);
   TEST_ASSERT_EQUAL_UINT32(168, r.sdSettings.checkIntervalHours);
   TEST_ASSERT_EQUAL_UINT32(45, r.sdSettings.retentionDays);
+
+  TEST_ASSERT_TRUE(r.netWatchdogFound);
+  TEST_ASSERT_TRUE(r.netWatchdogSettings.enabled);
+  TEST_ASSERT_EQUAL(4, r.netWatchdogSettings.pin);
+  TEST_ASSERT_TRUE(r.netWatchdogSettings.activeLow);
+  TEST_ASSERT_EQUAL_UINT32(300000, r.netWatchdogSettings.outageThresholdMs);
+  TEST_ASSERT_EQUAL_UINT32(10000, r.netWatchdogSettings.pulseDurationMs);
+
+  TEST_ASSERT_TRUE(r.bridgeWatchdogFound);
+  TEST_ASSERT_TRUE(r.bridgeWatchdogSettings.enabled);
+  TEST_ASSERT_EQUAL_STRING("D01-Front", r.bridgeWatchdogSettings.cameraA.c_str());
+  TEST_ASSERT_EQUAL_STRING("D02-Back", r.bridgeWatchdogSettings.cameraB.c_str());
+  TEST_ASSERT_EQUAL(5, r.bridgeWatchdogSettings.pin);
+
+  TEST_ASSERT_TRUE(r.powerMonitorFound);
+  TEST_ASSERT_TRUE(r.powerMonitorSettings.enabled);
+  TEST_ASSERT_EQUAL(6, r.powerMonitorSettings.pin);
+  TEST_ASSERT_FALSE(r.powerMonitorSettings.activeHigh);
 }
 
 // An SDSETTINGS export taken before retentionDays existed on SdSettings
@@ -121,6 +150,9 @@ void test_partial_export_only_cameras_section(void) {
   TEST_ASSERT_FALSE(r.usersFound);
   TEST_ASSERT_FALSE(r.networkFound);
   TEST_ASSERT_FALSE(r.sdSettingsFound);
+  TEST_ASSERT_FALSE(r.netWatchdogFound);
+  TEST_ASSERT_FALSE(r.bridgeWatchdogFound);
+  TEST_ASSERT_FALSE(r.powerMonitorFound);
 }
 
 // Prose-only text (an export from before this Import feature existed, or a
@@ -176,6 +208,35 @@ void test_malformed_network_line_is_not_found(void) {
 void test_malformed_sdsettings_line_is_not_found(void) {
   ConfigImportResult r = parseConfigImport("### SDSETTINGS v1\nnoSeparatorHere\n");
   TEST_ASSERT_FALSE(r.sdSettingsFound);
+}
+
+// Same single-record "malformed line is not trusted as found" discipline
+// for the three relay/sensor settings sections.
+void test_malformed_netwatchdog_line_is_not_found(void) {
+  // \x1F followed directly by "few"/"fields" would greedily consume 'f' as
+  // a third hex digit (0x1Ff/0x1Ff is out of char range) - split into
+  // adjacent literals so each escape terminates at exactly 2 digits, same
+  // fix applied throughout lib/telegram_i18n this session.
+  ConfigImportResult r = parseConfigImport("### NETWATCHDOG v1\ntoo\x1F" "few\x1F" "fields\n");
+  TEST_ASSERT_FALSE(r.netWatchdogFound);
+}
+
+void test_malformed_bridgewatchdog_line_is_not_found(void) {
+  ConfigImportResult r = parseConfigImport("### BRIDGEWATCHDOG v1\ntoo\x1F" "few\x1F" "fields\n");
+  TEST_ASSERT_FALSE(r.bridgeWatchdogFound);
+}
+
+void test_malformed_powermonitor_line_is_not_found(void) {
+  ConfigImportResult r = parseConfigImport("### POWERMONITOR v1\nnoSeparatorHere\n");
+  TEST_ASSERT_FALSE(r.powerMonitorFound);
+}
+
+// An unrecognized future/older version tag for a single-line section falls
+// through every currentVersion branch untouched - same "not found" outcome
+// as a malformed line, not a crash or a best-effort guess.
+void test_netwatchdog_unknown_version_is_not_found(void) {
+  ConfigImportResult r = parseConfigImport("### NETWATCHDOG v2\n1\x1F""4\x1F""1\x1F""300000\x1F""10000\n");
+  TEST_ASSERT_FALSE(r.netWatchdogFound);
 }
 
 // An older schema version tag (e.g. a camera exported by earlier firmware,
@@ -261,6 +322,10 @@ int main(int argc, char** argv) {
   RUN_TEST(test_users_with_duplicate_chat_id_are_rejected);
   RUN_TEST(test_malformed_network_line_is_not_found);
   RUN_TEST(test_malformed_sdsettings_line_is_not_found);
+  RUN_TEST(test_malformed_netwatchdog_line_is_not_found);
+  RUN_TEST(test_malformed_bridgewatchdog_line_is_not_found);
+  RUN_TEST(test_malformed_powermonitor_line_is_not_found);
+  RUN_TEST(test_netwatchdog_unknown_version_is_not_found);
   RUN_TEST(test_sdsettings_v1_import_defaults_retention);
   RUN_TEST(test_sdsettings_v2_import_preserves_nonzero_retention);
   RUN_TEST(test_sdsettings_v2_import_preserves_zero_retention);

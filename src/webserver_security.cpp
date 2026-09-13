@@ -8,6 +8,9 @@
 #include "network_store.h"
 #include "network_serialize.h"
 #include "sd_store.h"
+#include "net_watchdog.h"
+#include "bridge_watchdog.h"
+#include "power_monitor.h"
 #include "config_import_parse.h"
 #include "nvs_chunk.h" // splitIntoChunks/joinChunks - see saveConfigBackup/loadConfigBackup
 #include "build_version.h" // FIRMWARE_VERSION
@@ -31,6 +34,19 @@ static String redactUrlCredentials(const String& url) {
   int nextSlash = url.indexOf('/', authorityStart);
   if (nextSlash >= 0 && at > nextSlash) return url; // '@' is in the path, not credentials
   return url.substring(0, authorityStart) + "(redacted)@" + url.substring(at + 1);
+}
+
+// BridgeWatchdogSettings::cameraA/cameraB are free text (typed into a
+// dashboard <input>, not selected from a fixed list at export time), so -
+// same discipline camera_serialize.cpp/telegram_user_serialize.cpp's own
+// stripSeparators() already applies to every free-text field they
+// serialize - a stray literal 0x1F byte must not be allowed to corrupt
+// the exported NETWATCHDOG/BRIDGEWATCHDOG/POWERMONITOR lines' own field
+// boundaries (all use the same separator).
+static String stripFieldSep(const String& s) {
+  String out = s;
+  out.replace(String((char)0x1F), "");
+  return out;
 }
 
 String renderSecurityPanel() {
@@ -161,7 +177,8 @@ ConfigImportApplyResult applyConfigImport(const String& text) {
   ConfigImportApplyResult result;
 
   result.anyDomainFound =
-      parsed.camerasFound || parsed.usersFound || parsed.networkFound || parsed.sdSettingsFound;
+      parsed.camerasFound || parsed.usersFound || parsed.networkFound || parsed.sdSettingsFound ||
+      parsed.netWatchdogFound || parsed.bridgeWatchdogFound || parsed.powerMonitorFound;
   if (result.anyDomainFound) {
     // Captures whatever is CURRENTLY in NVS before any of the replaceAll*/
     // save* calls below touch it - see this function's own header comment
@@ -199,6 +216,15 @@ ConfigImportApplyResult applyConfigImport(const String& text) {
   if (parsed.sdSettingsFound) {
     result.sdSettingsImported = saveSdSettings(parsed.sdSettings);
   }
+  if (parsed.netWatchdogFound) {
+    result.netWatchdogImported = saveNetWatchdogSettings(parsed.netWatchdogSettings);
+  }
+  if (parsed.bridgeWatchdogFound) {
+    result.bridgeWatchdogImported = saveBridgeWatchdogSettings(parsed.bridgeWatchdogSettings);
+  }
+  if (parsed.powerMonitorFound) {
+    result.powerMonitorImported = savePowerMonitorSettings(parsed.powerMonitorSettings);
+  }
   return result;
 }
 
@@ -215,12 +241,18 @@ String renderImportResultBanner(const ConfigImportApplyResult& r) {
   if (r.usersImported) addImported(String(r.userCount) + " Telegram user(s)");
   if (r.networkImported) addImported("network settings");
   if (r.sdSettingsImported) addImported("SD settings");
+  if (r.netWatchdogImported) addImported("Internet Watchdog settings");
+  if (r.bridgeWatchdogImported) addImported("Camera Bridge Watchdog settings");
+  if (r.powerMonitorImported) addImported("220V Power Monitor settings");
 
   auto addSkipped = [&](const String& s) { if (skipped.length() > 0) skipped += ", "; skipped += s; };
   if (!r.camerasImported && !r.camerasRejectedDuplicate) addSkipped("Cameras");
   if (!r.usersImported && !r.usersRejectedDuplicate) addSkipped("Telegram Users");
   if (!r.networkImported) addSkipped("Network");
   if (!r.sdSettingsImported) addSkipped("SD Settings");
+  if (!r.netWatchdogImported) addSkipped("Internet Watchdog");
+  if (!r.bridgeWatchdogImported) addSkipped("Camera Bridge Watchdog");
+  if (!r.powerMonitorImported) addSkipped("220V Power Monitor");
 
   String banner = imported.length() > 0 ? ("Imported " + imported + ".") : "Nothing was imported.";
   if (skipped.length() > 0) {
@@ -359,6 +391,42 @@ String buildConfigExport() {
   out += "### SDSETTINGS v2\n";
   out += String(sdSettings.enabled ? "1" : "0") + "\x1F" + String(sdSettings.checkIntervalHours) +
          "\x1F" + String(sdSettings.retentionDays) + "\n";
+
+  out += "\n--- Internet Watchdog ---\n";
+  NetWatchdogSettings netWd = loadNetWatchdogSettings();
+  out += "Enabled: " + String(netWd.enabled ? "yes" : "no") + "\n";
+  out += "Relay GPIO pin: " + String(netWd.pin) + "\n";
+  out += "Active-low: " + String(netWd.activeLow ? "yes" : "no") + "\n";
+  out += "Outage threshold: " + String(netWd.outageThresholdMs / 60000UL) + "min\n";
+  out += "Pulse duration: " + String(netWd.pulseDurationMs / 1000UL) + "s\n";
+  out += "### NETWATCHDOG v1\n";
+  out += String(netWd.enabled ? "1" : "0") + "\x1F" + String(netWd.pin) + "\x1F" +
+         String(netWd.activeLow ? "1" : "0") + "\x1F" + String(netWd.outageThresholdMs) + "\x1F" +
+         String(netWd.pulseDurationMs) + "\n";
+
+  out += "\n--- Camera Bridge Watchdog ---\n";
+  BridgeWatchdogSettings bridgeWd = loadBridgeWatchdogSettings();
+  out += "Enabled: " + String(bridgeWd.enabled ? "yes" : "no") + "\n";
+  out += "Camera A: " + (bridgeWd.cameraA.length() > 0 ? bridgeWd.cameraA : String("(none)")) + "\n";
+  out += "Camera B: " + (bridgeWd.cameraB.length() > 0 ? bridgeWd.cameraB : String("(none)")) + "\n";
+  out += "Relay GPIO pin: " + String(bridgeWd.pin) + "\n";
+  out += "Active-low: " + String(bridgeWd.activeLow ? "yes" : "no") + "\n";
+  out += "Outage threshold: " + String(bridgeWd.outageThresholdMs / 60000UL) + "min\n";
+  out += "Pulse duration: " + String(bridgeWd.pulseDurationMs / 1000UL) + "s\n";
+  out += "### BRIDGEWATCHDOG v1\n";
+  out += String(bridgeWd.enabled ? "1" : "0") + "\x1F" + stripFieldSep(bridgeWd.cameraA) + "\x1F" +
+         stripFieldSep(bridgeWd.cameraB) + "\x1F" + String(bridgeWd.pin) + "\x1F" +
+         String(bridgeWd.activeLow ? "1" : "0") + "\x1F" + String(bridgeWd.outageThresholdMs) + "\x1F" +
+         String(bridgeWd.pulseDurationMs) + "\n";
+
+  out += "\n--- 220V Power Monitor ---\n";
+  PowerMonitorSettings powerMon = loadPowerMonitorSettings();
+  out += "Enabled: " + String(powerMon.enabled ? "yes" : "no") + "\n";
+  out += "Sensor GPIO pin: " + String(powerMon.pin) + "\n";
+  out += "Active-high: " + String(powerMon.activeHigh ? "yes" : "no") + "\n";
+  out += "### POWERMONITOR v1\n";
+  out += String(powerMon.enabled ? "1" : "0") + "\x1F" + String(powerMon.pin) + "\x1F" +
+         String(powerMon.activeHigh ? "1" : "0") + "\n";
 
   return out;
 }

@@ -2,7 +2,17 @@
 #include <Arduino.h>
 #include "config.h" // BRIDGE_WATCHDOG_PIN_DEFAULT
 #include "camera_store.h" // CameraConfig
-#include "camera.h" // CameraState
+
+// Forward-declared, not #include "camera.h" - that header pulls in real
+// FreeRTOS headers (CameraState::stateMutex's SemaphoreHandle_t) that
+// don't exist under the native test environment. This header only ever
+// needs CameraState as an array/pointer parameter type below, which a
+// forward declaration is sufficient for; src/bridge_watchdog.cpp (ESP32-
+// only, never compiled natively) includes the real camera.h itself for
+// the complete type it actually needs to dereference. This is what lets
+// lib/config_import_parse include this header (for BridgeWatchdogSettings)
+// and still build under env:native.
+struct CameraState;
 
 // Optional camera-bridge watchdog - same "optional peripheral, off by
 // default, graceful fallback" shape as net_watchdog.h/sd_store.h/

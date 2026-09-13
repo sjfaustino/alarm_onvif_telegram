@@ -1,4 +1,5 @@
 #include "bridge_watchdog.h"
+#include "camera.h" // CameraState - only forward-declared in bridge_watchdog.h, see its own comment
 #include "net_watchdog.h" // loadNetWatchdogSettings - watchdogPinsConflict cross-check
 #include "net_watchdog_logic.h"
 #include "event_log_store.h" // logEvent
