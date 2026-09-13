@@ -118,6 +118,16 @@ String trNvsUsageWarning(TelegramLang lang, unsigned pct) {
          "unused cameras/Telegram users.";
 }
 
+String trSdUsageWarning(TelegramLang lang, unsigned pct) {
+  if (lang == TelegramLang::Portuguese) {
+    return "\xE2\x9A\xA0\xEF\xB8\x8F O cart\xC3\xA3o SD est\xC3\xA1 " + String(pct) + "% cheio - verifique a "
+           "reten\xC3\xA7\xC3\xA3o de snapshots na p\xC3\xA1gina Armazenamento, ou liberte espa\xC3\xA7o "
+           "manualmente, antes que as grava\xC3\xA7\xC3\xB5""es comecem a falhar.";
+  }
+  return "\xE2\x9A\xA0\xEF\xB8\x8F SD card is " + String(pct) + "% full - check the snapshot retention "
+         "setting on the Storage page, or free up space manually, before writes start failing.";
+}
+
 String trWifiWeakWarning(TelegramLang lang, int rssi) {
   if (lang == TelegramLang::Portuguese) {
     return "\xE2\x9A\xA0\xEF\xB8\x8F O sinal WiFi est\xC3\xA1 fraco (" + String(rssi) + " dBm) - ainda "

@@ -104,6 +104,25 @@ static const unsigned long NVS_USAGE_CHECK_INTERVAL_MS = 60UL * 60UL * 1000UL; /
 // (webserver_firmware.cpp) and checkNvsUsage's proactive Telegram alert
 // (main.cpp) so both agree on what "getting full" means.
 static const unsigned NVS_USAGE_WARN_PERCENT = 80;
+// Same "proactive counterpart to a reactive failure alert" reasoning as
+// NVS_USAGE_CHECK_INTERVAL_MS/NVS_USAGE_WARN_PERCENT above, for the SD
+// card's own capacity (main.cpp's checkSdUsage) - sd_store.cpp already
+// alerts once a write actually fails and falls back to the PSRAM ring
+// (trSdFailure), but nothing warns before that point the way NVS's own
+// warning does. Retention (SdSettings::retentionDays) is the usual
+// defense against this, but a burst of motion, a disabled/too-long
+// retention setting, or a card smaller than expected can all still let
+// usage climb toward full despite it. 1 hour matches
+// NVS_USAGE_CHECK_INTERVAL_MS - SD usage only grows from actual snapshot
+// writes, not on its own between checks, so there's no harm checking this
+// infrequently either.
+static const unsigned long SD_USAGE_CHECK_INTERVAL_MS = 60UL * 60UL * 1000UL; // 1 hour
+// Higher than NVS_USAGE_WARN_PERCENT - SD cards are typically orders of
+// magnitude larger than the NVS partition, and SD_FREE_SPACE_RESERVE_BYTES
+// (this file) already reserves a fixed 50MB floor regardless of card
+// size, so there's more natural headroom here before "full" is actually a
+// near-term risk.
+static const unsigned SD_USAGE_WARN_PERCENT = 90;
 // How often main.cpp's loop() re-checks WiFi.RSSI() (checkWifiSignal) -
 // shorter than NVS_USAGE_CHECK_INTERVAL_MS since signal strength can
 // genuinely drift within minutes (something moved, a neighbor's channel

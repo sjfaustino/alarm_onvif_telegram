@@ -52,6 +52,9 @@ String trCameraBackOnline(TelegramLang lang, const String& cameraName);
 String trSubscriptionLost(TelegramLang lang, const String& cameraName, unsigned long minutes);
 String trMotionWatchdogTripped(TelegramLang lang, const String& cameraName, unsigned hours);
 String trNvsUsageWarning(TelegramLang lang, unsigned pct);
+// Proactive counterpart to trSdFailure below - fires BEFORE a write
+// actually fails, once usage crosses SD_USAGE_WARN_PERCENT (config.h).
+String trSdUsageWarning(TelegramLang lang, unsigned pct);
 String trWifiWeakWarning(TelegramLang lang, int rssi);
 String trHeapLowWarning(TelegramLang lang, uint32_t baselineBytes, uint32_t maxAllocBytes);
 String trCameraTaskSpawnFailure(TelegramLang lang, const String& cameraName);

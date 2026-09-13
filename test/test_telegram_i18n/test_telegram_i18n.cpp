@@ -95,6 +95,12 @@ void test_trNvsUsageWarning(void) {
   assertDiffersAndContains(en, pt, "85");
 }
 
+void test_trSdUsageWarning(void) {
+  String en = trSdUsageWarning(TelegramLang::English, 92);
+  String pt = trSdUsageWarning(TelegramLang::Portuguese, 92);
+  assertDiffersAndContains(en, pt, "92");
+}
+
 void test_trWifiWeakWarning(void) {
   String en = trWifiWeakWarning(TelegramLang::English, -80);
   String pt = trWifiWeakWarning(TelegramLang::Portuguese, -80);
@@ -460,6 +466,7 @@ int main(int argc, char** argv) {
   RUN_TEST(test_trMotionWatchdogTripped);
   RUN_TEST(test_trNtpSyncFailed_differs_by_hasFallbackTime_and_language);
   RUN_TEST(test_trNvsUsageWarning);
+  RUN_TEST(test_trSdUsageWarning);
   RUN_TEST(test_trWifiWeakWarning);
   RUN_TEST(test_trHeapLowWarning);
   RUN_TEST(test_trCameraTaskSpawnFailure);

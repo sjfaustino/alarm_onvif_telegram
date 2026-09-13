@@ -59,6 +59,11 @@ static bool g_wifiRssiWeakAlerted = false;
 // startMonitoring()/reconnect stretch rather than on every single retry
 // loop that calls setupTime() again.
 static bool g_ntpSyncFailedAlerted = false;
+static unsigned long lastSdUsageCheckMs = 0;
+// Same alert-once-per-transition/re-arm shape as g_nvsUsageAlerted above,
+// for checkSdUsage() instead of checkNvsUsage() - see
+// SD_USAGE_WARN_PERCENT's own comment (config.h) for why this exists.
+static bool g_sdUsageAlerted = false;
 static unsigned long lastNetWatchdogCheckMs = 0;
 static unsigned long lastBridgeWatchdogCheckMs = 0;
 static unsigned long lastPowerMonitorCheckMs = 0;
@@ -565,6 +570,33 @@ static void checkNvsUsage() {
   }
 }
 
+// Same shape as checkNvsUsage above (alert once on crossing the
+// threshold, re-arm on recovery) - see SD_USAGE_WARN_PERCENT's own
+// comment (config.h) for why this is worth watching proactively, ahead of
+// sd_store.cpp's own reactive trSdFailure alert. No-op if SD isn't active
+// at all - getSdStatus() would just report totalBytes/usedBytes as 0,
+// which would misreport as "100% full" instead of "not applicable".
+static void checkSdUsage() {
+  if (!sdActive()) return;
+
+  SdStatus status = getSdStatus();
+  if (status.totalBytes == 0) return; // shouldn't happen while active, but never divide by zero
+
+  unsigned pct = (unsigned)((status.usedBytes * 100) / status.totalBytes);
+  bool highNow = pct >= SD_USAGE_WARN_PERCENT;
+  if (highNow == g_sdUsageAlerted) return; // no state change since the last check
+
+  g_sdUsageAlerted = highNow;
+  if (highNow) {
+    Serial.printf("WARNING: SD card usage at %u%% - check the Storage page's retention setting.\n", pct);
+    logEvent("SD card usage at " + String(pct) + "% - approaching full");
+    sendTelegramMessage([pct](TelegramLang lang) { return trSdUsageWarning(lang, pct); });
+  } else {
+    Serial.printf("SD card usage back under %u%% (%u%%).\n", SD_USAGE_WARN_PERCENT, pct);
+    logEvent("SD card usage back under " + String((unsigned)SD_USAGE_WARN_PERCENT) + "% (" + String(pct) + "%)");
+  }
+}
+
 // Same shape as checkNvsUsage above (alert once on crossing the threshold,
 // re-arm on recovery) - see WIFI_RSSI_WARN_DBM's own comment (config.h)
 // for why this is worth watching. Only meaningful while actually
@@ -945,6 +977,15 @@ void loop() {
   if (WiFi.status() == WL_CONNECTED && millis() - lastNvsCheckMs >= NVS_USAGE_CHECK_INTERVAL_MS) {
     lastNvsCheckMs = millis();
     checkNvsUsage();
+    esp_task_wdt_reset();
+  }
+
+  // Same "doesn't need WiFi to check, does need it to alert" reasoning as
+  // checkNvsUsage above - checkSdUsage() itself no-ops instantly if SD
+  // isn't active, so this costs nothing on a board without SD storage.
+  if (WiFi.status() == WL_CONNECTED && millis() - lastSdUsageCheckMs >= SD_USAGE_CHECK_INTERVAL_MS) {
+    lastSdUsageCheckMs = millis();
+    checkSdUsage();
     esp_task_wdt_reset();
   }
 
