@@ -1,5 +1,5 @@
 #include "webserver_cameras.h"
-#include "config.h" // CAMERA_ALERT_COOLDOWN_MAX_MS/CAMERA_OFFLINE_THRESHOLD_MAX_MS/CAMERA_SNAPSHOT_BURST_MAX
+#include "config.h" // CAMERA_ALERT_COOLDOWN_MAX_MS/CAMERA_OFFLINE_THRESHOLD_MAX_MS/CAMERA_SNAPSHOT_BURST_MAX/CAMERA_SNAPSHOT_DIMENSION_MAX
 #include "format_utils.h"
 #include "webserver_html.h"
 #include "camera_tasks.h"
@@ -91,9 +91,17 @@ static String renderCameraForm(const CameraConfig& v, bool isEdit) {
           String(v.includeInitialTerminationTime ? " checked" : "") + "> Include InitialTerminationTime</label>";
   html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"includeReplyToAnonymous\"" +
           String(v.includeReplyToAnonymous ? " checked" : "") + "> Include ReplyTo anonymous</label>";
-  html += "<label>Snapshot URI override (optional; {USER}/{PASS} substituted at runtime)"
+  html += "<label>Snapshot URI override (optional; {USER}/{PASS}/{WIDTH}/{HEIGHT} substituted at runtime)"
           "<input type=\"text\" name=\"snapshotUriOverride\" value=\"" +
           htmlEscape(v.snapshotUriOverride) + "\"></label>";
+  html += "<label>Snapshot width override, for {WIDTH} above (optional, max " +
+          String(CAMERA_SNAPSHOT_DIMENSION_MAX) + ", blank/0 = unset)"
+          "<input type=\"text\" name=\"snapshotMaxWidth\" value=\"" +
+          (v.snapshotMaxWidth > 0 ? String(v.snapshotMaxWidth) : String("")) + "\"></label>";
+  html += "<label>Snapshot height override, for {HEIGHT} above (optional, max " +
+          String(CAMERA_SNAPSHOT_DIMENSION_MAX) + ", blank/0 = unset)"
+          "<input type=\"text\" name=\"snapshotMaxHeight\" value=\"" +
+          (v.snapshotMaxHeight > 0 ? String(v.snapshotMaxHeight) : String("")) + "\"></label>";
   html += "<label>Preferred profile keyword (optional, e.g. \"sub\")"
           "<input type=\"text\" name=\"preferredProfileKeyword\" value=\"" +
           htmlEscape(v.preferredProfileKeyword) + "\"></label>";
@@ -563,6 +571,21 @@ CameraConfig parseCameraForm(PsychicRequest* request) {
 
   c.petAlertsEnabled = request->hasParam("petAlertsEnabled");
   c.petAlertsTextOnly = request->hasParam("petAlertsTextOnly");
+
+  // 0 is the deliberate, meaningful "unset - no {WIDTH}/{HEIGHT}
+  // substitution" value here - same "never substitute it away, only clamp
+  // the ceiling" reasoning as motionWatchdogHours/timelapseIntervalMin
+  // above. camera.cpp's safeSnapshotDimension re-clamps at the point of
+  // use for a value that bypassed this form entirely.
+  long snapshotMaxWidth = request->getParam("snapshotMaxWidth", "0").toInt();
+  if (snapshotMaxWidth < 0) snapshotMaxWidth = 0;
+  if (snapshotMaxWidth > (long)CAMERA_SNAPSHOT_DIMENSION_MAX) snapshotMaxWidth = (long)CAMERA_SNAPSHOT_DIMENSION_MAX;
+  c.snapshotMaxWidth = (uint16_t)snapshotMaxWidth;
+
+  long snapshotMaxHeight = request->getParam("snapshotMaxHeight", "0").toInt();
+  if (snapshotMaxHeight < 0) snapshotMaxHeight = 0;
+  if (snapshotMaxHeight > (long)CAMERA_SNAPSHOT_DIMENSION_MAX) snapshotMaxHeight = (long)CAMERA_SNAPSHOT_DIMENSION_MAX;
+  c.snapshotMaxHeight = (uint16_t)snapshotMaxHeight;
 
   // A blank/zero/negative field shouldn't produce a near-0 interval that
   // hammers the camera (see CAMERA_POLL_INTERVAL_MIN_MS's own comment,

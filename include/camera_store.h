@@ -115,6 +115,19 @@ struct CameraConfig {
   // this specific camera. Per-camera, not global, since cheaper embedded
   // HTTP stacks tolerate more frequent polling worse than others do.
   unsigned long pollIntervalMs = PULL_INTERVAL_MS;
+
+  // Substituted into snapshotUriOverride as {WIDTH}/{HEIGHT}, same
+  // mechanism as {USER}/{PASS} above - for a camera whose own snapshot URL
+  // accepts a resolution query param (e.g. "...&width={WIDTH}&height={HEIGHT}"),
+  // letting a lower-bandwidth snapshot be requested without touching the
+  // camera's own persistent encoder configuration (which would affect
+  // every other viewer/NVR of that camera too). 0 = unset - no
+  // substitution happens, so this is a no-op unless snapshotUriOverride
+  // actually references the token. Ignored entirely when
+  // snapshotUriOverride is empty (the standard GetSnapshotUri flow has no
+  // way to request a resolution).
+  uint16_t snapshotMaxWidth = 0;
+  uint16_t snapshotMaxHeight = 0;
 };
 
 // Loads the camera list from NVS, seeding once from CAMERA_SEED in

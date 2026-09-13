@@ -56,7 +56,9 @@ String serializeCamera(const CameraConfig& c) {
   s += (c.timelapseSendToTelegram ? "1" : "0");        s += FIELD_SEP;
   s += String(c.retentionDays);                        s += FIELD_SEP;
   s += (c.petAlertsEnabled ? "1" : "0");                s += FIELD_SEP;
-  s += (c.petAlertsTextOnly ? "1" : "0");
+  s += (c.petAlertsTextOnly ? "1" : "0");               s += FIELD_SEP;
+  s += String(c.snapshotMaxWidth);                      s += FIELD_SEP;
+  s += String(c.snapshotMaxHeight);
   return s;
 }
 
@@ -252,6 +254,42 @@ static CameraConfig deserializeCameraV5(const std::vector<String>& fields) {
   return c;
 }
 
+// Version 6 (CAMERA_SCHEMA_VERSION): V5's 24 fields plus snapshotMaxWidth
+// (1) and snapshotMaxHeight (1), appended - 26 fields total. Requires an
+// exact field count, same reasoning as V1-V5's own comments.
+static CameraConfig deserializeCameraV6(const std::vector<String>& fields) {
+  CameraConfig c;
+  if (fields.size() != 26) return c; // malformed - caller skips entries with an empty name
+
+  c.name                          = fields[0];
+  c.deviceServiceUrl              = fields[1];
+  c.enabled                       = fields[2] == "1";
+  c.useWSSecurity                 = fields[3] == "1";
+  c.includeInitialTerminationTime = fields[4] == "1";
+  c.includeReplyToAnonymous       = fields[5] == "1";
+  c.snapshotUriOverride           = fields[6];
+  c.preferredProfileKeyword       = fields[7];
+  c.user                          = fields[8];
+  c.pass                          = fields[9];
+  c.notes                         = fields[10];
+  if (fields[11].length() > 0) c.alertCooldownMs    = (unsigned long)fields[11].toInt();
+  if (fields[12].length() > 0) c.offlineThresholdMs  = (unsigned long)fields[12].toInt();
+  if (fields[13].length() > 0) c.snapshotBurstCount  = (unsigned int)fields[13].toInt();
+  c.quietHoursEnabled              = fields[14] == "1";
+  if (fields[15].length() > 0) c.quietStartMinute    = (uint16_t)fields[15].toInt();
+  if (fields[16].length() > 0) c.quietEndMinute      = (uint16_t)fields[16].toInt();
+  if (fields[17].length() > 0) c.motionWatchdogHours = (uint16_t)fields[17].toInt();
+  if (fields[18].length() > 0) c.timelapseIntervalMin = (uint16_t)fields[18].toInt();
+  if (fields[19].length() > 0) c.pollIntervalMs      = (unsigned long)fields[19].toInt();
+  c.timelapseSendToTelegram        = fields[20] == "1";
+  if (fields[21].length() > 0) c.retentionDays       = (uint16_t)fields[21].toInt();
+  c.petAlertsEnabled                = fields[22] == "1";
+  c.petAlertsTextOnly               = fields[23] == "1";
+  if (fields[24].length() > 0) c.snapshotMaxWidth    = (uint16_t)fields[24].toInt();
+  if (fields[25].length() > 0) c.snapshotMaxHeight   = (uint16_t)fields[25].toInt();
+  return c;
+}
+
 CameraConfig deserializeCamera(const String& record, uint16_t recordVersion) {
   std::vector<String> fields = splitFields(record);
 
@@ -260,14 +298,15 @@ CameraConfig deserializeCamera(const String& record, uint16_t recordVersion) {
   if (recordVersion == 2) return deserializeCameraV2(fields);
   if (recordVersion == 3) return deserializeCameraV3(fields);
   if (recordVersion == 4) return deserializeCameraV4(fields);
-  if (recordVersion == CAMERA_SCHEMA_VERSION) return deserializeCameraV5(fields);
+  if (recordVersion == 5) return deserializeCameraV5(fields);
+  if (recordVersion == CAMERA_SCHEMA_VERSION) return deserializeCameraV6(fields);
 
   // Unknown version, newer than anything this firmware knows about (most
   // likely: downgraded after a later firmware version changed the layout).
   // Best-effort fall through to the newest known layout instead of
   // discarding the record outright - camera_store.cpp logs a clear
   // warning when this happens so it doesn't go unnoticed.
-  return deserializeCameraV5(fields);
+  return deserializeCameraV6(fields);
 }
 
 size_t cameraRecordFieldCount(const String& record) {

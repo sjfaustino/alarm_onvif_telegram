@@ -5,6 +5,7 @@
 #include "backoff.h"
 #include "camera_parse.h"
 #include "event_log_store.h"
+#include "config.h" // CAMERA_SNAPSHOT_DIMENSION_MAX
 #include <WiFi.h>
 #include <vector>
 #include <cstring>
@@ -165,13 +166,27 @@ bool cameraGetEventProperties(const CameraConfig& cfg, CameraState& st) {
   return true;
 }
 
+// Re-clamped here, at the point of use, not just at the dashboard form
+// boundary - same "hand-edited/imported NVS blob bypasses the form
+// entirely" reasoning as every other clamp in this project (e.g.
+// telegram.cpp's safeSnapshotBurstCount). 0 passes through unclamped -
+// it means "unset", not "zero pixels".
+static uint16_t safeSnapshotDimension(uint16_t value) {
+  if (value == 0) return 0;
+  if (value > CAMERA_SNAPSHOT_DIMENSION_MAX) return CAMERA_SNAPSHOT_DIMENSION_MAX;
+  return value;
+}
+
 bool cameraFetchProfileAndSnapshotUri(const CameraConfig& cfg, CameraState& st) {
   Serial.printf("\n[%s] Resolving snapshot URI\n", cfg.name.c_str());
 
   if (cfg.snapshotUriOverride.length() > 0) {
     // {USER}/{PASS} let an override embed query-string auth (some Vstarcam
     // firmwares want ?loginuse=...&loginpas=...) without a credential
-    // landing in a committed file.
+    // landing in a committed file. {WIDTH}/{HEIGHT} are the same idea for
+    // a camera whose snapshot URL accepts a resolution query param - a
+    // no-op substitution when the override doesn't reference either
+    // token, so this stays purely opt-in.
     String resolved = cfg.snapshotUriOverride;
     String user;
     {
@@ -179,6 +194,8 @@ bool cameraFetchProfileAndSnapshotUri(const CameraConfig& cfg, CameraState& st) 
       user = st.user;
       resolved.replace("{USER}", st.user);
       resolved.replace("{PASS}", st.pass);
+      resolved.replace("{WIDTH}", String(safeSnapshotDimension(cfg.snapshotMaxWidth)));
+      resolved.replace("{HEIGHT}", String(safeSnapshotDimension(cfg.snapshotMaxHeight)));
       st.snapshotUri = resolved;
     }
     // {USER} substituted for real (a username isn't sensitive, and showing
@@ -188,6 +205,8 @@ bool cameraFetchProfileAndSnapshotUri(const CameraConfig& cfg, CameraState& st) 
     String logUri = cfg.snapshotUriOverride;
     logUri.replace("{USER}", user);
     logUri.replace("{PASS}", "***");
+    logUri.replace("{WIDTH}", String(safeSnapshotDimension(cfg.snapshotMaxWidth)));
+    logUri.replace("{HEIGHT}", String(safeSnapshotDimension(cfg.snapshotMaxHeight)));
     Serial.printf("[%s] Using configured snapshot override: %s\n", cfg.name.c_str(), logUri.c_str());
     return true;
   }

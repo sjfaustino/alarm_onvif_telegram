@@ -242,6 +242,13 @@ static const unsigned long CAMERA_ALERT_COOLDOWN_MAX_MS = 86400000UL;    // 24h
 static const unsigned long CAMERA_OFFLINE_THRESHOLD_MAX_MS = 604800000UL; // 7 days
 static const unsigned int CAMERA_SNAPSHOT_BURST_MAX = 10;
 
+// Sanity ceiling for CameraConfig::snapshotMaxWidth/snapshotMaxHeight (the
+// {WIDTH}/{HEIGHT} tokens substituted into snapshotUriOverride) - not a
+// real camera resolution limit, just keeps a hand-edited/imported value
+// from being a meaningless arbitrarily large number. Same clamp pattern
+// as CAMERA_SNAPSHOT_BURST_MAX above.
+static const uint16_t CAMERA_SNAPSHOT_DIMENSION_MAX = 4096;
+
 // Clamp for TelegramUser::maxCommandsPerMinute (Telegram Users page) - just
 // a sanity bound on the number field, same idea as CAMERA_SNAPSHOT_BURST_MAX
 // above. Not safety-critical the way the *_MAX_MS constants are (no
