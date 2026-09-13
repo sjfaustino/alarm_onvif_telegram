@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <WiFi.h>
+#include <HTTPClient.h> // seedSystemClockFromRouterHttpDate
 #include <ESPmDNS.h>
 #include <esp_heap_caps.h>
 #include <esp_sntp.h>
@@ -31,6 +32,7 @@
 #include "telegram_retry_queue.h"
 #include "heap_health.h"
 #include "telegram_i18n.h"
+#include "http_date_parse.h" // parseHttpDate - seedSystemClockFromRouterHttpDate
 
 static std::vector<CameraConfig> g_cameras;
 static std::vector<CameraState> g_cameraStates;
@@ -301,6 +303,86 @@ static void seedSystemClockFromRtc() {
   Serial.printf("[rtc_store] Seeded system clock from RTC: %s UTC (NTP will refine this once WiFi connects)\n", buf);
 }
 
+// Last-resort fallback clock source, tried only when NTP has just failed
+// AND there's no RTC to have already seeded a plausible time at boot (see
+// setupTime()'s own call site). The problem this solves: Telegram's send
+// path uses certificate-pinned TLS (WiFiClientSecure::setCACert, see
+// telegram_ca.h's own comment on why this isn't setInsecure()), and
+// mbedTLS's certificate validation checks the server certificate's
+// NotBefore/NotAfter window against the CLIENT's current system time - a
+// clock still sitting near the Unix epoch (1970) makes Telegram's real
+// certificate look "not yet valid" and fails the handshake outright.
+// Without this, setupTime()'s own NTP-failure alert right below would be
+// silently unable to send in exactly the case it exists to warn about
+// (no RTC + NTP down).
+//
+// Deliberately plain HTTP, not HTTPS, to the local network's own gateway -
+// the whole point is a time source that doesn't itself need a working
+// clock first. Every HTTP response carries a Date header (added by the
+// server layer itself, RFC 7231), regardless of status code - a login
+// page or a 401 challenge from the router's own admin UI still has one,
+// so this doesn't need to authenticate or expect any particular response.
+// Doesn't need to be accurate, just plausible - same bar
+// seedSystemClockFromRtc() above already accepts; a real NTP sync later
+// corrects it properly either way. Best-effort: Serial-only on any
+// failure (no router reachable, no Date header, or one
+// parseHttpDate/http_date_parse.h - IMF-fixdate only - doesn't recognize) -
+// this is itself the last-resort fallback, so there's nothing further to
+// fall back to.
+static bool seedSystemClockFromRouterHttpDate() {
+  IPAddress gateway = WiFi.gatewayIP();
+  if (gateway == IPAddress(0, 0, 0, 0)) {
+    Serial.println("[setupTime] No known gateway IP - can't ask the router for the time.");
+    return false;
+  }
+
+  HTTPClient http;
+  if (!http.begin("http://" + gateway.toString() + "/")) {
+    Serial.println("[setupTime] Could not start an HTTP request to the router.");
+    return false;
+  }
+  http.setTimeout(HTTP_TIMEOUT_MS);
+  // Never follow a redirect here - some routers' "/" redirects straight to
+  // their own HTTPS admin UI, which would just reintroduce the exact
+  // TLS-needs-a-clock problem this function exists to avoid. The Date
+  // header on the FIRST (redirect) response is just as valid as one from
+  // a final 200 page.
+  http.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
+  // Registered so http.header() can actually see it after GET() - without
+  // collectHeaders(), HTTPClient doesn't expose an arbitrary header
+  // through header() at all. See telegram.cpp's fetchOneSnapshot for the
+  // same requirement with Transfer-Encoding.
+  static const char* kDateHeader[] = {"Date"};
+  http.collectHeaders(kDateHeader, 1);
+
+  int code = http.GET();
+  if (code <= 0) {
+    Serial.printf("[setupTime] Router at %s didn't answer an HTTP request (%s).\n",
+                  gateway.toString().c_str(), HTTPClient::errorToString(code).c_str());
+    http.end();
+    return false;
+  }
+
+  String dateHeader = http.header("Date");
+  http.end();
+  if (dateHeader.length() == 0) {
+    Serial.println("[setupTime] Router's HTTP response had no Date header.");
+    return false;
+  }
+
+  struct tm parsed;
+  if (!parseHttpDate(dateHeader, parsed)) {
+    Serial.printf("[setupTime] Router's Date header (\"%s\") didn't match the expected format.\n",
+                  dateHeader.c_str());
+    return false;
+  }
+
+  struct timeval tv = { timeGmUtc(parsed), 0 };
+  settimeofday(&tv, nullptr);
+  Serial.printf("[setupTime] Seeded system clock from router's HTTP Date header: %s\n", dateHeader.c_str());
+  return true;
+}
+
 static void setupTime() {
   Serial.printf("Synchronizing UTC time from %s...\n", g_wifiCredentials.ntpServer.c_str());
   configTime(0, 0, g_wifiCredentials.ntpServer.c_str());
@@ -364,11 +446,18 @@ static void setupTime() {
     Serial.print(".");
   }
   Serial.println("\nWARNING: NTP synchronization failed.");
-  logEvent(String("NTP sync failed") + (rtcActive() ? " - using RTC time" : " - no RTC fallback configured"));
+  bool hasRtc = rtcActive();
+  // Only worth trying if the RTC hasn't already given the clock a
+  // plausible seed at boot (seedSystemClockFromRtc, before WiFi/NTP ever
+  // ran) - see seedSystemClockFromRouterHttpDate's own comment for why
+  // this specifically exists to give the alert below a chance to send.
+  bool routerTimeSeeded = hasRtc ? false : seedSystemClockFromRouterHttpDate();
+  logEvent(String("NTP sync failed") +
+           (hasRtc ? " - using RTC time" : routerTimeSeeded ? " - using router's HTTP time" : " - no fallback time available"));
   if (!g_ntpSyncFailedAlerted) {
     g_ntpSyncFailedAlerted = true;
-    bool hasRtc = rtcActive();
-    sendTelegramMessage([hasRtc](TelegramLang lang) { return trNtpSyncFailed(lang, hasRtc); });
+    bool hasFallbackTime = hasRtc || routerTimeSeeded;
+    sendTelegramMessage([hasFallbackTime](TelegramLang lang) { return trNtpSyncFailed(lang, hasFallbackTime); });
   }
 }
 

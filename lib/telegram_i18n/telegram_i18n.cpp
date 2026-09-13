@@ -152,17 +152,21 @@ String trCameraTaskSpawnFailure(TelegramLang lang, const String& cameraName) {
          "memory) - it is NOT being monitored. A reboot may free enough memory to fix this.";
 }
 
-String trNtpSyncFailed(TelegramLang lang, bool hasRtc) {
+String trNtpSyncFailed(TelegramLang lang, bool hasFallbackTime) {
   if (lang == TelegramLang::Portuguese) {
     String msg = "\xE2\x9A\xA0\xEF\xB8\x8F Falha ao sincronizar a hora via NTP";
-    msg += hasRtc ? " - a usar a hora do RTC entretanto, que pode derivar sem confirma\xC3\xA7\xC3\xA3o do NTP."
-                  : " - o rel\xC3\xB3gio do sistema pode estar impreciso (sem RTC configurado).";
+    msg += hasFallbackTime
+               ? " - a usar uma hora alternativa entretanto (RTC ou router), que pode derivar sem "
+                 "confirma\xC3\xA7\xC3\xA3o do NTP."
+               : " - o rel\xC3\xB3gio do sistema pode estar impreciso (sem hora alternativa dispon\xC3\xAD" "vel).";
     msg += " Hor\xC3\xA1rio sil\xC3\xAAncioso e registos de eventos podem ser afetados at\xC3\xA9 isto ser resolvido.";
     return msg;
   }
   String msg = "\xE2\x9A\xA0\xEF\xB8\x8F NTP time sync failed";
-  msg += hasRtc ? " - using the RTC's time in the meantime, which may drift without NTP confirming it."
-                : " - the system clock may be inaccurate (no RTC configured as a fallback).";
+  msg += hasFallbackTime
+             ? " - using a fallback time (RTC or router) in the meantime, which may drift without NTP "
+               "confirming it."
+             : " - the system clock may be inaccurate (no fallback time source available).";
   msg += " Quiet hours and event timestamps may be affected until this is resolved.";
   return msg;
 }

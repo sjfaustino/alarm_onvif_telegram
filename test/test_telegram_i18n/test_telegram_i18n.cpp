@@ -76,16 +76,17 @@ void test_trMotionWatchdogTripped(void) {
   assertDiffersAndContains(en, pt, "24");
 }
 
-void test_trNtpSyncFailed_differs_by_hasRtc_and_language(void) {
-  String enWithRtc = trNtpSyncFailed(TelegramLang::English, true);
-  String enNoRtc = trNtpSyncFailed(TelegramLang::English, false);
-  TEST_ASSERT_TRUE(enWithRtc != enNoRtc); // must actually say something different, not ignore hasRtc
-  TEST_ASSERT_TRUE(enWithRtc.indexOf("RTC") >= 0);
-  TEST_ASSERT_TRUE(enNoRtc.indexOf("RTC") >= 0);
+void test_trNtpSyncFailed_differs_by_hasFallbackTime_and_language(void) {
+  String enWithFallback = trNtpSyncFailed(TelegramLang::English, true);
+  String enNoFallback = trNtpSyncFailed(TelegramLang::English, false);
+  // Must actually say something different, not ignore hasFallbackTime.
+  TEST_ASSERT_TRUE(enWithFallback != enNoFallback);
+  TEST_ASSERT_TRUE(enWithFallback.indexOf("fallback") >= 0);
+  TEST_ASSERT_TRUE(enNoFallback.indexOf("fallback") >= 0);
 
-  String ptWithRtc = trNtpSyncFailed(TelegramLang::Portuguese, true);
-  TEST_ASSERT_TRUE(enWithRtc != ptWithRtc);
-  TEST_ASSERT_TRUE(ptWithRtc.indexOf("RTC") >= 0);
+  String ptWithFallback = trNtpSyncFailed(TelegramLang::Portuguese, true);
+  TEST_ASSERT_TRUE(enWithFallback != ptWithFallback);
+  TEST_ASSERT_TRUE(ptWithFallback.indexOf("alternativa") >= 0);
 }
 
 void test_trNvsUsageWarning(void) {
@@ -457,7 +458,7 @@ int main(int argc, char** argv) {
   RUN_TEST(test_trCameraBackOnline);
   RUN_TEST(test_trSubscriptionLost);
   RUN_TEST(test_trMotionWatchdogTripped);
-  RUN_TEST(test_trNtpSyncFailed_differs_by_hasRtc_and_language);
+  RUN_TEST(test_trNtpSyncFailed_differs_by_hasFallbackTime_and_language);
   RUN_TEST(test_trNvsUsageWarning);
   RUN_TEST(test_trWifiWeakWarning);
   RUN_TEST(test_trHeapLowWarning);
