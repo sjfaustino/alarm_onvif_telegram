@@ -15,10 +15,13 @@
 struct PowerMonitorSettings {
   bool enabled = false;
   int pin = POWER_MONITOR_PIN_DEFAULT;
-  // True if the pin reads HIGH when mains power is present. Default
-  // false matches the common wiring for a dry NO contact: COM->GND,
-  // NO->this pin, pin configured INPUT_PULLUP - contact closed (power
-  // present) pulls the pin LOW.
+  // True if the pin reads HIGH when mains power is present. Selects
+  // which internal pull initPowerMonitor() configures, so both common dry-
+  // contact wirings work correctly: false (default) is COM->GND (pin
+  // pulled up, a closed contact reads LOW), true is COM->3.3V/VCC (pin
+  // pulled down, a closed contact reads HIGH) - see initPowerMonitor's
+  // own comment for why the pull direction has to follow this setting,
+  // not stay fixed.
   bool activeHigh = false;
 };
 PowerMonitorSettings loadPowerMonitorSettings();

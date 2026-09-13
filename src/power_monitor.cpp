@@ -90,7 +90,15 @@ void initPowerMonitor() {
   }
 
   g_activePin = settings.pin;
-  pinMode(g_activePin, INPUT_PULLUP);
+  // INPUT_PULLUP only correctly supports the activeHigh=false wiring
+  // (COM->GND - an open contact floats HIGH via the pull-up, a closed one
+  // pulls LOW, unambiguous). For activeHigh=true (COM->3.3V - a closed
+  // contact drives HIGH), INPUT_PULLUP would ALSO read HIGH on an open
+  // contact (nothing pulls it toward GND), making the two states
+  // indistinguishable - the sensor would never detect an outage at all.
+  // INPUT_PULLDOWN is the correct counterpart there: an open contact
+  // floats LOW, a closed one still drives HIGH.
+  pinMode(g_activePin, settings.activeHigh ? INPUT_PULLDOWN : INPUT_PULLUP);
   g_confirmedPowerPresent = readConfirmedFromPin();
   g_pendingSinceMs = 0;
   g_available = true;

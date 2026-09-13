@@ -171,11 +171,13 @@ String renderPowerMonitorPage() {
   html += "<label>Sensor GPIO pin"
           "<input type=\"text\" name=\"pin\" value=\"" + String(settings.pin) + "\"></label>";
   html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"activeHigh\"" +
-          String(settings.activeHigh ? " checked" : "") + "> Pin reads HIGH when power is present "
-          "(leave unchecked for the common COM-&gt;GND, NO-&gt;pin wiring)</label>";
+          String(settings.activeHigh ? " checked" : "") + "> Pin reads HIGH when power is present - "
+          "leave unchecked for COM-&gt;GND, NO-&gt;pin wiring (pin pulled up internally); check it for "
+          "COM-&gt;3.3V/VCC, NO-&gt;pin wiring instead (pin pulled down internally)</label>";
   html += "<p><button type=\"submit\">Save</button></p></form>";
-  html += "<p class=\"hint\">The enable checkbox and pin need a reboot to apply (pinMode() is only "
-          "set up at boot) - the wiring polarity takes effect on the very next check.</p>";
+  html += "<p class=\"hint\">Everything above needs a reboot to apply - pinMode() (which depends on "
+          "both the pin and the wiring polarity, not just the pin) is only set up at boot, same as the "
+          "enable checkbox.</p>";
   html += "</fieldset>";
   return html;
 }
