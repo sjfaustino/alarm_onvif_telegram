@@ -75,6 +75,20 @@ static const unsigned long TELEGRAM_COMMAND_POLL_MS = 5000UL;        // /on, /of
 // below: a camera task blocked here is also blocked from servicing its
 // own ONVIF subscription renewal.
 static const unsigned long TELEGRAM_NET_MUTEX_TIMEOUT_MS = 45000UL;
+
+// telegram_retry_queue.h - a bounded in-RAM retry queue for text-only,
+// unsolicited Telegram alerts (systemMessages broadcasts) that failed to
+// send, typically because WAN was down at the time. CAPACITY bounds RAM
+// use through a long outage with several distinct alerts (oldest dropped
+// to make room, never grown unbounded); FLUSH_INTERVAL_MS is how often
+// main.cpp's loop() retries everything queued, only while WiFi is
+// connected; MAX_AGE_MS is how long a queued entry stays worth
+// delivering at all before it's dropped regardless of outcome - a
+// watchdog "outage detected" alert delivered a day late is no longer
+// useful information.
+static const size_t TELEGRAM_RETRY_QUEUE_CAPACITY = 20;
+static const unsigned long TELEGRAM_RETRY_FLUSH_INTERVAL_MS = 60UL * 1000UL;      // 1 minute
+static const unsigned long TELEGRAM_RETRY_MAX_AGE_MS = 24UL * 60UL * 60UL * 1000UL; // 24 hours
 // How often main.cpp's loop() re-checks NVS usage (checkNvsUsage) - see
 // NVS_USAGE_WARN_PERCENT's own comment for why this exists at all.
 // Independent of HEARTBEAT_INTERVAL_MS's much longer cadence: NVS usage

@@ -11,6 +11,7 @@
 #include "snapshot_history.h"
 #include "sd_store.h"
 #include "quiet_hours.h"
+#include "telegram_retry_queue.h" // enqueueFailedTelegramMessage
 #include <esp_task_wdt.h>
 #include <ArduinoJson.h>
 #include <WiFi.h>
@@ -399,6 +400,10 @@ static bool sendTelegramMessageTo(const String& chatId, const String& text) {
   return sendTelegramApiCall("sendMessage", doc);
 }
 
+bool sendTelegramMessageToChatId(const String& chatId, const String& text) {
+  return sendTelegramMessageTo(chatId, text);
+}
+
 // Sends text with an inline keyboard, one button per row - `buttons` is
 // (label, callback_data) pairs. handleTelegramCallbackQuery (below)
 // receives a tapped button's callback_data back on the next poll. Skips
@@ -452,7 +457,18 @@ bool sendTelegramMessage(std::function<String(TelegramLang)> compose) {
   for (auto& u : users) {
     if (!u.systemMessages) continue;
     anyRecipient = true;
-    if (sendTelegramMessageTo(u.chatId, compose(u.language))) anyOk = true;
+    String text = compose(u.language);
+    if (sendTelegramMessageTo(u.chatId, text)) {
+      anyOk = true;
+    } else {
+      // Most likely WAN was down at the exact moment this broadcast went
+      // out (e.g. a watchdog's own OutageDetected alert - the worst
+      // possible moment to try sending) - queue it for a retry once
+      // connectivity is back instead of losing it silently. See
+      // telegram_retry_queue.h's own comment for what this deliberately
+      // does NOT cover (command replies, photos).
+      enqueueFailedTelegramMessage(u.chatId, text);
+    }
     // Each recipient can independently block on g_telegramNetMutex for up
     // to TELEGRAM_NET_MUTEX_TIMEOUT_MS (45s) before a send is even
     // attempted - with several systemMessages recipients configured, this

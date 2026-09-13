@@ -81,6 +81,14 @@ void triggerTimelapseCapture(const CameraConfig& cfg, CameraState& st);
 // or every send failed.
 bool sendTelegramMessage(std::function<String(TelegramLang)> compose);
 
+// Sends one already-composed text message to a single chat id directly -
+// a thin public wrapper around the same internal send path
+// sendTelegramMessage's per-recipient loop uses, for
+// telegram_retry_queue.cpp's flush to call without needing the full
+// TelegramUser list/compose-callback machinery (a queued entry already
+// has its final per-recipient text).
+bool sendTelegramMessageToChatId(const String& chatId, const String& text);
+
 // True once TELEGRAM_ROOT_CA holds a real certificate - false means every
 // send will fail TLS verification.
 bool telegramCAConfigured();

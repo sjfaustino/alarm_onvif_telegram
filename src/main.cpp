@@ -28,6 +28,7 @@
 #include "net_watchdog.h"
 #include "bridge_watchdog.h"
 #include "power_monitor.h"
+#include "telegram_retry_queue.h"
 #include "heap_health.h"
 #include "telegram_i18n.h"
 
@@ -52,6 +53,7 @@ static bool g_wifiRssiWeakAlerted = false;
 static unsigned long lastNetWatchdogCheckMs = 0;
 static unsigned long lastBridgeWatchdogCheckMs = 0;
 static unsigned long lastPowerMonitorCheckMs = 0;
+static unsigned long lastTelegramRetryFlushMs = 0;
 
 // checkHeapHealth()'s own state - see evaluateHeapHealth's own comment
 // (lib/heap_health) for why this never re-arms (a lifetime-low watermark
@@ -846,6 +848,17 @@ void loop() {
   if (WiFi.status() == WL_CONNECTED && millis() - lastWifiRssiCheckMs >= WIFI_RSSI_CHECK_INTERVAL_MS) {
     lastWifiRssiCheckMs = millis();
     checkWifiSignal();
+    esp_task_wdt_reset();
+  }
+
+  // Retries any systemMessages broadcast alert that failed to send earlier
+  // (most likely queued during a WAN outage this same loop's own Internet
+  // Watchdog check is tracking) - gated the same way as every other
+  // WiFi-dependent periodic check here, since there's no point attempting
+  // otherwise.
+  if (WiFi.status() == WL_CONNECTED && millis() - lastTelegramRetryFlushMs >= TELEGRAM_RETRY_FLUSH_INTERVAL_MS) {
+    lastTelegramRetryFlushMs = millis();
+    flushTelegramRetryQueue();
     esp_task_wdt_reset();
   }
 
