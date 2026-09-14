@@ -719,6 +719,23 @@ static void noteMultiCameraAlert(const String& cameraName) {
   xSemaphoreGive(g_multiCameraDigestMutex);
 }
 
+// English-only, lowercase label for the Activity log (event_log_store.h's
+// text is always English regardless of TelegramLang - see
+// telegram_i18n.h's own top comment for why) - "motion"/"person"/"vehicle"
+// mirrors trMotionCaption's own Generic/Person/Vehicle distinction, so
+// reviewing the Activity page can tell which kind of detection an alert
+// actually was, not just that "a motion alert" happened. Previously every
+// log line said "motion" regardless of kind, even after the Telegram
+// caption itself started calling out PERSON/VEHICLE specifically.
+static const char* motionKindLogLabel(MotionDetectionKind kind) {
+  switch (kind) {
+    case MotionDetectionKind::Person:  return "person";
+    case MotionDetectionKind::Vehicle: return "vehicle";
+    case MotionDetectionKind::Generic: return "motion";
+  }
+  return "motion"; // unreachable if every enumerator above is handled
+}
+
 void triggerMotionAlert(const CameraConfig& cfg, CameraState& st, bool isPetEvent, MotionDetectionKind kind) {
   // alertsEnabled is written by loop()'s task (pollTelegramCommands'
   // /on//off), this function runs on the camera's own task - cross-task
@@ -779,7 +796,8 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st, bool isPetEven
     st.digestArmed = false;
     st.suppressedMotionCount = 0;
     { CameraStateLock lock(st); st.lastAlert = nowMs; st.hasAlerted = true; }
-    logEvent(cfg.name + ": " + (isPetEvent ? "pet" : "motion") + " detected (quiet hours - no Telegram alert)");
+    logEvent(cfg.name + ": " + (isPetEvent ? "pet" : motionKindLogLabel(kind)) +
+             " detected (quiet hours - no Telegram alert)");
     size_t jpgLen = 0;
     uint8_t* jpg = fetchOneSnapshot(cfg, st, jpgLen);
     if (jpg) pushCameraSnapshot(cfg, st, jpg, jpgLen); // takes ownership - do not free(jpg) here
@@ -840,8 +858,8 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st, bool isPetEven
   st.suppressedMotionCount = 0;
 
   unsigned int shots = safeSnapshotBurstCount(cfg);
-  logEvent(cfg.name + ": " + (isPetEvent ? "pet" : "motion") + " alert, " + String(shots) + " shot(s) to " +
-           String(recipients.size()) + " recipient(s)");
+  logEvent(cfg.name + ": " + (isPetEvent ? "pet" : motionKindLogLabel(kind)) + " alert, " + String(shots) +
+           " shot(s) to " + String(recipients.size()) + " recipient(s)");
   noteMultiCameraAlert(cfg.name);
 
   // Each shot is its own fetch (re-fetching is what makes consecutive
