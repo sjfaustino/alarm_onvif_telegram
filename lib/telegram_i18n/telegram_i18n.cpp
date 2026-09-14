@@ -56,11 +56,20 @@ String trSignalLossMessage(TelegramLang lang, const String& cameraName, const St
   return "\xE2\x9A\xA0\xEF\xB8\x8F " + cameraName + " - VIDEO SIGNAL LOSS - " + timestamp;
 }
 
-String trTestAlertCaption(TelegramLang lang, const String& cameraName, const String& timestamp) {
-  if (lang == TelegramLang::Portuguese) {
-    return "\xF0\x9F\xA7\xAA " + cameraName + " - ALERTA DE TESTE - " + timestamp;
+String trTestAlertCaption(TelegramLang lang, const String& cameraName, const String& timestamp,
+                           MotionDetectionKind kind) {
+  bool pt = lang == TelegramLang::Portuguese;
+  if (kind == MotionDetectionKind::Person) {
+    return pt ? "\xF0\x9F\xA7\xAA\xF0\x9F\x9A\xB6 " + cameraName + " - ALERTA DE TESTE (PESSOA detetada) - " + timestamp
+              : "\xF0\x9F\xA7\xAA\xF0\x9F\x9A\xB6 " + cameraName + " - TEST ALERT (PERSON detected) - " + timestamp;
   }
-  return "\xF0\x9F\xA7\xAA " + cameraName + " - TEST ALERT - " + timestamp;
+  if (kind == MotionDetectionKind::Vehicle) {
+    return pt ? "\xF0\x9F\xA7\xAA\xF0\x9F\x9A\x97 " + cameraName +
+                    " - ALERTA DE TESTE (VE\xC3\x8D" "CULO detetado) - " + timestamp
+              : "\xF0\x9F\xA7\xAA\xF0\x9F\x9A\x97 " + cameraName + " - TEST ALERT (VEHICLE detected) - " + timestamp;
+  }
+  return pt ? "\xF0\x9F\xA7\xAA " + cameraName + " - ALERTA DE TESTE - " + timestamp
+            : "\xF0\x9F\xA7\xAA " + cameraName + " - TEST ALERT - " + timestamp;
 }
 
 String trMotionDigest(TelegramLang lang, const String& cameraName, uint32_t count, unsigned long elapsedSec) {

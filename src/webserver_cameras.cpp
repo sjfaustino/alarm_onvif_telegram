@@ -573,9 +573,19 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
       // fresh snapshot and sends it to Telegram, not a passive navigation.
       // Fires and returns immediately (startTestAlertAsync, background
       // task) - see that function's own comment for why this can't run
-      // synchronously on this request-handling task.
+      // synchronously on this request-handling task. The kind selector
+      // lets the test embed the same Person/Vehicle emoji/keyword a real
+      // detection's caption would, so a phone-side notification
+      // automation (MacroDroid/Tasker) can be verified without waiting
+      // for an actual person or vehicle - see trTestAlertCaption's own
+      // comment (telegram_i18n.h).
       html += " <form method=\"POST\" action=\"/cameras/test-alert\" style=\"display:inline;\">"
               "<input type=\"hidden\" name=\"name\" value=\"" + htmlEscape(c.name) + "\">"
+              "<select name=\"kind\" title=\"Which detection kind to simulate\">"
+              "<option value=\"generic\">Generic</option>"
+              "<option value=\"person\">Person</option>"
+              "<option value=\"vehicle\">Vehicle</option>"
+              "</select>"
               "<button type=\"submit\" class=\"icon-btn secondary\" title=\"Send test alert\" "
               "aria-label=\"Send test alert\">\xF0\x9F\xA7\xAA</button></form>";
     }
@@ -1099,22 +1109,23 @@ static BackgroundJob<TestAlertResult> g_testAlertJob;
 struct TestAlertTaskParams {
   CameraConfig cfg; // heap-copied snapshot - only cfg.name is actually read by sendTestAlert
   CameraState* st;  // NOT owned - must be the live CameraState (liveStates[idx]), see startTestAlertAsync's comment
+  MotionDetectionKind kind;
 };
 
 static void testAlertTask(void* param) {
   TestAlertTaskParams* p = static_cast<TestAlertTaskParams*>(param);
   TestAlertResult r;
   r.cameraName = p->cfg.name;
-  r.ok = sendTestAlert(p->cfg, *p->st, r.detail);
+  r.ok = sendTestAlert(p->cfg, *p->st, r.detail, p->kind);
   delete p;
   g_testAlertJob.finish(r);
   vTaskDelete(nullptr);
 }
 
-BackgroundJobStartOutcome startTestAlertAsync(const CameraConfig& cfg, CameraState& st) {
+BackgroundJobStartOutcome startTestAlertAsync(const CameraConfig& cfg, CameraState& st, MotionDetectionKind kind) {
   if (!g_testAlertJob.tryStart()) return BackgroundJobStartOutcome::AlreadyRunning; // one at a time - a second click while one's in flight is a no-op
 
-  TestAlertTaskParams* params = new TestAlertTaskParams{cfg, &st};
+  TestAlertTaskParams* params = new TestAlertTaskParams{cfg, &st, kind};
   // Same stack size as the other camera background tasks above - comparable
   // work (one HTTP fetch, one or more TLS sends to Telegram).
   BaseType_t created = xTaskCreate(testAlertTask, "testAlert", 10240, params, tskIDLE_PRIORITY + 1, nullptr);

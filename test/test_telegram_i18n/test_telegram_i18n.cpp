@@ -73,6 +73,27 @@ void test_trTestAlertCaption_contains_name_and_says_test(void) {
   TEST_ASSERT_TRUE(pt.indexOf("TESTE") >= 0);
 }
 
+// kind must embed the SAME keyword a real trMotionCaption(Person/Vehicle)
+// alert would - that's the entire point of letting a test alert pick a
+// kind at all (testing a phone-side automation rule that matches on it) -
+// while still saying "TEST" unmistakably.
+void test_trTestAlertCaption_person_and_vehicle_kinds(void) {
+  String enPerson = trTestAlertCaption(TelegramLang::English, "D01", "TS", MotionDetectionKind::Person);
+  String enVehicle = trTestAlertCaption(TelegramLang::English, "D01", "TS", MotionDetectionKind::Vehicle);
+  TEST_ASSERT_TRUE(enPerson.indexOf("TEST") >= 0);
+  TEST_ASSERT_TRUE(enPerson.indexOf("PERSON") >= 0);
+  TEST_ASSERT_TRUE(enVehicle.indexOf("TEST") >= 0);
+  TEST_ASSERT_TRUE(enVehicle.indexOf("VEHICLE") >= 0);
+  TEST_ASSERT_TRUE(enPerson != enVehicle);
+
+  String ptPerson = trTestAlertCaption(TelegramLang::Portuguese, "D01", "TS", MotionDetectionKind::Person);
+  String ptVehicle = trTestAlertCaption(TelegramLang::Portuguese, "D01", "TS", MotionDetectionKind::Vehicle);
+  TEST_ASSERT_TRUE(ptPerson.indexOf("TESTE") >= 0);
+  TEST_ASSERT_TRUE(ptPerson.indexOf("PESSOA") >= 0);
+  TEST_ASSERT_TRUE(ptVehicle.indexOf("TESTE") >= 0);
+  TEST_ASSERT_TRUE(ptVehicle.indexOf("VE\xC3\x8D" "CULO") >= 0);
+}
+
 void test_trMultiCameraDigest_contains_count_and_list(void) {
   String en = trMultiCameraDigest(TelegramLang::English, 3, "D01, D02, D03");
   String pt = trMultiCameraDigest(TelegramLang::Portuguese, 3, "D01, D02, D03");
@@ -507,6 +528,7 @@ int main(int argc, char** argv) {
   RUN_TEST(test_trMotionCaption_person_and_vehicle_kinds);
   RUN_TEST(test_trMotionCaption_pet_event_ignores_kind);
   RUN_TEST(test_trTestAlertCaption_contains_name_and_says_test);
+  RUN_TEST(test_trTestAlertCaption_person_and_vehicle_kinds);
   RUN_TEST(test_trMultiCameraDigest_contains_count_and_list);
   RUN_TEST(test_trCameraOffline_contains_name_and_minutes);
   RUN_TEST(test_trCameraBackOnline);

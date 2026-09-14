@@ -906,7 +906,7 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st, bool isPetEven
 // other alert path, so it shows up in the Preview column too.
 // `outDetail` is set to a human-readable reason on any failure (left
 // untouched on success).
-bool sendTestAlert(const CameraConfig& cfg, CameraState& st, String& outDetail) {
+bool sendTestAlert(const CameraConfig& cfg, CameraState& st, String& outDetail, MotionDetectionKind kind) {
   // snapshotUri is written by this camera's own task (camera.cpp) but this
   // runs from the Send-Test-Alert background task - cross-task read,
   // needs CameraStateLock. See CameraState::stateMutex.
@@ -936,7 +936,7 @@ bool sendTestAlert(const CameraConfig& cfg, CameraState& st, String& outDetail) 
   String timestamp = nowTimestampString();
   bool anyOk = false;
   for (auto& r : recipients) {
-    if (sendTelegramPhotoWithRetry(jpg, jpgLen, trTestAlertCaption(r.language, cfg.name, timestamp), r.chatId)) {
+    if (sendTelegramPhotoWithRetry(jpg, jpgLen, trTestAlertCaption(r.language, cfg.name, timestamp, kind), r.chatId)) {
       anyOk = true;
     }
   }

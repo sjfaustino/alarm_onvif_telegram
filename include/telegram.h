@@ -110,7 +110,16 @@ void triggerTimelapseCapture(const CameraConfig& cfg, CameraState& st);
 // seconds (a camera HTTP fetch plus one or more Telegram sends) - callers
 // MUST run it off the calling task (see webserver_cameras.cpp's
 // startTestAlertAsync), never directly from a PsychicHttp route handler.
-bool sendTestAlert(const CameraConfig& cfg, CameraState& st, String& outDetail);
+//
+// kind (default Generic) picks which trTestAlertCaption wording to send -
+// letting the dashboard button test the Person/Vehicle-specific
+// emoji/keyword a phone-side notification automation (MacroDroid/Tasker)
+// matches on, without waiting for a real detection of that kind. Purely
+// cosmetic (caption text only) - never touches CameraConfig::
+// personAlertsEnabled/vehicleAlertsEnabled, since this is an explicit
+// manual test, not a real detection subject to being muted.
+bool sendTestAlert(const CameraConfig& cfg, CameraState& st, String& outDetail,
+                    MotionDetectionKind kind = MotionDetectionKind::Generic);
 
 // Sends a message to every user with systemMessages enabled, composed
 // per-recipient by calling `compose(u.language)` - lets each recipient get

@@ -744,6 +744,14 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
     String name = request->getParam("name", "");
     name.trim();
 
+    // Anything unrecognized (including a missing/tampered param) falls
+    // back to Generic - the same "least surprising default" this
+    // project's other free-text-to-enum parses use, not a validation error.
+    String kindParam = request->getParam("kind", "generic");
+    MotionDetectionKind kind = MotionDetectionKind::Generic;
+    if (kindParam == "person") kind = MotionDetectionKind::Person;
+    else if (kindParam == "vehicle") kind = MotionDetectionKind::Vehicle;
+
     CameraConfig cfg;
     bool found = false;
     for (auto& c : loadCameras()) {
@@ -773,7 +781,7 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
       // it must be the real, live CameraState, not a copy, since
       // sendTestAlert needs its actually-resolved snapshotUri/credentials.
       banner = backgroundJobBanner(
-          startTestAlertAsync(cfg, (*g_liveStates)[idx]),
+          startTestAlertAsync(cfg, (*g_liveStates)[idx], kind),
           "Sending test alert in the background - reload this page in a moment to see the result.",
           "A test alert is already being sent in the background - reload in a moment to see its result.",
           "Could not start sending the test alert - the device is low on memory right now. Try again in "

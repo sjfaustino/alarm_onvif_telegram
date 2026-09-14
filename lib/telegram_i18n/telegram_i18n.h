@@ -61,7 +61,15 @@ String trMultiCameraDigest(TelegramLang lang, uint32_t count, const String& came
 // Manual "Send test alert" button (Cameras dashboard page) - a real photo
 // send through the same recipient list a real motion alert would use,
 // clearly labeled so it's never mistaken for one.
-String trTestAlertCaption(TelegramLang lang, const String& cameraName, const String& timestamp);
+// kind (default Generic) lets the test alert embed the SAME
+// emoji/keyword a real Person/Vehicle detection caption would
+// (trMotionCaption) - the whole point being to verify a phone-side
+// notification automation (MacroDroid/Tasker) actually fires for that
+// specific kind, without waiting for a real detection. Still clearly
+// labeled "TEST ALERT"/"ALERTA DE TESTE" regardless of kind, so it's
+// never mistaken for a real one when reviewing chat history later.
+String trTestAlertCaption(TelegramLang lang, const String& cameraName, const String& timestamp,
+                           MotionDetectionKind kind = MotionDetectionKind::Generic);
 
 // ---- System-message broadcasts (sendTelegramMessage's systemMessages recipients) ----
 

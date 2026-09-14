@@ -6,6 +6,7 @@
 #include "camera_store.h"
 #include "onvif_discovery.h" // DiscoveredCamera
 #include "background_job.h" // BackgroundJobStartOutcome
+#include "telegram_i18n.h" // MotionDetectionKind - startTestAlertAsync
 
 // Cameras panel: live status table, Add/Edit form, Test Connection. Split
 // out of webserver.cpp - see webserver_network.h's comment for why.
@@ -184,20 +185,23 @@ String renderCameraDiscoveryStatus();
 // or more TLS sends to Telegram) work.
 // ============================================================
 
-// Starts sendTestAlert(cfg, st) on a background FreeRTOS task instead of
-// the calling task. A no-op (doesn't start a second overlapping run, same
-// "one at a time" rule test-all/discovery/test-connection already follow)
-// if one is already in progress - the return value tells the
-// /cameras/test-alert route handler which of the three outcomes happened,
-// for an accurate banner instead of always assuming success. cfg is
-// heap-copied (freed by the task) - safe to pass a local copy. st is
-// taken by reference, NOT copied: it must be the actual live CameraState
-// for this camera (liveStates[idx]), since sendTestAlert reads its real,
-// already-resolved snapshotUri and credentials - safe to hold a pointer
-// to across the task's lifetime since liveStates is sized once at boot
-// and never freed (same assumption every other cross-task CameraState
-// pointer in this project already relies on).
-BackgroundJobStartOutcome startTestAlertAsync(const CameraConfig& cfg, CameraState& st);
+// Starts sendTestAlert(cfg, st, ..., kind) on a background FreeRTOS task
+// instead of the calling task. A no-op (doesn't start a second
+// overlapping run, same "one at a time" rule test-all/discovery/test-
+// connection already follow) if one is already in progress - the return
+// value tells the /cameras/test-alert route handler which of the three
+// outcomes happened, for an accurate banner instead of always assuming
+// success. cfg is heap-copied (freed by the task) - safe to pass a local
+// copy. st is taken by reference, NOT copied: it must be the actual live
+// CameraState for this camera (liveStates[idx]), since sendTestAlert
+// reads its real, already-resolved snapshotUri and credentials - safe to
+// hold a pointer to across the task's lifetime since liveStates is sized
+// once at boot and never freed (same assumption every other cross-task
+// CameraState pointer in this project already relies on). kind (default
+// Generic) picks which Person/Vehicle/plain wording the dashboard's kind
+// selector chose - see sendTestAlert's own comment (telegram.h).
+BackgroundJobStartOutcome startTestAlertAsync(const CameraConfig& cfg, CameraState& st,
+                                               MotionDetectionKind kind = MotionDetectionKind::Generic);
 
 // Renders the current Send-Test-Alert status: "sending in the background"
 // while one is in progress, the last completed run's result once one
