@@ -405,32 +405,46 @@ static void parseEvents(const CameraConfig& cfg, CameraState& st, const String& 
   // pattern already fixed once for motion).
   if (motionEventFired(xml, ev)) {
     st.lastMotionMs = millis(); // real motion signal, independent of mute/cooldown/quiet hours - see checkMotionWatchdog
-    // Person takes priority over Vehicle when a camera reports both in
-    // the same event batch - not a meaningful ordering otherwise, just a
-    // tie-break (see MotionDetectionKind's own comment, telegram_i18n.h).
-    // Scoped the same topicReportedTrue way as every other check in this
-    // function - ev.peopleDetect/ev.vehicleDetect alone only says the
-    // topic string appeared somewhere in this batch, not that THIS
-    // specific topic reported true.
-    MotionDetectionKind kind = MotionDetectionKind::Generic;
-    if (ev.peopleDetect && topicReportedTrue(xml, "PeopleDetect")) {
-      kind = MotionDetectionKind::Person;
-    } else if (ev.vehicleDetect && topicReportedTrue(xml, "VehicleDetect")) {
-      kind = MotionDetectionKind::Vehicle;
-    }
-    // Person/vehicle alerts can be opted OUT per-camera (e.g. one facing a
-    // busy street getting spammed with vehicle alerts) - see
-    // CameraConfig::personAlertsEnabled's own comment (camera_store.h)
-    // for why these default to true, the opposite of petAlertsEnabled's
-    // opt-in default. Plain motion (kind == Generic) has no finer
-    // classification to opt out of, so it always alerts here regardless -
-    // same as before this feature existed.
-    if (kind == MotionDetectionKind::Person && !cfg.personAlertsEnabled) {
-      logEvent(cfg.name + ": person detected (alerts off)");
-    } else if (kind == MotionDetectionKind::Vehicle && !cfg.vehicleAlertsEnabled) {
-      logEvent(cfg.name + ": vehicle detected (alerts off)");
-    } else {
+    // Checked independently, not collapsed into one "kind" up front - a
+    // single PullMessages batch can legitimately report MORE than one of
+    // these true at once (e.g. a person getting out of a car fires both
+    // PeopleDetect and VehicleDetect together), and each has its own
+    // separate opt-out (CameraConfig::personAlertsEnabled/
+    // vehicleAlertsEnabled). Collapsing to one kind before checking
+    // enablement - an earlier version of this code did exactly that -
+    // meant muting person alerts could silently swallow an ALSO-present
+    // vehicle detection the user still wanted, just because person won an
+    // arbitrary tie-break first. Scoped the same topicReportedTrue way as
+    // every other check in this function - ev.peopleDetect/ev.vehicleDetect/
+    // ev.motionAlarm/ev.cellMotion alone only say the topic string
+    // appeared somewhere in this batch, not that THIS specific topic
+    // reported true.
+    bool personDetected = ev.peopleDetect && topicReportedTrue(xml, "PeopleDetect");
+    bool vehicleDetected = ev.vehicleDetect && topicReportedTrue(xml, "VehicleDetect");
+    bool plainMotionDetected = (ev.motionAlarm && topicReportedTrue(xml, "MotionAlarm")) ||
+                               (ev.cellMotion && topicReportedTrue(xml, "CellMotionDetector"));
+
+    bool personWantsAlert = personDetected && cfg.personAlertsEnabled;
+    bool vehicleWantsAlert = vehicleDetected && cfg.vehicleAlertsEnabled;
+
+    if (personWantsAlert || vehicleWantsAlert || plainMotionDetected) {
+      // Person takes priority over Vehicle for the CAPTION only when both
+      // separately qualify for an alert - not a meaningful ordering
+      // otherwise, just a tie-break (see MotionDetectionKind's own
+      // comment, telegram_i18n.h). Plain motion (no classification
+      // available, or the only thing that fired/qualified) gets Generic,
+      // same wording as before either of these features existed.
+      MotionDetectionKind kind = personWantsAlert ? MotionDetectionKind::Person
+                                 : vehicleWantsAlert ? MotionDetectionKind::Vehicle
+                                                      : MotionDetectionKind::Generic;
       triggerMotionAlert(cfg, st, false, kind);
+    } else {
+      // Every topic that fired this batch was a muted classified type -
+      // log each one that applies (both, if both did) rather than picking
+      // just one, since either log line alone would hide that the other
+      // also fired.
+      if (personDetected) logEvent(cfg.name + ": person detected (alerts off)");
+      if (vehicleDetected) logEvent(cfg.name + ": vehicle detected (alerts off)");
     }
   } else if (ev.dogCatDetect && topicReportedTrue(xml, "DogCatDetect")) {
     // Pet-only event (no person/vehicle/motion topic also fired in this
