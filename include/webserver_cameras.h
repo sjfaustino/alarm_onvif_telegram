@@ -65,6 +65,17 @@ bool stopLiveCameraIfRunning(const String& name, std::vector<CameraConfig>* live
 String applyQuietHoursToAllCameras(PsychicRequest* request, std::vector<CameraConfig>* liveCameras,
                                     std::vector<CameraState>* liveStates);
 
+// Same shape as applyQuietHoursToAllCameras above (reads the two
+// checkbox fields the per-camera Add/Edit form uses, overwrites EVERY
+// camera's personAlertsEnabled/vehicleAlertsEnabled at once via
+// updateAllCameras, live-reloads every already-running enabled camera,
+// returns a result string for the caller to show as a banner) - added
+// once the per-camera toggle existed and turned out tedious to set
+// property-wide one camera at a time. Call this from the
+// /cameras/person-vehicle-alerts-all route handler.
+String applyPersonVehicleAlertsToAllCameras(PsychicRequest* request, std::vector<CameraConfig>* liveCameras,
+                                             std::vector<CameraState>* liveStates);
+
 // Runs a live GetCapabilities -> GetServiceCapabilities/GetEventProperties
 // -> GetProfiles/GetSnapshotUri -> CreatePullPointSubscription sequence
 // against cfg without touching NVS - see the .cpp for the full rationale.
