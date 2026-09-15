@@ -859,9 +859,22 @@ bool saveCameraSubmission(CameraConfig cam, const String& originalName, String& 
       banner = "A camera named \"" + htmlEscape(cam.name) + "\" already exists - camera not added.";
       return false;
     }
-    // A brand new camera has no slot in liveCameras/liveStates at all yet
-    // (those are sized once at boot and never grow) - still needs a
-    // reboot before it can be monitored, same as always. Nothing to note.
+    // A brand new camera has no slot in liveCameras/liveStates yet -
+    // stagePendingNewCamera (camera_tasks.h) gives it one live, applied by
+    // loop()'s own task on its very next tick (typically well under a
+    // second), UNLESS this board's reserved camera capacity (MAX_CAMERAS,
+    // config.h) is already used up, in which case it declines to stage
+    // anything and this falls back to the original "needs a reboot"
+    // outcome - said explicitly in the banner now, rather than silently
+    // doing nothing.
+    if (stagePendingNewCamera(cam)) {
+      applyNote = cam.enabled
+          ? ("\"" + cam.name + "\" added - starting monitoring now (no reboot needed).")
+          : ("\"" + cam.name + "\" added (disabled) - no reboot needed; enable it whenever you're ready.");
+    } else {
+      applyNote = "\"" + cam.name + "\" added, but this board's reserved camera capacity is already used "
+                  "up - reboot to bring it online.";
+    }
     return true;
   }
 

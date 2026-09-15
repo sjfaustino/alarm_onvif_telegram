@@ -53,6 +53,24 @@ static const uint8_t        PULL_MESSAGES_AMBIGUOUS_LIMIT = 5;
 // may only tolerate 1-2 connections at all (see camera_tasks.h's own
 // staggered-boot comment for a real incident from exactly that class of
 // overload).
+// Reserved capacity for main.cpp's g_cameras/g_cameraStates - see
+// camera_tasks.h's stagePendingNewCamera for why this is what makes it
+// safe to grow those vectors live (without a reboot) once a brand-new
+// camera is added via the dashboard: main.cpp reserves this many slots
+// once, at boot, before any task exists to hold a pointer into either
+// vector (CameraTaskContext, CameraState::user/pass) - as long as the
+// total camera count never exceeds it, every later push_back is
+// guaranteed not to reallocate, so no already-issued pointer is ever
+// invalidated. Chosen generously for a residential/small-property
+// system - reserving this many empty CameraConfig/CameraState slots
+// upfront costs only a few hundred bytes each, trivial against this
+// board's ~320KB RAM. A board that already has more cameras configured
+// than this (from before this feature existed) is unaffected: the boot-
+// time resize() already sizes exactly to however many really exist,
+// this constant only controls how much SPARE headroom gets reserved on
+// top of that.
+static const size_t MAX_CAMERAS = 24;
+
 static const unsigned long CAMERA_POLL_INTERVAL_MIN_MS = 250UL;
 static const unsigned long CAMERA_POLL_INTERVAL_MAX_MS = 30000UL; // 30s
 // See CameraState::lastSnapshotUriRetryMs's own comment - how often a

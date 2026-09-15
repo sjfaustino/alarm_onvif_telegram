@@ -665,9 +665,10 @@ static void checkHeapHealth() {
 // external-linkage contract (index must already be a valid, existing slot;
 // this never grows g_cameras/g_cameraStates, only starts a task for a slot
 // that doesn't have one yet). Called from startMonitoring()'s boot-time
-// loop below for every enabled camera, and from webserver_cameras.cpp's
-// save handler for a single camera live, when an edit newly enables one
-// that had no task before.
+// loop below for every enabled camera, from webserver_cameras.cpp's save
+// handler for a single camera live when an edit newly enables one that had
+// no task before, and from applyPendingNewCameraIfAny() below right after
+// it push_backs a brand-new enabled camera's slot into existence.
 void spawnCameraTask(size_t index) {
   cameraStateInit(g_cameraStates[index]); // must run before any other task can see this camera - see camera.h
   {
@@ -706,6 +707,76 @@ void spawnCameraTask(size_t index) {
     logEvent(g_cameras[index].name + ": task creation FAILED (out of memory?) - NOT being monitored");
     String cameraName = g_cameras[index].name;
     sendTelegramMessage([cameraName](TelegramLang lang) { return trCameraTaskSpawnFailure(lang, cameraName); });
+  }
+}
+
+// Guards g_pendingNewCamera only - not g_cameras/g_cameraStates themselves
+// (nothing needs to guard those; see applyPendingNewCameraIfAny's own
+// comment for why only loop()'s task ever grows them). Same
+// single-slot-pointer pattern as CameraState::pendingConfig, just for "a
+// whole new camera" instead of "a live edit to an existing one" - staged
+// by stagePendingNewCamera (webserver's task), claimed and cleared by
+// applyPendingNewCameraIfAny (loop()'s task).
+static SemaphoreHandle_t g_pendingNewCameraMutex = xSemaphoreCreateMutex();
+static CameraConfig* g_pendingNewCamera = nullptr;
+
+bool stagePendingNewCamera(const CameraConfig& cam) {
+  // g_cameras.size() is read here, unlocked, from the webserver's own
+  // task - benign the same way this project already accepts an unlocked
+  // read of CameraConfig::enabled/.name elsewhere (webserver_cameras.cpp's
+  // save handler comment): worst case this sees a stale count by one
+  // camera and either stages a request applyPendingNewCameraIfAny will
+  // itself re-check and reject, or (extremely unlikely - PsychicHttp only
+  // ever has one save in flight at a time) declines to stage when there
+  // was actually just enough room. Never a correctness problem either way.
+  if (g_cameras.size() >= MAX_CAMERAS) return false;
+
+  CameraConfig* copy = new CameraConfig(cam);
+  CameraConfig* old = nullptr;
+  xSemaphoreTake(g_pendingNewCameraMutex, portMAX_DELAY);
+  old = g_pendingNewCamera; // shouldn't normally happen - see this function's header comment - but replace, don't leak
+  g_pendingNewCamera = copy;
+  xSemaphoreGive(g_pendingNewCameraMutex);
+  delete old;
+  return true;
+}
+
+void applyPendingNewCameraIfAny() {
+  CameraConfig* pending = nullptr;
+  xSemaphoreTake(g_pendingNewCameraMutex, portMAX_DELAY);
+  pending = g_pendingNewCamera;
+  g_pendingNewCamera = nullptr;
+  xSemaphoreGive(g_pendingNewCameraMutex);
+  if (!pending) return;
+
+  if (g_cameras.size() >= MAX_CAMERAS) {
+    // Shouldn't happen - stagePendingNewCamera already checked this - but
+    // re-checked here too, on the one task that actually owns the decision
+    // to grow these vectors, rather than trusting a check made by a
+    // different task at a possibly-stale moment.
+    Serial.printf("[%s] Dropped a staged camera add - reserved capacity (%u) already used up.\n",
+                  pending->name.c_str(), (unsigned)MAX_CAMERAS);
+    delete pending;
+    return;
+  }
+
+  // Only ever grows here, on loop()'s own task - see camera_tasks.h's own
+  // comment (this function's declaration) for why every other reader of
+  // g_cameras/g_cameraStates' size()/data() being on this same task is
+  // what makes that safe without a dedicated lock around the vectors
+  // themselves.
+  g_cameras.push_back(*pending);
+  g_cameraStates.push_back(CameraState());
+  size_t newIdx = g_cameras.size() - 1;
+  bool enabled = pending->enabled;
+  String name = pending->name;
+  delete pending;
+
+  if (enabled) {
+    spawnCameraTask(newIdx); // cameraStateInit + alertsEnabled restore happen inside, same as the boot loop below
+    logEvent(name + ": added via dashboard, monitoring started live");
+  } else {
+    Serial.printf("[%s] Disabled - no task created.\n", name.c_str());
   }
 }
 
@@ -873,10 +944,21 @@ void setup() {
   // safe to leave in permanently rather than reverting after this recovery.
   restoreMissingCamerasFromSeed();
 
-  // Loaded once and never resized/reallocated afterward - CameraState::user/pass
-  // and every CameraTaskContext hold raw pointers into these vectors' elements.
+  // Sized to the real camera count here, then reserved up to MAX_CAMERAS
+  // (config.h) below - CameraState::user/pass and every CameraTaskContext
+  // hold raw pointers into these vectors' elements, so nothing may ever
+  // reallocate them once a task exists. reserve() right after this, still
+  // before any task is spawned, is what makes it safe for
+  // applyPendingNewCameraIfAny (camera_tasks.h) to push_back a brand-new
+  // camera live later without invalidating those pointers - see its own
+  // comment for the full reasoning.
   g_cameras = loadCameras();
   g_cameraStates.resize(g_cameras.size());
+  // A no-op if loadCameras() already returned more than MAX_CAMERAS
+  // entries (capacity is already at least that many) - reserve() never
+  // shrinks a vector, only grows its unused headroom.
+  g_cameras.reserve(MAX_CAMERAS);
+  g_cameraStates.reserve(MAX_CAMERAS);
   Serial.printf("Cameras configured: %u\n", (unsigned)g_cameras.size());
 
   printCameraList();
@@ -929,6 +1011,16 @@ void loop() {
   // is uncorrelated with theirs) landing on the same tick as one of those
   // could stack two uncovered ~45s gaps toward WATCHDOG_TIMEOUT_MS (90s).
   esp_task_wdt_reset();
+
+  // Cheap when nothing's staged (a mutex take/give and a null check) - see
+  // camera_tasks.h's own comment for why this specific operation (growing
+  // g_cameras/g_cameraStates for a brand-new camera) must happen only on
+  // this task, unlike every other camera-lifecycle action the dashboard
+  // can trigger live. Doesn't need WiFi - spawning a task here is no
+  // different from the boot-time loop below doing it with WiFi already
+  // confirmed connected; a camera task added while WiFi is briefly down
+  // just retries with its own normal backoff, same as any other.
+  applyPendingNewCameraIfAny();
 
   // loop() alone owns WiFi connect/reconnect - camera tasks only ever read
   // WiFi.status(), never call WiFi.begin(). g_wifiRetryDueMs is the backoff

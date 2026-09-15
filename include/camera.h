@@ -205,9 +205,13 @@ struct CameraState {
   unsigned long lastSuppressedMotionMs = 0;
 
   // Copied once from cfg.user/cfg.pass by resolveCameraCredentials() at
-  // startup. Safe as const char*: cfg lives in main.cpp's camera vector,
-  // never resized after boot, so these pointers stay valid for the process
-  // lifetime.
+  // startup. Safe as const char*: cfg lives in main.cpp's g_cameras vector,
+  // which never REALLOCATES for the process lifetime (it may still GROW,
+  // live, for a brand-new camera added via the dashboard - see
+  // camera_tasks.h's stagePendingNewCamera/applyPendingNewCameraIfAny -
+  // but only up to MAX_CAMERAS' reserved capacity, config.h, which is
+  // exactly what rules out a reallocation ever happening), so these
+  // pointers stay valid regardless.
   const char* user = nullptr;
   const char* pass = nullptr;
 
