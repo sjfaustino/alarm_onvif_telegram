@@ -839,8 +839,16 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
             .c_str());
   });
 
-  server.on("/cameras/person-vehicle-alerts-all", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
-    String result = applyPersonVehicleAlertsToAllCameras(request, g_liveCameras, g_liveStates);
+  server.on("/cameras/person-alerts-all", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
+    String result = applyPersonAlertsToAllCameras(request, g_liveCameras, g_liveStates);
+    return response->send(
+        200, "text/html",
+        renderShell(Tab::Cameras, result, renderCamerasPanel(nullptr, false, g_liveCameras, g_liveStates))
+            .c_str());
+  });
+
+  server.on("/cameras/vehicle-alerts-all", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
+    String result = applyVehicleAlertsToAllCameras(request, g_liveCameras, g_liveStates);
     return response->send(
         200, "text/html",
         renderShell(Tab::Cameras, result, renderCamerasPanel(nullptr, false, g_liveCameras, g_liveStates))

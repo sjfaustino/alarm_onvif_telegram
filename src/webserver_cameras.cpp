@@ -663,20 +663,26 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
     html += "</fieldset>";
 
     html += "<fieldset><legend>Set person/vehicle alerts for all cameras</legend>";
-    html += "<form method=\"POST\" action=\"/cameras/person-vehicle-alerts-all\" "
-            "onsubmit=\"return confirm('Overwrite every camera\\'s individual person/vehicle alert "
-            "setting with this one? There is no way to see what each camera currently has before this "
-            "replaces it.');\">";
-    html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"personAlertsEnabled\" checked> "
+    html += "<form method=\"POST\" action=\"/cameras/person-alerts-all\" "
+            "onsubmit=\"return confirm('Overwrite every camera\\'s individual PERSON alert setting with "
+            "this one? Vehicle alert settings are left untouched. There is no way to see what each camera "
+            "currently has before this replaces it.');\">";
+    html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"enabled\" checked> "
             "Alert on person detection</label>";
-    html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"vehicleAlertsEnabled\" checked> "
+    html += "<p><button type=\"submit\">Apply person alerts to all cameras</button></p></form>";
+    html += "<form method=\"POST\" action=\"/cameras/vehicle-alerts-all\" "
+            "onsubmit=\"return confirm('Overwrite every camera\\'s individual VEHICLE alert setting with "
+            "this one? Person alert settings are left untouched. There is no way to see what each camera "
+            "currently has before this replaces it.');\">";
+    html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"enabled\" checked> "
             "Alert on vehicle detection</label>";
-    html += "<p><button type=\"submit\">Apply to all cameras</button></p></form>";
-    html += "<p class=\"hint\">Overwrites every camera's person/vehicle alert setting (both enabled and "
-            "disabled cameras) with this one, all at once - there's no per-camera preview here, so check "
-            "each camera's own Edit form afterward if you need to confirm what landed. Only affects "
-            "cameras whose own ONVIF AI actually distinguishes person/vehicle detection - a plain motion "
-            "sensor always alerts regardless of this.</p>";
+    html += "<p><button type=\"submit\">Apply vehicle alerts to all cameras</button></p></form>";
+    html += "<p class=\"hint\">Each button only overwrites its own setting (person or vehicle) across "
+            "every camera (both enabled and disabled ones) - the other stays whatever each camera already "
+            "has, so bulk-setting one never undoes a deliberate per-camera choice on the other. There's no "
+            "per-camera preview here, so check each camera's own Edit form afterward if you need to "
+            "confirm what landed. Only affects cameras whose own ONVIF AI actually distinguishes "
+            "person/vehicle detection - a plain motion sensor always alerts regardless of this.</p>";
     html += "</fieldset>";
   }
 
@@ -997,23 +1003,26 @@ String applyQuietHoursToAllCameras(PsychicRequest* request, std::vector<CameraCo
 // Same shape as applyQuietHoursToAllCameras above - see its own comments
 // for the reasoning (updateAllCameras' single-critical-section read+
 // mutate+save, why every camera gets this not just enabled ones, and the
-// live-reload cost) - just for personAlertsEnabled/vehicleAlertsEnabled
-// instead of quiet hours.
-String applyPersonVehicleAlertsToAllCameras(PsychicRequest* request, std::vector<CameraConfig>* liveCameras,
-                                             std::vector<CameraState>* liveStates) {
-  bool personAlertsEnabled = request->hasParam("personAlertsEnabled");
-  bool vehicleAlertsEnabled = request->hasParam("vehicleAlertsEnabled");
+// live-reload cost) - just for personAlertsEnabled instead of quiet hours.
+//
+// Deliberately its own function/route/button rather than one combined
+// "person+vehicle" form (an earlier version did that, with both
+// checkboxes defaulting to checked) - bulk-applying just one axis then
+// silently re-enabled the other for every camera too, which could
+// silently undo e.g. a busy-street camera's deliberately-disabled vehicle
+// alerts the admin wasn't even thinking about in that click. Each button
+// here only ever touches its own field.
+String applyPersonAlertsToAllCameras(PsychicRequest* request, std::vector<CameraConfig>* liveCameras,
+                                      std::vector<CameraState>* liveStates) {
+  bool enabled = request->hasParam("enabled");
 
   size_t cameraCount = loadCameras().size();
   if (cameraCount == 0) return "No cameras configured - nothing to apply this to.";
 
-  bool saved = updateAllCameras([&](CameraConfig& c) {
-    c.personAlertsEnabled = personAlertsEnabled;
-    c.vehicleAlertsEnabled = vehicleAlertsEnabled;
-  });
+  bool saved = updateAllCameras([&](CameraConfig& c) { c.personAlertsEnabled = enabled; });
   if (!saved) {
-    return "Failed to save - NVS write error (see Serial log). Person/vehicle alert settings were NOT "
-           "changed for any camera.";
+    return "Failed to save - NVS write error (see Serial log). Person alert settings were NOT changed for "
+           "any camera.";
   }
 
   std::vector<CameraConfig> cams = loadCameras();
@@ -1029,9 +1038,46 @@ String applyPersonVehicleAlertsToAllCameras(PsychicRequest* request, std::vector
     }
   }
 
-  String result = "Person alerts " + String(personAlertsEnabled ? "enabled" : "disabled") + ", vehicle alerts " +
-      String(vehicleAlertsEnabled ? "enabled" : "disabled") + " - applied to all " + String(cams.size()) +
-      " camera(s).";
+  String result = "Person alerts " + String(enabled ? "enabled" : "disabled") + " - applied to all " +
+      String(cams.size()) + " camera(s). Vehicle alert settings were left untouched.";
+  if (liveReloaded > 0) {
+    result += " " + String(liveReloaded) + " already-running camera(s) are reconnecting now with it.";
+  }
+  result += " Any camera not currently running (disabled, or added after this board's last boot) "
+            "needs a reboot to pick this up.";
+  return result;
+}
+
+// Same as applyPersonAlertsToAllCameras above, for vehicleAlertsEnabled -
+// see its comment for why this is separate rather than one combined form.
+String applyVehicleAlertsToAllCameras(PsychicRequest* request, std::vector<CameraConfig>* liveCameras,
+                                       std::vector<CameraState>* liveStates) {
+  bool enabled = request->hasParam("enabled");
+
+  size_t cameraCount = loadCameras().size();
+  if (cameraCount == 0) return "No cameras configured - nothing to apply this to.";
+
+  bool saved = updateAllCameras([&](CameraConfig& c) { c.vehicleAlertsEnabled = enabled; });
+  if (!saved) {
+    return "Failed to save - NVS write error (see Serial log). Vehicle alert settings were NOT changed for "
+           "any camera.";
+  }
+
+  std::vector<CameraConfig> cams = loadCameras();
+  size_t liveReloaded = 0;
+  if (liveCameras && liveStates) {
+    for (auto& c : cams) {
+      int idx = findLiveCameraIndex(liveCameras, c.name);
+      bool wasRunning = idx >= 0 && idx < (int)liveStates->size() && (*liveCameras)[idx].enabled;
+      if (wasRunning) {
+        requestLiveConfigReload((*liveStates)[idx], c);
+        liveReloaded++;
+      }
+    }
+  }
+
+  String result = "Vehicle alerts " + String(enabled ? "enabled" : "disabled") + " - applied to all " +
+      String(cams.size()) + " camera(s). Person alert settings were left untouched.";
   if (liveReloaded > 0) {
     result += " " + String(liveReloaded) + " already-running camera(s) are reconnecting now with it.";
   }

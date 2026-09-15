@@ -65,16 +65,29 @@ bool stopLiveCameraIfRunning(const String& name, std::vector<CameraConfig>* live
 String applyQuietHoursToAllCameras(PsychicRequest* request, std::vector<CameraConfig>* liveCameras,
                                     std::vector<CameraState>* liveStates);
 
-// Same shape as applyQuietHoursToAllCameras above (reads the two
-// checkbox fields the per-camera Add/Edit form uses, overwrites EVERY
-// camera's personAlertsEnabled/vehicleAlertsEnabled at once via
-// updateAllCameras, live-reloads every already-running enabled camera,
-// returns a result string for the caller to show as a banner) - added
-// once the per-camera toggle existed and turned out tedious to set
-// property-wide one camera at a time. Call this from the
-// /cameras/person-vehicle-alerts-all route handler.
-String applyPersonVehicleAlertsToAllCameras(PsychicRequest* request, std::vector<CameraConfig>* liveCameras,
-                                             std::vector<CameraState>* liveStates);
+// Same shape as applyQuietHoursToAllCameras above (reads ONE checkbox
+// field the per-camera Add/Edit form uses, overwrites EVERY camera's
+// personAlertsEnabled at once via updateAllCameras, live-reloads every
+// already-running enabled camera, returns a result string for the caller
+// to show as a banner) - added once the per-camera toggle existed and
+// turned out tedious to set property-wide one camera at a time.
+// Deliberately separate from applyVehicleAlertsToAllCameras below (an
+// earlier combined version wrote both fields from one form with both
+// checkboxes defaulting to checked - bulk-setting just one axis silently
+// overwrote the other back to enabled too, undoing e.g. a busy-street
+// camera's deliberately-disabled vehicle alerts) - each button here only
+// ever touches its own field, the other is left exactly as each camera
+// already has it. Call this from the /cameras/person-alerts-all route
+// handler.
+String applyPersonAlertsToAllCameras(PsychicRequest* request, std::vector<CameraConfig>* liveCameras,
+                                      std::vector<CameraState>* liveStates);
+
+// Same as applyPersonAlertsToAllCameras above, for vehicleAlertsEnabled -
+// see its comment for why this is a separate function/button/route rather
+// than one combined form. Call this from the /cameras/vehicle-alerts-all
+// route handler.
+String applyVehicleAlertsToAllCameras(PsychicRequest* request, std::vector<CameraConfig>* liveCameras,
+                                       std::vector<CameraState>* liveStates);
 
 // Runs a live GetCapabilities -> GetServiceCapabilities/GetEventProperties
 // -> GetProfiles/GetSnapshotUri -> CreatePullPointSubscription sequence
