@@ -6,6 +6,7 @@
 #include "camera_tasks.h"
 #include "event_log_store.h"
 #include "snapshot_history.h"
+#include "snapshot_source.h" // snapshotSourceLabel - Preview column thumbnail tooltips
 #include "onvif_soap.h" // makeUUID, for the discovery Probe's MessageID
 #include "background_job.h" // BackgroundJob<T>, shared by the test-all and discovery buttons below
 #include <freertos/FreeRTOS.h>
@@ -462,9 +463,16 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
         for (size_t age = 0; age < historyCount; age++) {
           String url = "/cameras/snapshot?name=" + urlEncode(c.name) + "&age=" + String((unsigned)age) +
                         "&t=" + String(renderMs);
+          // title attribute, not a visible caption - same "icon + native
+          // tooltip instead of full text" reasoning as the badges above:
+          // this strip is a dense row of 48px thumbnails, no room for a
+          // label under each one without breaking the layout. The
+          // Gallery page's own, larger grid shows this as visible text
+          // instead (webserver_gallery.cpp).
+          String sourceLabel = snapshotSourceLabel(cameraSnapshotSourceAt(c, st, age));
           previewCell += "<a href=\"" + url + "\" target=\"_blank\">"
                          "<img src=\"" + url + "\" style=\"max-width:48px;max-height:36px;margin:1px;\" "
-                         "alt=\"preview\"></a>";
+                         "alt=\"preview\" title=\"" + sourceLabel + "\"></a>";
           String oldestFirstUrl = "/cameras/snapshot?name=" + urlEncode(c.name) +
                                    "&age=" + String((unsigned)(historyCount - 1 - age)) + "&t=" + String(renderMs);
           flipbookUrls += (age > 0 ? "|" : "") + oldestFirstUrl;

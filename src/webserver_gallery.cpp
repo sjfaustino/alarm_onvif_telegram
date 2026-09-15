@@ -1,5 +1,6 @@
 #include "webserver_gallery.h"
 #include "snapshot_history.h"
+#include "snapshot_source.h" // snapshotSourceLabel - per-thumbnail caption
 #include "sd_store.h"
 #include "format_utils.h"
 #include "config.h" // GALLERY_PAGE_SIZE
@@ -85,9 +86,17 @@ static String renderCameraGrid(const String& cameraName, size_t page, std::vecto
   for (size_t age = startAge; age < endAge; age++) {
     String url = "/cameras/snapshot?name=" + urlEncode(cameraName) + "&age=" + String((unsigned)age) +
                  "&t=" + String(renderMs);
-    html += "<a href=\"" + url + "\" target=\"_blank\">"
-            "<img src=\"" + url + "\" style=\"max-width:160px;max-height:120px;margin:4px;\" "
-            "alt=\"snapshot\"></a>";
+    // Visible caption, unlike the Cameras page's own tiny 48px Preview
+    // strip (webserver_cameras.cpp uses a title-attribute tooltip there
+    // instead, no room for text) - this grid's whole purpose is browsing
+    // history, so "what triggered this" is worth a permanent label, not
+    // just a hover.
+    String sourceLabel = htmlEscape(snapshotSourceLabel(cameraSnapshotSourceAt((*liveCameras)[idx], (*liveStates)[idx], age)));
+    html += "<span style=\"display:inline-block;margin:4px;text-align:center;\">"
+            "<a href=\"" + url + "\" target=\"_blank\">"
+            "<img src=\"" + url + "\" style=\"display:block;max-width:160px;max-height:120px;\" "
+            "alt=\"snapshot\"></a>"
+            "<span class=\"hint\">" + sourceLabel + "</span></span>";
   }
   html += "</div>";
 

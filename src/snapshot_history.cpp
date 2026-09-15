@@ -11,7 +11,8 @@
 // internal linkage.
 // ============================================================
 
-static void pushRamSnapshot(const CameraConfig& cfg, CameraState& st, uint8_t* jpg, size_t jpgLen) {
+static void pushRamSnapshot(const CameraConfig& cfg, CameraState& st, uint8_t* jpg, size_t jpgLen,
+                             SnapshotSource source) {
   size_t freePsram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
   if (freePsram < SNAPSHOT_MAX_BYTES_PSRAM + jpgLen) {
     Serial.printf("[%s] Skipping snapshot history retention - PSRAM getting low (%u bytes free).\n",
@@ -28,6 +29,7 @@ static void pushRamSnapshot(const CameraConfig& cfg, CameraState& st, uint8_t* j
     st.snapshotHistory[idx].jpg = jpg;
     st.snapshotHistory[idx].len = jpgLen;
     st.snapshotHistory[idx].ms = millis();
+    st.snapshotHistory[idx].source = source;
     st.snapshotHistoryNext = (idx + 1) % SNAPSHOT_HISTORY_SIZE;
     if (st.snapshotHistoryCount < SNAPSHOT_HISTORY_SIZE) st.snapshotHistoryCount++;
   }
@@ -58,11 +60,19 @@ static bool readRamSnapshot(CameraState& st, size_t age, uint8_t** outBuf, size_
   return true;
 }
 
+static SnapshotSource ramSnapshotSourceAt(CameraState& st, size_t age) {
+  CameraStateLock lock(st);
+  if (age >= st.snapshotHistoryCount) return SnapshotSource::Motion;
+  size_t ringIdx = (st.snapshotHistoryNext + SNAPSHOT_HISTORY_SIZE - 1 - age) % SNAPSHOT_HISTORY_SIZE;
+  return st.snapshotHistory[ringIdx].source;
+}
+
 // ============================================================
 // Dispatch
 // ============================================================
 
-void pushCameraSnapshot(const CameraConfig& cfg, CameraState& st, uint8_t* jpg, size_t jpgLen) {
+void pushCameraSnapshot(const CameraConfig& cfg, CameraState& st, uint8_t* jpg, size_t jpgLen,
+                         SnapshotSource source) {
   if (sdActive()) {
     // writeSdSnapshot blocks on sd_store.cpp's internal mutex, which a
     // concurrent full storage check (checkSnapshotStorage, when the
@@ -77,7 +87,7 @@ void pushCameraSnapshot(const CameraConfig& cfg, CameraState& st, uint8_t* jpg, 
     // that unrelated delay from "how long has this camera been silent,"
     // rather than fabricating fresh contact that didn't happen.
     unsigned long before = millis();
-    writeSdSnapshot(cfg, jpg, jpgLen); // takes ownership regardless of outcome - see its own comment
+    writeSdSnapshot(cfg, jpg, jpgLen, source); // takes ownership regardless of outcome - see its own comment
     unsigned long blockedMs = millis() - before;
     // Lock-guarded - this function is reachable from loop()'s task too
     // (sendOnDemandSnapshot, via /snap or handleAllCamerasCommand), not
@@ -86,7 +96,7 @@ void pushCameraSnapshot(const CameraConfig& cfg, CameraState& st, uint8_t* jpg, 
     { CameraStateLock lock(st); st.lastContactMs += blockedMs; }
     return;
   }
-  pushRamSnapshot(cfg, st, jpg, jpgLen);
+  pushRamSnapshot(cfg, st, jpg, jpgLen, source);
 }
 
 size_t cameraSnapshotCount(const CameraConfig& cfg, CameraState& st) {
@@ -97,4 +107,9 @@ size_t cameraSnapshotCount(const CameraConfig& cfg, CameraState& st) {
 bool readCameraSnapshot(const CameraConfig& cfg, CameraState& st, size_t age, uint8_t** outBuf, size_t* outLen) {
   if (sdActive()) return readSdSnapshot(cfg, age, outBuf, outLen);
   return readRamSnapshot(st, age, outBuf, outLen);
+}
+
+SnapshotSource cameraSnapshotSourceAt(const CameraConfig& cfg, CameraState& st, size_t age) {
+  if (sdActive()) return sdSnapshotSourceAt(cfg, age);
+  return ramSnapshotSourceAt(st, age);
 }

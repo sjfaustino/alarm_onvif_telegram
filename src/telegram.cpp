@@ -736,6 +736,20 @@ static const char* motionKindLogLabel(MotionDetectionKind kind) {
   return "motion"; // unreachable if every enumerator above is handled
 }
 
+// Maps a real motion/pet detection onto the stored-snapshot tag
+// (snapshot_source.h) - a superset of MotionDetectionKind that also
+// covers pet and every non-detection capture path (tamper, timelapse,
+// test, manual) at their own pushCameraSnapshot call sites below.
+static SnapshotSource snapshotSourceForMotion(bool isPetEvent, MotionDetectionKind kind) {
+  if (isPetEvent) return SnapshotSource::Pet;
+  switch (kind) {
+    case MotionDetectionKind::Person:  return SnapshotSource::Person;
+    case MotionDetectionKind::Vehicle: return SnapshotSource::Vehicle;
+    case MotionDetectionKind::Generic: return SnapshotSource::Motion;
+  }
+  return SnapshotSource::Motion; // unreachable if every enumerator above is handled
+}
+
 void triggerMotionAlert(const CameraConfig& cfg, CameraState& st, bool isPetEvent, MotionDetectionKind kind) {
   // alertsEnabled is written by loop()'s task (pollTelegramCommands'
   // /on//off), this function runs on the camera's own task - cross-task
@@ -800,7 +814,9 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st, bool isPetEven
              " detected (quiet hours - no Telegram alert)");
     size_t jpgLen = 0;
     uint8_t* jpg = fetchOneSnapshot(cfg, st, jpgLen);
-    if (jpg) pushCameraSnapshot(cfg, st, jpg, jpgLen); // takes ownership - do not free(jpg) here
+    if (jpg) {
+      pushCameraSnapshot(cfg, st, jpg, jpgLen, snapshotSourceForMotion(isPetEvent, kind)); // takes ownership
+    }
     return;
   }
 
@@ -832,7 +848,7 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st, bool isPetEven
     if (st.snapshotUri.length() > 0) {
       size_t jpgLen = 0;
       uint8_t* jpg = fetchOneSnapshot(cfg, st, jpgLen);
-      if (jpg) pushCameraSnapshot(cfg, st, jpg, jpgLen); // takes ownership - do not free(jpg) here
+      if (jpg) pushCameraSnapshot(cfg, st, jpg, jpgLen, SnapshotSource::Pet); // takes ownership
     }
     return;
   }
@@ -903,7 +919,7 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st, bool isPetEven
         Serial.printf("[%s] Telegram send to chat %s failed.\n", cfg.name.c_str(), r.chatId.c_str());
       }
     }
-    pushCameraSnapshot(cfg, st, jpg, jpgLen); // takes ownership - do not free(jpg) here
+    pushCameraSnapshot(cfg, st, jpg, jpgLen, snapshotSourceForMotion(isPetEvent, kind)); // takes ownership
   }
 }
 
@@ -958,7 +974,7 @@ bool sendTestAlert(const CameraConfig& cfg, CameraState& st, String& outDetail, 
       anyOk = true;
     }
   }
-  pushCameraSnapshot(cfg, st, jpg, jpgLen); // takes ownership - do not free(jpg) here
+  pushCameraSnapshot(cfg, st, jpg, jpgLen, SnapshotSource::Test); // takes ownership
 
   if (!anyOk) {
     outDetail = "Telegram delivery failed for every recipient - see the Serial log";
@@ -1019,7 +1035,7 @@ void triggerTimelapseCapture(const CameraConfig& cfg, CameraState& st) {
     }
   }
 
-  pushCameraSnapshot(cfg, st, jpg, jpgLen); // takes ownership - do not free(jpg) here
+  pushCameraSnapshot(cfg, st, jpg, jpgLen, SnapshotSource::Timelapse); // takes ownership
 }
 
 // Gathers this camera's subscribed recipients and, if there are any and
@@ -1067,7 +1083,7 @@ void triggerTamperAlert(const CameraConfig& cfg, CameraState& st) {
         Serial.printf("[%s] Tamper alert photo send to chat %s failed.\n", cfg.name.c_str(), r.chatId.c_str());
       }
     }
-    pushCameraSnapshot(cfg, st, jpg, jpgLen); // takes ownership - do not free(jpg) here
+    pushCameraSnapshot(cfg, st, jpg, jpgLen, SnapshotSource::Tamper); // takes ownership
   } else {
     // No snapshot URI yet, or the fetch itself failed - tamper is
     // important enough not to stay silent just because a photo isn't
@@ -1463,7 +1479,7 @@ static void sendOnDemandSnapshot(const CameraConfig& cfg, CameraState& st, const
   if (!sendTelegramPhotoWithRetry(jpg, jpgLen, caption, chatId)) {
     Serial.printf("[%s] On-demand snapshot send to chat %s failed.\n", cfg.name.c_str(), chatId.c_str());
   }
-  pushCameraSnapshot(cfg, st, jpg, jpgLen); // takes ownership - do not free(jpg) here
+  pushCameraSnapshot(cfg, st, jpg, jpgLen, SnapshotSource::Manual); // takes ownership
 }
 
 // Result of resolveAlertTimer below - shared by the single-camera and

@@ -3,6 +3,7 @@
 #include <vector>
 #include "camera_store.h" // CameraConfig
 #include "config.h" // SD_RETENTION_DAYS_DEFAULT
+#include "snapshot_source.h" // SnapshotSource
 
 // Optional SD-backed snapshot history - thread-safe global wrapper around
 // the SD/SPI mechanics (config.h's SD_* pin/tuning constants), entirely
@@ -85,8 +86,10 @@ uint16_t sdRetentionDays();
 // SD_PRUNE_MAX_FILES_PER_WRITE to bound how long this holds the SD
 // mutex). Returns false (having still freed jpg) on any failure - the
 // caller doesn't retry; see sdActive() for why a failure here also flips
-// it off for anything after this one.
-bool writeSdSnapshot(const CameraConfig& cfg, uint8_t* jpg, size_t jpgLen);
+// it off for anything after this one. source (snapshot_source.h) is
+// encoded into the filename (buildSnapshotFilename) so it survives a
+// reboot without needing a separate metadata file.
+bool writeSdSnapshot(const CameraConfig& cfg, uint8_t* jpg, size_t jpgLen, SnapshotSource source);
 
 // How many snapshots this camera currently has on SD.
 size_t sdSnapshotCount(const CameraConfig& cfg);
@@ -94,6 +97,12 @@ size_t sdSnapshotCount(const CameraConfig& cfg);
 // Reads the age-th most recent snapshot (0 = newest) into a freshly
 // allocated buffer (PSRAM-preferred) - caller must free() it on success.
 bool readSdSnapshot(const CameraConfig& cfg, size_t age, uint8_t** outBuf, size_t* outLen);
+
+// Returns just the SnapshotSource tag for the age-th most recent snapshot
+// (0 = newest), parsed from its filename - see
+// parseSnapshotSourceFromFilename (sd_store.cpp). Returns
+// SnapshotSource::Motion if age is out of range or SD isn't active.
+SnapshotSource sdSnapshotSourceAt(const CameraConfig& cfg, size_t age);
 
 // Recursively deletes everything this project has ever written to SD (all
 // cameras' directories) - a logical wipe of this project's own files, NOT

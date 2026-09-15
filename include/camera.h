@@ -3,6 +3,7 @@
 #include <freertos/semphr.h> // SemaphoreHandle_t, for CameraState::stateMutex
 #include "config.h"
 #include "camera_store.h" // CameraConfig
+#include "snapshot_source.h" // SnapshotSource
 
 // How many recent snapshots each camera keeps in memory (webserver.cpp's
 // /cameras/snapshot route, webserver_cameras.cpp's Preview column) - see
@@ -22,6 +23,7 @@ struct SnapshotHistoryEntry {
   uint8_t* jpg = nullptr;
   size_t len = 0;
   unsigned long ms = 0; // millis() when it was captured
+  SnapshotSource source = SnapshotSource::Motion; // what triggered this capture - see snapshot_source.h
 };
 
 struct CameraState {

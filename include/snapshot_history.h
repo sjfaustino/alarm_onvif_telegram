@@ -13,8 +13,13 @@
 // Takes ownership of jpg (caller must not free() it after this call).
 // Dispatches to sd_store's writeSdSnapshot() if sdActive() (sd_store.h),
 // else falls back to the existing PSRAM ring - unchanged, including its
-// own free-PSRAM safety check.
-void pushCameraSnapshot(const CameraConfig& cfg, CameraState& st, uint8_t* jpg, size_t jpgLen);
+// own free-PSRAM safety check. source (snapshot_source.h) is required,
+// not defaulted - every call site (telegram.cpp) has a real answer for
+// "why was this captured" (motion/person/vehicle/pet, tamper, timelapse,
+// a manual test alert, or an on-demand /snap), and a silent default would
+// too easily hide a forgotten update at a new call site.
+void pushCameraSnapshot(const CameraConfig& cfg, CameraState& st, uint8_t* jpg, size_t jpgLen,
+                         SnapshotSource source);
 
 // How many snapshots are currently available for this camera, wherever
 // they live.
@@ -29,3 +34,11 @@ size_t cameraSnapshotCount(const CameraConfig& cfg, CameraState& st);
 // stale image across page loads) without needing this module to expose a
 // value that's otherwise unused.
 bool readCameraSnapshot(const CameraConfig& cfg, CameraState& st, size_t age, uint8_t** outBuf, size_t* outLen);
+
+// Returns just the SnapshotSource tag for the age-th most recent snapshot
+// (0 = newest), without fetching its JPEG bytes - lets a caller building a
+// grid of N thumbnails (webserver_gallery.cpp, webserver_cameras.cpp's
+// Preview column) show what triggered each one without paying for N full
+// image reads just to label them. Returns SnapshotSource::Motion (the
+// safe generic default) if age is out of range.
+SnapshotSource cameraSnapshotSourceAt(const CameraConfig& cfg, CameraState& st, size_t age);

@@ -221,20 +221,52 @@ static bool ensureDirAndPrune(const String& dirName, size_t newFileSize) {
   return true;
 }
 
-// "<YYYYMMDD-HHMMSS>_<millis>.jpg" - sortable (chronological as a plain
-// string, matching how listDirFiles/ensureDirAndPrune rely on filename
-// order), and unique even for several shots within the same second (a
-// motion burst can fetch multiple snapshots faster than one second apart,
-// but never faster than a millisecond apart in practice).
-static String buildSnapshotFilename() {
+// "<YYYYMMDD-HHMMSS>_<millis>_<source>.jpg" - sortable (chronological as a
+// plain string, matching how listDirFiles/ensureDirAndPrune rely on
+// filename order - the trailing "_<source>" never affects that ordering,
+// since millis() already guarantees uniqueness before it's ever compared),
+// and unique even for several shots within the same second (a motion
+// burst can fetch multiple snapshots faster than one second apart, but
+// never faster than a millisecond apart in practice). The source suffix
+// (snapshot_source.h) is what parseSnapshotSourceFromFilename below reads
+// back for the Gallery/Preview column - encoded into the filename rather
+// than a separate metadata file, so it survives a reboot for free and
+// never needs its own retention/pruning logic.
+static String buildSnapshotFilename(SnapshotSource source) {
   time_t now; time(&now);
   struct tm tmStruct; localtime_r(&now, &tmStruct);
   char buf[24];
   strftime(buf, sizeof(buf), "%Y%m%d-%H%M%S", &tmStruct);
-  return String(buf) + "_" + String(millis()) + ".jpg";
+  return String(buf) + "_" + String(millis()) + "_" + snapshotSourceLabel(source) + ".jpg";
 }
 
-bool writeSdSnapshot(const CameraConfig& cfg, uint8_t* jpg, size_t jpgLen) {
+// Reverse of buildSnapshotFilename's source suffix. A filename written
+// before this feature existed has only two underscore-separated fields
+// (no source at all) - falls back to SnapshotSource::Motion for that, and
+// for any other unrecognized shape, rather than failing the read over a
+// cosmetic label.
+static SnapshotSource parseSnapshotSourceFromFilename(const String& name) {
+  int firstUnderscore = name.indexOf('_');
+  if (firstUnderscore < 0) return SnapshotSource::Motion;
+  int secondUnderscore = name.indexOf('_', firstUnderscore + 1);
+  if (secondUnderscore < 0) return SnapshotSource::Motion; // old two-field filename, no source suffix
+  int dot = name.lastIndexOf('.');
+  if (dot < 0 || dot <= secondUnderscore) return SnapshotSource::Motion;
+  return snapshotSourceFromLabel(name.substring(secondUnderscore + 1, dot));
+}
+
+// Shared by readSdSnapshot/sdSnapshotSourceAt below - both need this
+// camera's files newest-first so age=0 means "most recent." Caller must
+// hold g_sdMutex.
+static std::vector<SnapshotFileInfo> listSnapshotsNewestFirst(const String& dirName) {
+  std::vector<SnapshotFileInfo> files = listDirFiles(dirName);
+  std::sort(files.begin(), files.end(), [](const SnapshotFileInfo& a, const SnapshotFileInfo& b) {
+    return a.name > b.name; // newest-first, so age=0 is index 0
+  });
+  return files;
+}
+
+bool writeSdSnapshot(const CameraConfig& cfg, uint8_t* jpg, size_t jpgLen, SnapshotSource source) {
   if (!sdActive()) { free(jpg); return false; }
 
   String dirName = String(SNAPSHOTS_ROOT) + "/" + sanitizeCameraDirName(cfg.name);
@@ -244,7 +276,7 @@ bool writeSdSnapshot(const CameraConfig& cfg, uint8_t* jpg, size_t jpgLen) {
   xSemaphoreTake(g_sdMutex, portMAX_DELAY);
   ok = ensureDirAndPrune(dirName, jpgLen);
   if (ok) {
-    filePath = dirName + "/" + buildSnapshotFilename();
+    filePath = dirName + "/" + buildSnapshotFilename(source);
     File f = SD.open(filePath, FILE_WRITE);
     if (f) {
       size_t written = f.write(jpg, jpgLen);
@@ -290,10 +322,7 @@ bool readSdSnapshot(const CameraConfig& cfg, size_t age, uint8_t** outBuf, size_
   String dirName = String(SNAPSHOTS_ROOT) + "/" + sanitizeCameraDirName(cfg.name);
 
   xSemaphoreTake(g_sdMutex, portMAX_DELAY);
-  std::vector<SnapshotFileInfo> files = listDirFiles(dirName);
-  std::sort(files.begin(), files.end(), [](const SnapshotFileInfo& a, const SnapshotFileInfo& b) {
-    return a.name > b.name; // newest-first, so age=0 is index 0
-  });
+  std::vector<SnapshotFileInfo> files = listSnapshotsNewestFirst(dirName);
 
   if (age >= files.size()) {
     xSemaphoreGive(g_sdMutex);
@@ -324,6 +353,18 @@ bool readSdSnapshot(const CameraConfig& cfg, size_t age, uint8_t** outBuf, size_
   *outBuf = buf;
   *outLen = len;
   return true;
+}
+
+SnapshotSource sdSnapshotSourceAt(const CameraConfig& cfg, size_t age) {
+  if (!sdActive()) return SnapshotSource::Motion;
+  String dirName = String(SNAPSHOTS_ROOT) + "/" + sanitizeCameraDirName(cfg.name);
+
+  xSemaphoreTake(g_sdMutex, portMAX_DELAY);
+  std::vector<SnapshotFileInfo> files = listSnapshotsNewestFirst(dirName);
+  SnapshotSource source = SnapshotSource::Motion;
+  if (age < files.size()) source = parseSnapshotSourceFromFilename(files[age].name);
+  xSemaphoreGive(g_sdMutex);
+  return source;
 }
 
 bool eraseAllSnapshots() {
