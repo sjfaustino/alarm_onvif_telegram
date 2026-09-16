@@ -153,7 +153,40 @@ bool cameraGetEventServiceCapabilities(const CameraConfig& cfg, CameraState& st)
   return true;
 }
 
-bool cameraGetEventProperties(const CameraConfig& cfg, CameraState& st) {
+// The seven topic keywords this project actually acts on anywhere
+// (camera_parse.cpp's topicReportedTrue/motionEventFired match live event
+// XML against these exact same substrings) - kept in one place so a scan
+// of a camera's advertised topics and a scan of its live events can never
+// silently drift apart.
+static const char* const kKnownEventTopics[] = {
+    "PeopleDetect", "VehicleDetect", "DogCatDetect", "MotionAlarm", "CellMotionDetector",
+    "TamperDetector", "SignalLoss",
+};
+
+// Comma-joined list of which of kKnownEventTopics above actually appear
+// anywhere in response. Deliberately a raw substring scan, not a real
+// ONVIF TopicSet tree parse: a TopicSet is a nested-element tree whose TAG
+// NAMES are the topic path segments themselves, arbitrarily deep and
+// vendor-prefixed (e.g. "tns1:RuleEngine/MyRuleDetector/PeopleDetect" or a
+// vendor's own "tnsaxis:PeopleDetect") - see camera_parse.h's own comment
+// on why this project already gave up on fully standardizing that and
+// matches by keyword instead. Reusing the exact same approach here (rather
+// than writing a one-off XML tree walker just for this) means "does this
+// camera advertise PeopleDetect" and "did this event report PeopleDetect"
+// can never disagree about what counts as a match. Returns "" if none of
+// the known keywords appear anywhere - the camera may still report plain
+// motion via a topic this project doesn't recognize by name yet.
+static String scanKnownEventTopics(const String& response) {
+  String found;
+  for (const char* topic : kKnownEventTopics) {
+    if (response.indexOf(topic) < 0) continue;
+    if (found.length() > 0) found += ", ";
+    found += topic;
+  }
+  return found;
+}
+
+bool cameraGetEventProperties(const CameraConfig& cfg, CameraState& st, String* outTopics) {
   String action = "http://www.onvif.org/ver10/events/wsdl/EventPortType/GetEventPropertiesRequest";
   String body = "<tev:GetEventProperties/>";
   String response = cameraSoapCall(cfg, st, st.eventServiceUrl, st.eventServiceUrl, action, body);
@@ -163,6 +196,7 @@ bool cameraGetEventProperties(const CameraConfig& cfg, CameraState& st) {
     Serial.printf("[%s] GetEventProperties FAILED\n", cfg.name.c_str());
     return false;
   }
+  if (outTopics) *outTopics = scanKnownEventTopics(response);
   return true;
 }
 
@@ -540,7 +574,12 @@ bool cameraSetupSequence(const CameraConfig& cfg, CameraState& st) {
     // deliberately not returning false: detection/logging still has value
   }
   if (!cameraGetEventServiceCapabilities(cfg, st)) return false;
-  if (!cameraGetEventProperties(cfg, st)) return false;
+  String topics;
+  if (!cameraGetEventProperties(cfg, st, &topics)) return false;
+  // Cross-task field (dashboard render reads it) - see CameraState's own
+  // mutex comment. Written once here per setup, same as streamUri/mjpegUri
+  // just above in this same sequence.
+  { CameraStateLock lock(st); st.supportedEventTopics = topics; }
   if (!cameraCreatePullPoint(cfg, st)) return false;
   return true;
 }

@@ -347,6 +347,7 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
       size_t latencyCount = 0;
       unsigned long latencySum = 0, latencyMin = 0, latencyMax = 0;
       unsigned long nowMs = millis();
+      String supportedEventTopics;
       {
         CameraStateLock lock(st);
         subscribed = st.subscriptionActive;
@@ -359,6 +360,7 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
         totalReconnects = st.totalReconnects;
         rtspUri = st.streamUri;
         mjpegUri = st.mjpegUri;
+        supportedEventTopics = st.supportedEventTopics;
         for (size_t i = 0; i < st.reconnectHistoryCount; i++) {
           if (nowMs - st.reconnectHistory[i] < 24UL * 3600UL * 1000UL) recentReconnects++;
         }
@@ -385,6 +387,17 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
         liveStatus = "<span class=\"badge badge-on\">ONLINE</span>";
       } else {
         liveStatus = "<span class=\"badge badge-warn\">NOT SUBSCRIBED</span>";
+      }
+      // Answers "what detection types does this camera even support"
+      // without needing to click Test Connection - see
+      // scanKnownEventTopics' own comment (camera.cpp). Icon + native
+      // title-attribute tooltip, same convention as the Preview column's
+      // thumbnails - a full topic list inline would clutter this row for
+      // information that rarely changes and isn't usually what someone's
+      // looking at.
+      if (supportedEventTopics.length() > 0) {
+        liveStatus += " <span title=\"Event schema mentions: " + htmlEscape(supportedEventTopics) +
+                      "\">\xE2\x84\xB9\xEF\xB8\x8F</span>";
       }
       // Shown regardless of whether it's currently back online - a camera
       // that's flapped offline/online repeatedly and happens to be online
@@ -1197,8 +1210,19 @@ String testCameraConnection(CameraConfig cfg) {
 
   String result = "Test result for \"" + safeName + "\": device service reachable, event service found.";
 
-  if (cameraGetEventServiceCapabilities(cfg, st) && cameraGetEventProperties(cfg, st)) {
+  String topics;
+  if (cameraGetEventServiceCapabilities(cfg, st) && cameraGetEventProperties(cfg, st, &topics)) {
     result += " Event service responds normally.";
+    // Answers "what detection types does this camera even support" -
+    // see scanKnownEventTopics' own comment (camera.cpp) for why this is
+    // a keyword scan, not a full topic-schema parse, and why that's
+    // deliberately the same technique live event matching already uses.
+    result += topics.length() > 0
+        ? (" This camera's event schema mentions: " + htmlEscape(topics) + ".")
+        : (" This camera's event schema doesn't mention any detection type this project recognizes by "
+           "name (PeopleDetect/VehicleDetect/DogCatDetect/MotionAlarm/CellMotionDetector/"
+           "TamperDetector/SignalLoss) - it may still report plain motion under a topic name this "
+           "project doesn't know to look for yet, or use a vendor-specific scheme entirely.");
   } else {
     result += " WARNING: the event service didn't respond to GetServiceCapabilities/GetEventProperties - "
               "this camera may not support ONVIF eventing at all.";

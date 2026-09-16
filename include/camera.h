@@ -54,6 +54,20 @@ struct CameraState {
   // from the codec itself), or (same as streamUri) this camera uses
   // snapshotUriOverride. Always best-effort/non-fatal, same as streamUri.
   String   mjpegUri;
+  // Comma-joined list of which of this project's known detection topic
+  // keywords (PeopleDetect/VehicleDetect/DogCatDetect/MotionAlarm/
+  // CellMotionDetector/TamperDetector/SignalLoss - the same substrings
+  // topicReportedTrue/motionEventFired already match live events against,
+  // camera_parse.cpp) this camera's GetEventPropertiesResponse actually
+  // mentions - see cameraGetEventProperties' own comment for why this is
+  // a substring scan, not a real TopicSet tree parse. Written once during
+  // cameraSetupSequence, "" if GetEventProperties never succeeded yet (or
+  // succeeded but mentioned none of the known keywords - the camera may
+  // still report plain motion via a topic this project doesn't recognize
+  // by name). Lets the Cameras page answer "does this camera even
+  // advertise person/pet detection" without needing to click Test
+  // Connection or wait for a real detection event to find out the hard way.
+  String   supportedEventTopics;
   String   profileToken;
   bool     subscriptionActive = false;
   unsigned long lastPull  = 0;
@@ -261,7 +275,7 @@ struct CameraState {
   size_t snapshotHistoryCount = 0;
 
   // Guards subscriptionActive, isOffline, alertsEnabled, hasAlerted,
-  // lastAlert, snapshotUri, streamUri, mjpegUri, user, pass, scheduledRevertDueMs,
+  // lastAlert, snapshotUri, streamUri, mjpegUri, supportedEventTopics, user, pass, scheduledRevertDueMs,
   // scheduledRevertToOn, pendingConfig, stopRequested, snapshotInFlight,
   // snapshotHistory (+Next/Count), lastContactMs, totalReconnects,
   // reconnectHistory (+Next/Count), offlineHistory (+Next/Count), and
@@ -350,7 +364,12 @@ bool cameraSetupSequence(const CameraConfig& cfg, CameraState& st);
 // subscription without re-doing capability discovery every time.
 bool cameraDiscoverServices(const CameraConfig& cfg, CameraState& st);
 bool cameraGetEventServiceCapabilities(const CameraConfig& cfg, CameraState& st);
-bool cameraGetEventProperties(const CameraConfig& cfg, CameraState& st);
+// outTopics (optional) receives the same comma-joined scan
+// CameraState::supportedEventTopics documents, on success - lets a caller
+// with its own throwaway CameraState (webserver_cameras.cpp's
+// testCameraConnection) capture it without needing st itself to be the
+// live, persisted one. Left untouched on failure.
+bool cameraGetEventProperties(const CameraConfig& cfg, CameraState& st, String* outTopics = nullptr);
 bool cameraFetchProfileAndSnapshotUri(const CameraConfig& cfg, CameraState& st);
 bool cameraCreatePullPoint(const CameraConfig& cfg, CameraState& st);
 bool cameraPullMessages(const CameraConfig& cfg, CameraState& st);
