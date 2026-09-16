@@ -250,7 +250,8 @@ void test_trSdNotAvailableAtBoot(void) {
   String en = trSdNotAvailableAtBoot(TelegramLang::English);
   String pt = trSdNotAvailableAtBoot(TelegramLang::Portuguese);
   TEST_ASSERT_TRUE(en != pt);
-  TEST_ASSERT_TRUE(en.indexOf("boot") >= 0);
+  TEST_ASSERT_TRUE(en.indexOf("SD") >= 0);
+  TEST_ASSERT_TRUE(en.indexOf("not available") >= 0);
 }
 
 void test_trMissingCredentials_both_variants(void) {

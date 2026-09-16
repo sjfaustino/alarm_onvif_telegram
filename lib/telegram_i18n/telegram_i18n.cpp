@@ -295,12 +295,9 @@ String trSdFailure(TelegramLang lang, const String& reason) {
 // recipient's phone.
 String trSdNotAvailableAtBoot(TelegramLang lang) {
   if (lang == TelegramLang::Portuguese) {
-    return "\xE2\x9A\xA0\xEF\xB8\x8F Armazenamento em cart\xC3\xA3o SD est\xC3\xA1 ativado, mas n\xC3\xA3o "
-           "ficou dispon\xC3\xADvel no arranque - ver a p\xC3\xA1gina Armazenamento ou o registo de "
-           "atividade para detalhes.";
+    return "\xE2\x9A\xA0\xEF\xB8\x8F Cart\xC3\xA3o SD ativado mas n\xC3\xA3o dispon\xC3\xADvel";
   }
-  return "\xE2\x9A\xA0\xEF\xB8\x8F SD card storage is enabled, but wasn't available at boot - see the "
-         "Storage page or the Activity log for details.";
+  return "\xE2\x9A\xA0\xEF\xB8\x8F SD card storage enabled but not available";
 }
 
 String trSdCheckWarning(TelegramLang lang, size_t unreadableFiles, size_t filesChecked) {

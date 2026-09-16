@@ -98,8 +98,17 @@ static String buildCameraListMessage(TelegramLang lang) {
   for (size_t i = 0; i < g_cameras.size(); i++) {
     const CameraConfig& cfg = g_cameras[i];
     char line[64];
-    snprintf(line, sizeof(line), "  [%u] %-20s %s\n",
-              (unsigned)(i + 1), cfg.name.c_str(), cfg.enabled ? (pt ? "LIGADA" : "ON") : (pt ? "DESLIGADA" : "OFF"));
+    // Checkmark for enabled, language-neutral - a column of these is a
+    // faster "does anything need attention" scan than reading "ON"/
+    // "LIGADA" repeated down the whole list. A disabled camera stays
+    // plain text, since that's the exception actually worth reading, not
+    // skimming past.
+    if (cfg.enabled) {
+      snprintf(line, sizeof(line), "  [%u] %-20s \xE2\x9C\x85\n", (unsigned)(i + 1), cfg.name.c_str());
+    } else {
+      snprintf(line, sizeof(line), "  [%u] %-20s %s\n", (unsigned)(i + 1), cfg.name.c_str(),
+               pt ? "DESLIGADA" : "OFF");
+    }
     s += line;
   }
   s += "--------------------------";
