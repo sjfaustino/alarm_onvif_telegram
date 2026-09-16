@@ -221,6 +221,31 @@ static String describeResetReasonLocalized(TelegramLang lang) {
   return lang == TelegramLang::Portuguese ? describeResetReasonPt() : describeResetReason();
 }
 
+// Simplified two-way split of describeResetReason() above, for the
+// Telegram boot notice specifically (trRebootReasonLine) - the full
+// detail (which watchdog, brownout, etc.) stays in the Activity log via
+// logEvent("Booted: " + describeResetReason()) below; someone reading a
+// phone notification just needs "expected" vs "something crashed," not
+// the full esp_reset_reason_t taxonomy.
+static bool isCrashResetReason() {
+  switch (esp_reset_reason()) {
+    case ESP_RST_POWERON:
+    case ESP_RST_EXT:
+    case ESP_RST_SW:
+      return false; // power-on, external reset pin, or a deliberate /reset|OTA|Maintenance-page reboot
+    default:
+      return true; // PANIC, every watchdog flavor, brownout, unexpected deep sleep/SDIO, unknown
+  }
+}
+
+static String describeResetReasonShort(TelegramLang lang) {
+  bool pt = lang == TelegramLang::Portuguese;
+  if (isCrashResetReason()) {
+    return pt ? "\xE2\x9A\xA0\xEF\xB8\x8F falha inesperada" : "\xE2\x9A\xA0\xEF\xB8\x8F unexpected crash";
+  }
+  return pt ? "normal (utilizador/liga\xC3\xA7\xC3\xA3o)" : "normal (user/power-on)";
+}
+
 // Applies the stored static IP config, if enabled - must run after
 // WiFi.mode(WIFI_STA) but before WiFi.begin(). Same config applies
 // regardless of which network (primary/backup) ends up connecting. Falls
@@ -848,15 +873,14 @@ static void startMonitoring() {
   // powerMonitorEnabled/powerPresentAtBoot above.
   SdStatus sdStatus = getSdStatus();
   bool sdUnavailableAtBoot = sdStatus.settingEnabled && !sdStatus.available;
-  String sdUnavailableReason = sdStatus.unavailableReason;
   bool sendOk = sendTelegramMessage([enabledCount, sdBootCheckFailed, sdBootUnreadable, sdBootDirsChecked,
-                                      powerMonitorEnabled, powerPresentAtBoot, sdUnavailableAtBoot,
-                                      sdUnavailableReason](TelegramLang lang) {
+                                      powerMonitorEnabled, powerPresentAtBoot,
+                                      sdUnavailableAtBoot](TelegramLang lang) {
     String msg = trBootHeader(lang, FIRMWARE_VERSION) + "\n";
-    msg += trRebootReasonLine(lang, describeResetReasonLocalized(lang)) + "\n";
+    msg += trRebootReasonLine(lang, describeResetReasonShort(lang)) + "\n";
     msg += trEnabledCamerasLine(lang, (size_t)enabledCount, g_cameras.size()) + "\n";
     if (powerMonitorEnabled) msg += trPowerStatusLine(lang, powerPresentAtBoot) + "\n";
-    if (sdUnavailableAtBoot) msg += trSdNotAvailableAtBoot(lang, sdUnavailableReason) + "\n";
+    if (sdUnavailableAtBoot) msg += trSdNotAvailableAtBoot(lang) + "\n";
     msg += buildCameraListMessage(lang);
     if (sdBootCheckFailed) {
       msg += "\n" + trSdBootCheckWarning(lang, sdBootUnreadable, sdBootDirsChecked);

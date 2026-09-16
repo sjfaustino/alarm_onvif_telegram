@@ -244,11 +244,12 @@ void test_trSdFailure_and_trSdCheckWarning(void) {
 }
 
 // Distinct wording from trSdFailure above (never mounted at boot, not a
-// mid-session degradation) but embeds the same caller-supplied reason.
+// mid-session degradation) - deliberately short, no embedded reason (that
+// goes to the Activity log instead, sd_store.cpp).
 void test_trSdNotAvailableAtBoot(void) {
-  String en = trSdNotAvailableAtBoot(TelegramLang::English, "no card inserted");
-  String pt = trSdNotAvailableAtBoot(TelegramLang::Portuguese, "no card inserted");
-  assertDiffersAndContains(en, pt, "no card inserted");
+  String en = trSdNotAvailableAtBoot(TelegramLang::English);
+  String pt = trSdNotAvailableAtBoot(TelegramLang::Portuguese);
+  TEST_ASSERT_TRUE(en != pt);
   TEST_ASSERT_TRUE(en.indexOf("boot") >= 0);
 }
 

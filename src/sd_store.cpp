@@ -75,11 +75,19 @@ void initSdStorage() {
     return;
   }
 
+  // logEvent() is safe this early - no network dependency (see its own
+  // comment, event_log_store.cpp): purely in-RAM, plus an SD append that
+  // immediately no-ops via sdActive() below since SD isn't active yet at
+  // any of these three failure points. The Telegram boot notice
+  // (main.cpp, trSdNotAvailableAtBoot) deliberately stays short - the
+  // detailed reason belongs here, in the Activity log, not repeated to
+  // every recipient's phone.
   SPI.begin(SD_SCK_PIN, SD_MISO_PIN, SD_MOSI_PIN, SD_CS_PIN);
   if (!SD.begin(SD_CS_PIN, SPI)) {
     Serial.println("[sd_store] SD storage is enabled, but no module responded on the configured SPI "
                     "pins - check wiring/CS pin in config.h. Falling back to the PSRAM ring.");
     g_sdUnavailableReason = "no module responded on the configured SPI pins";
+    logEvent("SD storage unavailable at boot: " + g_sdUnavailableReason);
     return;
   }
 
@@ -88,6 +96,7 @@ void initSdStorage() {
     Serial.println("[sd_store] SD storage is enabled and a module responded, but no card is "
                     "inserted. Falling back to the PSRAM ring.");
     g_sdUnavailableReason = "no card inserted";
+    logEvent("SD storage unavailable at boot: " + g_sdUnavailableReason);
     SD.end();
     return;
   }
@@ -96,6 +105,7 @@ void initSdStorage() {
     Serial.println("[sd_store] SD card detected, but the /snapshots directory could not be created "
                     "- card may be write-protected or corrupted. Falling back to the PSRAM ring.");
     g_sdUnavailableReason = "/snapshots directory could not be created - card may be write-protected or corrupted";
+    logEvent("SD storage unavailable at boot: " + g_sdUnavailableReason);
     SD.end();
     return;
   }

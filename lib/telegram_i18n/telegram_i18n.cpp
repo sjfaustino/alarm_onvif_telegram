@@ -220,11 +220,16 @@ String trBridgeOutageAlert(TelegramLang lang) {
 }
 
 String trPowerStatusLine(TelegramLang lang, bool present) {
+  // Same \xE2\x9C\x85/\xE2\x9A\xA0\xEF\xB8\x8F icons as trPowerRestored/trPowerLost below - this
+  // line used to be bare text, easy to miss skimming a longer boot
+  // message; OFF specifically (running on UPS, mains actually down) needs
+  // to stand out at a glance, not just read the same as every other
+  // routine boot-status line around it.
   if (lang == TelegramLang::Portuguese) {
-    return present ? "Energia da rede el\xC3\xA9trica: LIGADA"
-                   : "Energia da rede el\xC3\xA9trica: DESLIGADA (a funcionar com UPS)";
+    return present ? "\xE2\x9C\x85 Energia da rede el\xC3\xA9trica: LIGADA"
+                   : "\xE2\x9A\xA0\xEF\xB8\x8F Energia da rede el\xC3\xA9trica: DESLIGADA (a funcionar com UPS)";
   }
-  return present ? "Mains power: ON" : "Mains power: OFF (running on UPS)";
+  return present ? "\xE2\x9C\x85 Mains power: ON" : "\xE2\x9A\xA0\xEF\xB8\x8F Mains power: OFF (running on UPS)";
 }
 
 String trPowerLost(TelegramLang lang) {
@@ -283,16 +288,19 @@ String trSdFailure(TelegramLang lang, const String& reason) {
          "reboot. Check the card/wiring.";
 }
 
-String trSdNotAvailableAtBoot(TelegramLang lang, const String& reason) {
+// Deliberately short - just enough to notice something's wrong and go
+// look. The specific reason (no module / no card / directory uncreatable)
+// goes to the Activity log (initSdStorage's own logEvent calls,
+// sd_store.cpp) and the Storage page instead, not repeated to every
+// recipient's phone.
+String trSdNotAvailableAtBoot(TelegramLang lang) {
   if (lang == TelegramLang::Portuguese) {
     return "\xE2\x9A\xA0\xEF\xB8\x8F Armazenamento em cart\xC3\xA3o SD est\xC3\xA1 ativado, mas n\xC3\xA3o "
-           "ficou dispon\xC3\xADvel no arranque (" + reason + ") - o hist\xC3\xB3rico de capturas est\xC3\xA1 "
-           "a usar apenas a reserva PSRAM at\xC3\xA9 ao pr\xC3\xB3ximo rein\xC3\xAD" "cio bem-sucedido. "
-           "Verifique o cart\xC3\xA3o/a fia\xC3\xA7\xC3\xA3o.";
+           "ficou dispon\xC3\xADvel no arranque - ver a p\xC3\xA1gina Armazenamento ou o registo de "
+           "atividade para detalhes.";
   }
-  return "\xE2\x9A\xA0\xEF\xB8\x8F SD card storage is enabled, but wasn't available at boot (" + reason +
-         ") - snapshot history is using the PSRAM-only fallback until the next successful mount. Check "
-         "the card/wiring.";
+  return "\xE2\x9A\xA0\xEF\xB8\x8F SD card storage is enabled, but wasn't available at boot - see the "
+         "Storage page or the Activity log for details.";
 }
 
 String trSdCheckWarning(TelegramLang lang, size_t unreadableFiles, size_t filesChecked) {
@@ -386,8 +394,8 @@ String trHeartbeatCameraLine(TelegramLang lang, const String& cameraName, bool s
 }
 
 String trBootHeader(TelegramLang lang, const String& firmwareVersion) {
-  if (lang == TelegramLang::Portuguese) return "\xF0\x9F\x93\xB7 Monitor de c\xC3\xA2maras v" + firmwareVersion + " online";
-  return "\xF0\x9F\x93\xB7 Camera monitor v" + firmwareVersion + " online";
+  if (lang == TelegramLang::Portuguese) return "Monitor de c\xC3\xA2maras v" + firmwareVersion + " online";
+  return "Camera monitor v" + firmwareVersion + " online";
 }
 
 String trRebootReasonLine(TelegramLang lang, const String& reasonText) {

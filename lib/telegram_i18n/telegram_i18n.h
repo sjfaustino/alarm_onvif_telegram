@@ -119,7 +119,10 @@ String trSdFailure(TelegramLang lang, const String& reason);
 // boot (initSdStorage/sd_store.cpp's three failure reasons: no module, no
 // card, or the /snapshots directory couldn't be created) - previously only
 // a Serial.println nobody watching the dashboard would ever see.
-String trSdNotAvailableAtBoot(TelegramLang lang, const String& reason);
+// Deliberately just says something's wrong, not why - see this function's
+// own comment (telegram_i18n.cpp) for where the specific reason goes
+// instead.
+String trSdNotAvailableAtBoot(TelegramLang lang);
 String trSdCheckWarning(TelegramLang lang, size_t unreadableFiles, size_t filesChecked);
 // afterLiveEdit: false = discovered at camera-task startup, true = discovered
 // after a live dashboard edit removed the credentials (camera.cpp's two sites).
