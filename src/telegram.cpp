@@ -1238,6 +1238,11 @@ void checkPendingMotionDigest(const CameraConfig& cfg, CameraState& st) {
   unsigned long lastSuppressedMotionMs = st.lastSuppressedMotionMs;
   st.suppressedMotionCount = 0;
   if (count == 0) return; // genuinely a one-off - nothing to report
+  // Bookkeeping above (digestArmed/suppressedMotionCount reset) always
+  // happens regardless of this setting - only the SEND is skipped, so
+  // toggling it live never leaves stale state for the next cooldown cycle
+  // to trip over.
+  if (!cfg.motionDigestEnabled) return;
 
   // alertsEnabled is written cross-task (pollTelegramCommands' /on//off) -
   // needs the lock, same as triggerMotionAlert's own read of it.

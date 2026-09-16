@@ -206,6 +206,11 @@ static String renderCameraForm(const CameraConfig& v, bool isEdit) {
   html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"petAlertsTextOnly\"" +
           String(v.petAlertsTextOnly ? " checked" : "") +
           "> Send pet alerts as text only, no photo - ignored unless pet alerts above are on</label>";
+  html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"motionDigestEnabled\"" +
+          String(v.motionDigestEnabled ? " checked" : "") +
+          "> Send a follow-up \"motion continued\" summary after a real alert's cooldown ends - on by "
+          "default; uncheck for a camera busy enough that the follow-up summary is itself noise on top "
+          "of the alert it's summarizing</label>";
   html += "<label>Notes<input type=\"text\" name=\"notes\" value=\"" + htmlEscape(v.notes) + "\"></label>";
   html += "<p><button type=\"submit\" formaction=\"/cameras/save\">" +
           String(isEdit ? "Save changes" : "Add camera") + "</button> ";
@@ -827,6 +832,7 @@ CameraConfig parseCameraForm(PsychicRequest* request) {
   c.vehicleAlertsEnabled = request->hasParam("vehicleAlertsEnabled");
   c.petAlertsEnabled = request->hasParam("petAlertsEnabled");
   c.petAlertsTextOnly = request->hasParam("petAlertsTextOnly");
+  c.motionDigestEnabled = request->hasParam("motionDigestEnabled");
 
   // 0 is the deliberate, meaningful "unset - no {WIDTH}/{HEIGHT}
   // substitution" value here - same "never substitute it away, only clamp

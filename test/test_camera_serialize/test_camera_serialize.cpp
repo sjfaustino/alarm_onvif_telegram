@@ -53,6 +53,7 @@ static CameraConfig sampleCamera() {
   // change, not just "did the default survive."
   c.personAlertsEnabled = false;
   c.vehicleAlertsEnabled = false;
+  c.motionDigestEnabled = false; // same reasoning - CameraConfig's own default is true
   return c;
 }
 
@@ -95,13 +96,14 @@ void test_round_trip_preserves_every_field(void) {
   TEST_ASSERT_EQUAL_UINT32(original.snapshotMaxHeight, restored.snapshotMaxHeight);
   TEST_ASSERT_EQUAL(original.personAlertsEnabled, restored.personAlertsEnabled);
   TEST_ASSERT_EQUAL(original.vehicleAlertsEnabled, restored.vehicleAlertsEnabled);
+  TEST_ASSERT_EQUAL(original.motionDigestEnabled, restored.motionDigestEnabled);
 }
 
-// personAlertsEnabled/vehicleAlertsEnabled default to true (opt-OUT,
-// unlike every other appended bool in this file which defaults to
-// false) - a freshly-constructed camera (never touched this setting at
-// all) must still round-trip as true, not silently flip to false the
-// way an ordinary appended bool's "empty field" handling would.
+// personAlertsEnabled/vehicleAlertsEnabled/motionDigestEnabled all default
+// to true (opt-OUT, unlike every other appended bool in this file which
+// defaults to false) - a freshly-constructed camera (never touched these
+// settings at all) must still round-trip as true, not silently flip to
+// false the way an ordinary appended bool's "empty field" handling would.
 void test_round_trip_person_vehicle_alerts_default_true(void) {
   CameraConfig c;
   c.name = "D03";
@@ -109,6 +111,7 @@ void test_round_trip_person_vehicle_alerts_default_true(void) {
   CameraConfig restored = deserializeCamera(serializeCamera(c), CAMERA_SCHEMA_VERSION);
   TEST_ASSERT_TRUE(restored.personAlertsEnabled);
   TEST_ASSERT_TRUE(restored.vehicleAlertsEnabled);
+  TEST_ASSERT_TRUE(restored.motionDigestEnabled);
 }
 
 void test_round_trip_with_falsy_flags_and_empty_optionals(void) {
@@ -395,9 +398,9 @@ void test_v5_field_count_above_exact_is_also_rejected(void) {
 
 // Same "exact count or rejected" rule as V5, now for V6's 26 fields
 // (snapshotMaxWidth/snapshotMaxHeight appended). Tagged explicitly as
-// literal version 6, not CAMERA_SCHEMA_VERSION (now 7, personAlertsEnabled/
-// vehicleAlertsEnabled) - V6 is a permanent, never-edited historical
-// branch, same as V1-V5 above.
+// literal version 6, not CAMERA_SCHEMA_VERSION (now 8, personAlertsEnabled/
+// vehicleAlertsEnabled/motionDigestEnabled) - V6 is a permanent, never-
+// edited historical branch, same as V1-V5 above.
 void test_v6_wrong_field_count_is_rejected_not_reinterpreted(void) {
   String wrongCount = joinFields({"D07", "http://192.168.1.56/onvif/device_service", "1", "1", "0", "0",
                                    "", "", "user", "pass", "notes", "60000", "300000", "2",
@@ -440,15 +443,18 @@ void test_v6_field_count_above_exact_is_also_rejected(void) {
   TEST_ASSERT_EQUAL_STRING("", restored.name.c_str());
 }
 
-// ---- Version CAMERA_SCHEMA_VERSION (current, strict) ----
+// ---- Version 7 (superseded, but still readable - not the current version) ----
 
 // Same "exact count or rejected" rule as V6, now for V7's 28 fields
-// (personAlertsEnabled/vehicleAlertsEnabled appended).
+// (personAlertsEnabled/vehicleAlertsEnabled appended). Tagged explicitly
+// as literal version 7, not CAMERA_SCHEMA_VERSION (now 8,
+// motionDigestEnabled) - V7 is a permanent, never-edited historical
+// branch, same as V1-V6 above.
 void test_v7_wrong_field_count_is_rejected_not_reinterpreted(void) {
   String wrongCount = joinFields({"D07", "http://192.168.1.56/onvif/device_service", "1", "1", "0", "0",
                                    "", "", "user", "pass", "notes", "60000", "300000", "2",
                                    "1", "1320", "360", "24", "15", "1500", "1", "45", "1", "1", "800", "600"}); // 26 fields - V6's shape
-  CameraConfig restored = deserializeCamera(wrongCount, CAMERA_SCHEMA_VERSION);
+  CameraConfig restored = deserializeCamera(wrongCount, 7);
   TEST_ASSERT_EQUAL_STRING("", restored.name.c_str());
 }
 
@@ -457,12 +463,15 @@ void test_v7_exact_field_count_is_accepted(void) {
                               "", "", "user", "pass", "notes", "60000", "300000", "2",
                               "1", "1320", "360", "24", "15", "1500", "1", "45", "1", "1", "800", "600",
                               "0", "0"}); // 28 fields, person/vehicle alerts both explicitly off
-  CameraConfig restored = deserializeCamera(exact, CAMERA_SCHEMA_VERSION);
+  CameraConfig restored = deserializeCamera(exact, 7);
   TEST_ASSERT_EQUAL_STRING("D07", restored.name.c_str());
   TEST_ASSERT_EQUAL_UINT32(800, restored.snapshotMaxWidth);
   TEST_ASSERT_EQUAL_UINT32(600, restored.snapshotMaxHeight);
   TEST_ASSERT_FALSE(restored.personAlertsEnabled);
   TEST_ASSERT_FALSE(restored.vehicleAlertsEnabled);
+  // motionDigestEnabled didn't exist in V7 yet - must default to true
+  // (CameraConfig's own default), not false.
+  TEST_ASSERT_TRUE(restored.motionDigestEnabled);
 }
 
 // Same "above the exact count, not just below" gap as V6's own test.
@@ -471,20 +480,57 @@ void test_v7_field_count_above_exact_is_also_rejected(void) {
                                 "", "", "user", "pass", "notes", "60000", "300000", "2",
                                 "1", "1320", "360", "24", "15", "1500", "1", "45", "1", "1", "800", "600",
                                 "0", "0", "extra"}); // 29 fields
+  CameraConfig restored = deserializeCamera(tooMany, 7);
+  TEST_ASSERT_EQUAL_STRING("", restored.name.c_str());
+}
+
+// ---- Version CAMERA_SCHEMA_VERSION (current, strict) ----
+
+// Same "exact count or rejected" rule as V7, now for V8's 29 fields
+// (motionDigestEnabled appended).
+void test_v8_wrong_field_count_is_rejected_not_reinterpreted(void) {
+  String wrongCount = joinFields({"D07", "http://192.168.1.56/onvif/device_service", "1", "1", "0", "0",
+                                   "", "", "user", "pass", "notes", "60000", "300000", "2",
+                                   "1", "1320", "360", "24", "15", "1500", "1", "45", "1", "1", "800", "600",
+                                   "0", "0"}); // 28 fields - V7's shape
+  CameraConfig restored = deserializeCamera(wrongCount, CAMERA_SCHEMA_VERSION);
+  TEST_ASSERT_EQUAL_STRING("", restored.name.c_str());
+}
+
+void test_v8_exact_field_count_is_accepted(void) {
+  String exact = joinFields({"D07", "http://192.168.1.56/onvif/device_service", "1", "1", "0", "0",
+                              "", "", "user", "pass", "notes", "60000", "300000", "2",
+                              "1", "1320", "360", "24", "15", "1500", "1", "45", "1", "1", "800", "600",
+                              "0", "0", "0"}); // 29 fields, person/vehicle/motion-digest all explicitly off
+  CameraConfig restored = deserializeCamera(exact, CAMERA_SCHEMA_VERSION);
+  TEST_ASSERT_EQUAL_STRING("D07", restored.name.c_str());
+  TEST_ASSERT_EQUAL_UINT32(800, restored.snapshotMaxWidth);
+  TEST_ASSERT_EQUAL_UINT32(600, restored.snapshotMaxHeight);
+  TEST_ASSERT_FALSE(restored.personAlertsEnabled);
+  TEST_ASSERT_FALSE(restored.vehicleAlertsEnabled);
+  TEST_ASSERT_FALSE(restored.motionDigestEnabled);
+}
+
+// Same "above the exact count, not just below" gap as V7's own test.
+void test_v8_field_count_above_exact_is_also_rejected(void) {
+  String tooMany = joinFields({"D07", "http://192.168.1.56/onvif/device_service", "1", "1", "0", "0",
+                                "", "", "user", "pass", "notes", "60000", "300000", "2",
+                                "1", "1320", "360", "24", "15", "1500", "1", "45", "1", "1", "800", "600",
+                                "0", "0", "0", "extra"}); // 30 fields
   CameraConfig restored = deserializeCamera(tooMany, CAMERA_SCHEMA_VERSION);
   TEST_ASSERT_EQUAL_STRING("", restored.name.c_str());
 }
 
 // A version newer than this build knows about (firmware downgraded after
 // a later version changed the layout) falls through to the newest known
-// (V7) layout rather than being discarded outright - camera_store.cpp is
+// (V8) layout rather than being discarded outright - camera_store.cpp is
 // responsible for logging a warning when this happens, so this test only
 // covers that it doesn't crash and still extracts something.
 void test_unknown_future_version_falls_back_to_newest_known_layout(void) {
   String record = joinFields({"D06", "http://192.168.1.55/onvif/device_service", "1", "1", "0", "0",
                                "", "", "user", "pass", "notes", "60000", "300000", "5",
                                "0", "0", "0", "0", "0", "1500", "1", "45", "1", "1", "800", "600",
-                               "0", "0"}); // 28 fields
+                               "0", "0", "0"}); // 29 fields
   CameraConfig restored = deserializeCamera(record, (uint16_t)(CAMERA_SCHEMA_VERSION + 1));
   TEST_ASSERT_EQUAL_STRING("D06", restored.name.c_str());
   TEST_ASSERT_EQUAL_UINT32(5, restored.snapshotBurstCount);
@@ -497,6 +543,7 @@ void test_unknown_future_version_falls_back_to_newest_known_layout(void) {
   TEST_ASSERT_EQUAL_UINT32(600, restored.snapshotMaxHeight);
   TEST_ASSERT_FALSE(restored.personAlertsEnabled);
   TEST_ASSERT_FALSE(restored.vehicleAlertsEnabled);
+  TEST_ASSERT_FALSE(restored.motionDigestEnabled);
 }
 
 // A name/note containing the field separator character must not corrupt
@@ -578,6 +625,9 @@ int main(int argc, char** argv) {
   RUN_TEST(test_v7_wrong_field_count_is_rejected_not_reinterpreted);
   RUN_TEST(test_v7_exact_field_count_is_accepted);
   RUN_TEST(test_v7_field_count_above_exact_is_also_rejected);
+  RUN_TEST(test_v8_wrong_field_count_is_rejected_not_reinterpreted);
+  RUN_TEST(test_v8_exact_field_count_is_accepted);
+  RUN_TEST(test_v8_field_count_above_exact_is_also_rejected);
   RUN_TEST(test_unknown_future_version_falls_back_to_newest_known_layout);
   RUN_TEST(test_field_separator_character_in_input_is_stripped_not_corrupting);
   RUN_TEST(test_sortCamerasByName_orders_alphabetically);

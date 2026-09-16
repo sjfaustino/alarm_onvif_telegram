@@ -18,7 +18,7 @@
 // misparsing every existing saved camera: fields.size() tolerance alone
 // can't tell "an old record missing trailing fields" apart from "a record
 // whose fields moved."
-static const uint16_t CAMERA_SCHEMA_VERSION = 7;
+static const uint16_t CAMERA_SCHEMA_VERSION = 8;
 
 // Always writes CAMERA_SCHEMA_VERSION's current field layout.
 String serializeCamera(const CameraConfig& c);

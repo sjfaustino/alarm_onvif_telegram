@@ -143,6 +143,16 @@ struct CameraConfig {
   // (telegram_i18n.h) for the classification itself.
   bool personAlertsEnabled = true;
   bool vehicleAlertsEnabled = true;
+
+  // Opt-OUT (default true) - preserves this project's original, always-on
+  // behavior (checkPendingMotionDigest, telegram.cpp) for anyone already
+  // relying on it. Controls only the FOLLOW-UP "motion continued - N more
+  // event(s) in the last X seconds" summary sent once the cooldown after a
+  // real alert ends; the alert itself (and the cooldown/suppressed-count
+  // bookkeeping that feeds this) is unaffected either way. Exists for a
+  // camera whose motion is frequent enough that the follow-up summary
+  // itself becomes noise on top of the real alert it's summarizing.
+  bool motionDigestEnabled = true;
 };
 
 // Loads the camera list from NVS, seeding once from CAMERA_SEED in
