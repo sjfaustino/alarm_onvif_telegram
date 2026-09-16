@@ -1412,6 +1412,16 @@ static void testAllCamerasTask(void*) {
 }
 
 BackgroundJobStartOutcome startTestAllCamerasAsync() {
+  // Deferred, not started-then-blocked: a per-camera SOAP burst overlapping
+  // an in-flight Telegram photo send's JPEG+TLS buffers is exactly the
+  // class of coincidence that has driven free heap dangerously low in the
+  // field - see telegramSendInProgress's own comment (telegram.h). Reusing
+  // AlreadyRunning here (rather than a new outcome/banner text) is
+  // deliberate: from the person who clicked the button, "try again in a
+  // moment" reads the same either way, and this check re-runs fresh on
+  // every click - no risk of getting stuck waiting for a send that already
+  // finished by the time they try again.
+  if (telegramSendInProgress()) return BackgroundJobStartOutcome::AlreadyRunning;
   if (!g_testAllJob.tryStart()) return BackgroundJobStartOutcome::AlreadyRunning; // one run at a time - a second click while one's in flight is a no-op
 
   // Same stack size as a real per-camera monitoring task (camera_tasks.h) -
@@ -1562,6 +1572,12 @@ static void cameraDiscoveryTask(void*) {
 }
 
 BackgroundJobStartOutcome startCameraDiscoveryAsync() {
+  // Deferred, not started-then-blocked - see startTestAllCamerasAsync's
+  // identical check above for the full reasoning (telegramSendInProgress,
+  // telegram.h): this is the specific job a real field incident traced a
+  // near-heap-exhaustion event to (its multi-second UDP listen window
+  // overlapping an in-flight Telegram photo send).
+  if (telegramSendInProgress()) return BackgroundJobStartOutcome::AlreadyRunning;
   if (!g_discoveryJob.tryStart()) return BackgroundJobStartOutcome::AlreadyRunning; // one search at a time - a second click while one's in flight is a no-op
 
   // No TLS/HTTPClient work here (unlike the per-camera and test-all

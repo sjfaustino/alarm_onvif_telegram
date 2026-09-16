@@ -127,6 +127,16 @@ void triggerTimelapseCapture(const CameraConfig& cfg, CameraState& st);
 bool sendTestAlert(const CameraConfig& cfg, CameraState& st, String& outDetail,
                     MotionDetectionKind kind = MotionDetectionKind::Generic, bool isPetEvent = false);
 
+// Non-blocking: true if a Telegram send is currently in flight (or
+// another task is already waiting for its turn) somewhere in this file,
+// without waiting or taking a turn itself. Lets a heavy, memory-hungry,
+// delay-tolerable background job that doesn't send anything through
+// Telegram itself (webserver_cameras.cpp's WS-Discovery/Test All) check
+// before starting, rather than risk its own buffers overlapping an
+// in-flight photo send's JPEG+TLS buffers - see this function's own
+// comment (telegram.cpp) for the field incident that motivated it.
+bool telegramSendInProgress();
+
 // Sends a message to every user with systemMessages enabled, composed
 // per-recipient by calling `compose(u.language)` - lets each recipient get
 // their own configured language (lib/telegram_i18n) instead of one fixed,

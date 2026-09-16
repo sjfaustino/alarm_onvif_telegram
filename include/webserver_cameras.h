@@ -168,9 +168,14 @@ String renderCameraTestAllResults(const std::vector<CameraTestResult>& results);
 // comment for why a synchronous bulk test would block the whole
 // dashboard, not just the requester, for potentially minutes. A no-op
 // (doesn't start a second overlapping run) if a test is already in
-// progress - the return value tells the caller which of the three
-// outcomes happened, for the /cameras/test-all route handler to show an
-// accurate banner instead of always assuming success.
+// progress, OR if a Telegram send is currently in flight (telegramSendInProgress,
+// telegram.h) - deferred rather than risking this job's per-camera SOAP
+// burst overlapping an in-flight photo send's memory footprint; a retry a
+// moment later (once the send has finished either way) goes through
+// normally. Either case reports as AlreadyRunning - the return value
+// tells the caller which of the three outcomes happened, for the
+// /cameras/test-all route handler to show an accurate banner instead of
+// always assuming success.
 BackgroundJobStartOutcome startTestAllCamerasAsync();
 
 // Renders the current bulk-test status: "a test is running" while one is
@@ -193,7 +198,11 @@ String renderTestAllStatus();
 // above: the listen window is a few seconds by design (has to give slower
 // cameras time to answer a multicast probe), which would otherwise block
 // the whole dashboard for that long. A no-op if a search is already in
-// progress - the return value tells the caller which of the three
+// progress, OR if a Telegram send is currently in flight - same
+// telegramSendInProgress deferral as startTestAllCamerasAsync above (this
+// job's own UDP listen window overlapping an in-flight photo send is the
+// specific coincidence a real field incident traced a near-heap-exhaustion
+// event to). The return value tells the caller which of the three
 // outcomes happened, for the /cameras/discover route handler to show an
 // accurate banner instead of always assuming success.
 BackgroundJobStartOutcome startCameraDiscoveryAsync();

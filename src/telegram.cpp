@@ -74,6 +74,25 @@ class TelegramNetLock {
   bool held_;
 };
 
+// Non-blocking peek at g_telegramNetMutex - true if some task is currently
+// mid-send (or waiting for its own turn), without waiting or taking a turn
+// itself. For a heavy, memory-hungry, user-triggered, delay-tolerable
+// background job that doesn't itself send anything through Telegram (WS-
+// Discovery's multi-second UDP listen, Test All's per-camera SOAP burst -
+// see webserver_cameras.cpp's startCameraDiscoveryAsync/
+// startTestAllCamerasAsync) to defer starting rather than risk its own
+// buffers/sockets overlapping an in-flight photo send's JPEG+TLS buffers -
+// exactly the class of coincidence g_telegramNetMutex's own comment
+// describes a real field incident from, just between Telegram sends and a
+// DIFFERENT subsystem instead of two Telegram sends against each other.
+bool telegramSendInProgress() {
+  if (xSemaphoreTake(g_telegramNetMutex, 0) == pdTRUE) {
+    xSemaphoreGive(g_telegramNetMutex);
+    return false;
+  }
+  return true;
+}
+
 // Camera -> Telegram. PSRAM is a hard requirement (main.cpp's setup()
 // refuses to boot without it): a motion alert can go to more than one
 // user, so the JPEG is fetched once and resent per recipient (see
