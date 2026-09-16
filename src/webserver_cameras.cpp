@@ -582,17 +582,21 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
       // Fires and returns immediately (startTestAlertAsync, background
       // task) - see that function's own comment for why this can't run
       // synchronously on this request-handling task. The kind selector
-      // lets the test embed the same Person/Vehicle emoji/keyword a real
-      // detection's caption would, so a phone-side notification
+      // lets the test embed the same Person/Vehicle/Pet emoji/keyword a
+      // real detection's caption would, so a phone-side notification
       // automation (MacroDroid/Tasker) can be verified without waiting
-      // for an actual person or vehicle - see trTestAlertCaption's own
-      // comment (telegram_i18n.h).
+      // for an actual person, vehicle, or pet - see trTestAlertCaption's
+      // own comment (telegram_i18n.h). Pet is a separate isPetEvent flag,
+      // not a MotionDetectionKind value - same split as the real alert
+      // path (triggerMotionAlert) - so it's threaded alongside kind, not
+      // through it.
       html += " <form method=\"POST\" action=\"/cameras/test-alert\" style=\"display:inline;\">"
               "<input type=\"hidden\" name=\"name\" value=\"" + htmlEscape(c.name) + "\">"
               "<select name=\"kind\" title=\"Which detection kind to simulate\">"
               "<option value=\"generic\">Generic</option>"
               "<option value=\"person\">Person</option>"
               "<option value=\"vehicle\">Vehicle</option>"
+              "<option value=\"pet\">Pet</option>"
               "</select>"
               "<button type=\"submit\" class=\"icon-btn secondary\" title=\"Send test alert\" "
               "aria-label=\"Send test alert\">\xF0\x9F\xA7\xAA</button></form>";
@@ -670,27 +674,38 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
             "end the same (e.g. both 00:00) means no active window, same as the per-camera form.</p>";
     html += "</fieldset>";
 
-    html += "<fieldset><legend>Set person/vehicle alerts for all cameras</legend>";
+    html += "<fieldset><legend>Set person/vehicle/pet alerts for all cameras</legend>";
     html += "<form method=\"POST\" action=\"/cameras/person-alerts-all\" "
             "onsubmit=\"return confirm('Overwrite every camera\\'s individual PERSON alert setting with "
-            "this one? Vehicle alert settings are left untouched. There is no way to see what each camera "
-            "currently has before this replaces it.');\">";
+            "this one? Vehicle and pet alert settings are left untouched. There is no way to see what "
+            "each camera currently has before this replaces it.');\">";
     html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"enabled\" checked> "
             "Alert on person detection</label>";
     html += "<p><button type=\"submit\">Apply person alerts to all cameras</button></p></form>";
     html += "<form method=\"POST\" action=\"/cameras/vehicle-alerts-all\" "
             "onsubmit=\"return confirm('Overwrite every camera\\'s individual VEHICLE alert setting with "
-            "this one? Person alert settings are left untouched. There is no way to see what each camera "
-            "currently has before this replaces it.');\">";
+            "this one? Person and pet alert settings are left untouched. There is no way to see what "
+            "each camera currently has before this replaces it.');\">";
     html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"enabled\" checked> "
             "Alert on vehicle detection</label>";
     html += "<p><button type=\"submit\">Apply vehicle alerts to all cameras</button></p></form>";
-    html += "<p class=\"hint\">Each button only overwrites its own setting (person or vehicle) across "
-            "every camera (both enabled and disabled ones) - the other stays whatever each camera already "
-            "has, so bulk-setting one never undoes a deliberate per-camera choice on the other. There's no "
-            "per-camera preview here, so check each camera's own Edit form afterward if you need to "
-            "confirm what landed. Only affects cameras whose own ONVIF AI actually distinguishes "
-            "person/vehicle detection - a plain motion sensor always alerts regardless of this.</p>";
+    html += "<form method=\"POST\" action=\"/cameras/pet-alerts-all\" "
+            "onsubmit=\"return confirm('Overwrite every camera\\'s individual PET alert setting with this "
+            "one? Person and vehicle alert settings are left untouched. There is no way to see what each "
+            "camera currently has before this replaces it.');\">";
+    // Unchecked by default, unlike the person/vehicle buttons above -
+    // matches CameraConfig::petAlertsEnabled's own opt-in-off default
+    // (a person/vehicle-only camera would otherwise start paging you for
+    // your own pet the moment this button gets clicked without looking).
+    html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"enabled\"> "
+            "Alert on pet (dog/cat) detection</label>";
+    html += "<p><button type=\"submit\">Apply pet alerts to all cameras</button></p></form>";
+    html += "<p class=\"hint\">Each button only overwrites its own setting (person, vehicle, or pet) "
+            "across every camera (both enabled and disabled ones) - the other two stay whatever each "
+            "camera already has, so bulk-setting one never undoes a deliberate per-camera choice on "
+            "another. There's no per-camera preview here, so check each camera's own Edit form afterward "
+            "if you need to confirm what landed. Person/vehicle only affects cameras whose own ONVIF AI "
+            "actually distinguishes that detection - a plain motion sensor always alerts regardless.</p>";
     html += "</fieldset>";
   }
 
@@ -1107,6 +1122,44 @@ String applyVehicleAlertsToAllCameras(PsychicRequest* request, std::vector<Camer
   return result;
 }
 
+// Same as applyPersonAlertsToAllCameras above, for petAlertsEnabled - see
+// its comment for why this is separate rather than one combined form.
+String applyPetAlertsToAllCameras(PsychicRequest* request, std::vector<CameraConfig>* liveCameras,
+                                   std::vector<CameraState>* liveStates) {
+  bool enabled = request->hasParam("enabled");
+
+  size_t cameraCount = loadCameras().size();
+  if (cameraCount == 0) return "No cameras configured - nothing to apply this to.";
+
+  bool saved = updateAllCameras([&](CameraConfig& c) { c.petAlertsEnabled = enabled; });
+  if (!saved) {
+    return "Failed to save - NVS write error (see Serial log). Pet alert settings were NOT changed for "
+           "any camera.";
+  }
+
+  std::vector<CameraConfig> cams = loadCameras();
+  size_t liveReloaded = 0;
+  if (liveCameras && liveStates) {
+    for (auto& c : cams) {
+      int idx = findLiveCameraIndex(liveCameras, c.name);
+      bool wasRunning = idx >= 0 && idx < (int)liveStates->size() && (*liveCameras)[idx].enabled;
+      if (wasRunning) {
+        requestLiveConfigReload((*liveStates)[idx], c);
+        liveReloaded++;
+      }
+    }
+  }
+
+  String result = "Pet alerts " + String(enabled ? "enabled" : "disabled") + " - applied to all " +
+      String(cams.size()) + " camera(s). Person/vehicle alert settings were left untouched.";
+  if (liveReloaded > 0) {
+    result += " " + String(liveReloaded) + " already-running camera(s) are reconnecting now with it.";
+  }
+  result += " Any camera not currently running (disabled, or added after this board's last boot) "
+            "needs a reboot to pick this up.";
+  return result;
+}
+
 // Does create one real, temporary subscription on the camera (same as the
 // real thing would) - not cleaned up afterward, so it just expires on its
 // own.
@@ -1240,22 +1293,24 @@ struct TestAlertTaskParams {
   CameraConfig cfg; // heap-copied snapshot - only cfg.name is actually read by sendTestAlert
   CameraState* st;  // NOT owned - must be the live CameraState (liveStates[idx]), see startTestAlertAsync's comment
   MotionDetectionKind kind;
+  bool isPetEvent;
 };
 
 static void testAlertTask(void* param) {
   TestAlertTaskParams* p = static_cast<TestAlertTaskParams*>(param);
   TestAlertResult r;
   r.cameraName = p->cfg.name;
-  r.ok = sendTestAlert(p->cfg, *p->st, r.detail, p->kind);
+  r.ok = sendTestAlert(p->cfg, *p->st, r.detail, p->kind, p->isPetEvent);
   delete p;
   g_testAlertJob.finish(r);
   vTaskDelete(nullptr);
 }
 
-BackgroundJobStartOutcome startTestAlertAsync(const CameraConfig& cfg, CameraState& st, MotionDetectionKind kind) {
+BackgroundJobStartOutcome startTestAlertAsync(const CameraConfig& cfg, CameraState& st, MotionDetectionKind kind,
+                                               bool isPetEvent) {
   if (!g_testAlertJob.tryStart()) return BackgroundJobStartOutcome::AlreadyRunning; // one at a time - a second click while one's in flight is a no-op
 
-  TestAlertTaskParams* params = new TestAlertTaskParams{cfg, &st, kind};
+  TestAlertTaskParams* params = new TestAlertTaskParams{cfg, &st, kind, isPetEvent};
   // Same stack size as the other camera background tasks above - comparable
   // work (one HTTP fetch, one or more TLS sends to Telegram).
   BaseType_t created = xTaskCreate(testAlertTask, "testAlert", 10240, params, tskIDLE_PRIORITY + 1, nullptr);

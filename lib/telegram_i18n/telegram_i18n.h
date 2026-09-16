@@ -65,11 +65,16 @@ String trMultiCameraDigest(TelegramLang lang, uint32_t count, const String& came
 // emoji/keyword a real Person/Vehicle detection caption would
 // (trMotionCaption) - the whole point being to verify a phone-side
 // notification automation (MacroDroid/Tasker) actually fires for that
-// specific kind, without waiting for a real detection. Still clearly
-// labeled "TEST ALERT"/"ALERTA DE TESTE" regardless of kind, so it's
-// never mistaken for a real one when reviewing chat history later.
+// specific kind, without waiting for a real detection. isPetEvent
+// (default false) is checked first, same precedence as trMotionCaption's
+// own isPetEvent/kind pair - Pet is a separate signal from
+// MotionDetectionKind, not one of its values, since a real pet detection
+// (camera.cpp's DogCatDetect handling) is independent of the
+// person/vehicle classification. Still clearly labeled "TEST ALERT"/
+// "ALERTA DE TESTE" regardless of kind/isPetEvent, so it's never mistaken
+// for a real one when reviewing chat history later.
 String trTestAlertCaption(TelegramLang lang, const String& cameraName, const String& timestamp,
-                           MotionDetectionKind kind = MotionDetectionKind::Generic);
+                           MotionDetectionKind kind = MotionDetectionKind::Generic, bool isPetEvent = false);
 
 // ---- System-message broadcasts (sendTelegramMessage's systemMessages recipients) ----
 

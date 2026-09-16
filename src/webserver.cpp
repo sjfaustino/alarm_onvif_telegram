@@ -746,11 +746,15 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
 
     // Anything unrecognized (including a missing/tampered param) falls
     // back to Generic - the same "least surprising default" this
-    // project's other free-text-to-enum parses use, not a validation error.
+    // project's other free-text-to-enum parses use, not a validation
+    // error. "pet" is a separate isPetEvent flag, not a MotionDetectionKind
+    // value - see sendTestAlert's own comment (telegram.h) for why.
     String kindParam = request->getParam("kind", "generic");
     MotionDetectionKind kind = MotionDetectionKind::Generic;
+    bool isPetEvent = false;
     if (kindParam == "person") kind = MotionDetectionKind::Person;
     else if (kindParam == "vehicle") kind = MotionDetectionKind::Vehicle;
+    else if (kindParam == "pet") isPetEvent = true;
 
     CameraConfig cfg;
     bool found = false;
@@ -781,7 +785,7 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
       // it must be the real, live CameraState, not a copy, since
       // sendTestAlert needs its actually-resolved snapshotUri/credentials.
       banner = backgroundJobBanner(
-          startTestAlertAsync(cfg, (*g_liveStates)[idx], kind),
+          startTestAlertAsync(cfg, (*g_liveStates)[idx], kind, isPetEvent),
           "Sending test alert in the background - reload this page in a moment to see the result.",
           "A test alert is already being sent in the background - reload in a moment to see its result.",
           "Could not start sending the test alert - the device is low on memory right now. Try again in "
@@ -849,6 +853,14 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
 
   server.on("/cameras/vehicle-alerts-all", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
     String result = applyVehicleAlertsToAllCameras(request, g_liveCameras, g_liveStates);
+    return response->send(
+        200, "text/html",
+        renderShell(Tab::Cameras, result, renderCamerasPanel(nullptr, false, g_liveCameras, g_liveStates))
+            .c_str());
+  });
+
+  server.on("/cameras/pet-alerts-all", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
+    String result = applyPetAlertsToAllCameras(request, g_liveCameras, g_liveStates);
     return response->send(
         200, "text/html",
         renderShell(Tab::Cameras, result, renderCamerasPanel(nullptr, false, g_liveCameras, g_liveStates))

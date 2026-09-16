@@ -114,12 +114,18 @@ void triggerTimelapseCapture(const CameraConfig& cfg, CameraState& st);
 // kind (default Generic) picks which trTestAlertCaption wording to send -
 // letting the dashboard button test the Person/Vehicle-specific
 // emoji/keyword a phone-side notification automation (MacroDroid/Tasker)
-// matches on, without waiting for a real detection of that kind. Purely
-// cosmetic (caption text only) - never touches CameraConfig::
-// personAlertsEnabled/vehicleAlertsEnabled, since this is an explicit
-// manual test, not a real detection subject to being muted.
+// matches on, without waiting for a real detection of that kind.
+// isPetEvent (default false) does the same for the Pet-specific
+// wording/emoji - a separate flag rather than a MotionDetectionKind
+// value, same split as the real alert path (triggerMotionAlert), and
+// checked first when both are set (matching trTestAlertCaption's own
+// precedence). Purely cosmetic (caption text only, and the stored
+// snapshot is still tagged SnapshotSource::Test regardless) - never
+// touches CameraConfig::personAlertsEnabled/vehicleAlertsEnabled/
+// petAlertsEnabled, since this is an explicit manual test, not a real
+// detection subject to being muted.
 bool sendTestAlert(const CameraConfig& cfg, CameraState& st, String& outDetail,
-                    MotionDetectionKind kind = MotionDetectionKind::Generic);
+                    MotionDetectionKind kind = MotionDetectionKind::Generic, bool isPetEvent = false);
 
 // Sends a message to every user with systemMessages enabled, composed
 // per-recipient by calling `compose(u.language)` - lets each recipient get

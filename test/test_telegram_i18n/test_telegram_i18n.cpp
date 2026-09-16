@@ -94,6 +94,21 @@ void test_trTestAlertCaption_person_and_vehicle_kinds(void) {
   TEST_ASSERT_TRUE(ptVehicle.indexOf("VE\xC3\x8D" "CULO") >= 0);
 }
 
+// isPetEvent must win over kind (same precedence as trMotionCaption's own
+// isPetEvent/kind pair) and embed the SAME "pet"/"PET" wording a real pet
+// detection's caption (trMotionCaption(isPetEvent=true)) would - not a
+// MotionDetectionKind value, since pet is a separate signal.
+void test_trTestAlertCaption_pet_event(void) {
+  String en = trTestAlertCaption(TelegramLang::English, "D01", "TS", MotionDetectionKind::Person, true);
+  TEST_ASSERT_TRUE(en.indexOf("TEST") >= 0);
+  TEST_ASSERT_TRUE(en.indexOf("PET") >= 0);
+  TEST_ASSERT_TRUE(en.indexOf("PERSON") < 0);
+
+  String pt = trTestAlertCaption(TelegramLang::Portuguese, "D01", "TS", MotionDetectionKind::Generic, true);
+  TEST_ASSERT_TRUE(pt.indexOf("TESTE") >= 0);
+  TEST_ASSERT_TRUE(pt.indexOf("ANIMAL") >= 0);
+}
+
 void test_trMultiCameraDigest_contains_count_and_list(void) {
   String en = trMultiCameraDigest(TelegramLang::English, 3, "D01, D02, D03");
   String pt = trMultiCameraDigest(TelegramLang::Portuguese, 3, "D01, D02, D03");
@@ -529,6 +544,7 @@ int main(int argc, char** argv) {
   RUN_TEST(test_trMotionCaption_pet_event_ignores_kind);
   RUN_TEST(test_trTestAlertCaption_contains_name_and_says_test);
   RUN_TEST(test_trTestAlertCaption_person_and_vehicle_kinds);
+  RUN_TEST(test_trTestAlertCaption_pet_event);
   RUN_TEST(test_trMultiCameraDigest_contains_count_and_list);
   RUN_TEST(test_trCameraOffline_contains_name_and_minutes);
   RUN_TEST(test_trCameraBackOnline);

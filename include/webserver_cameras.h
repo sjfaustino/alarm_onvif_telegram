@@ -89,6 +89,13 @@ String applyPersonAlertsToAllCameras(PsychicRequest* request, std::vector<Camera
 String applyVehicleAlertsToAllCameras(PsychicRequest* request, std::vector<CameraConfig>* liveCameras,
                                        std::vector<CameraState>* liveStates);
 
+// Same as applyPersonAlertsToAllCameras above, for petAlertsEnabled - see
+// its comment for why this is a separate function/button/route rather
+// than one combined form. Call this from the /cameras/pet-alerts-all
+// route handler.
+String applyPetAlertsToAllCameras(PsychicRequest* request, std::vector<CameraConfig>* liveCameras,
+                                   std::vector<CameraState>* liveStates);
+
 // Runs a live GetCapabilities -> GetServiceCapabilities/GetEventProperties
 // -> GetProfiles/GetSnapshotUri -> CreatePullPointSubscription sequence
 // against cfg without touching NVS - see the .cpp for the full rationale.
@@ -209,23 +216,25 @@ String renderCameraDiscoveryStatus();
 // or more TLS sends to Telegram) work.
 // ============================================================
 
-// Starts sendTestAlert(cfg, st, ..., kind) on a background FreeRTOS task
-// instead of the calling task. A no-op (doesn't start a second
-// overlapping run, same "one at a time" rule test-all/discovery/test-
-// connection already follow) if one is already in progress - the return
-// value tells the /cameras/test-alert route handler which of the three
-// outcomes happened, for an accurate banner instead of always assuming
-// success. cfg is heap-copied (freed by the task) - safe to pass a local
-// copy. st is taken by reference, NOT copied: it must be the actual live
-// CameraState for this camera (liveStates[idx]), since sendTestAlert
-// reads its real, already-resolved snapshotUri and credentials - safe to
-// hold a pointer to across the task's lifetime since liveStates is sized
-// once at boot and never freed (same assumption every other cross-task
-// CameraState pointer in this project already relies on). kind (default
-// Generic) picks which Person/Vehicle/plain wording the dashboard's kind
+// Starts sendTestAlert(cfg, st, ..., kind, isPetEvent) on a background
+// FreeRTOS task instead of the calling task. A no-op (doesn't start a
+// second overlapping run, same "one at a time" rule test-all/discovery/
+// test-connection already follow) if one is already in progress - the
+// return value tells the /cameras/test-alert route handler which of the
+// three outcomes happened, for an accurate banner instead of always
+// assuming success. cfg is heap-copied (freed by the task) - safe to pass
+// a local copy. st is taken by reference, NOT copied: it must be the
+// actual live CameraState for this camera (liveStates[idx]), since
+// sendTestAlert reads its real, already-resolved snapshotUri and
+// credentials - safe to hold a pointer to across the task's lifetime
+// since liveStates is sized once at boot and never freed (same
+// assumption every other cross-task CameraState pointer in this project
+// already relies on). kind (default Generic) and isPetEvent (default
+// false) pick which Person/Vehicle/Pet/plain wording the dashboard's kind
 // selector chose - see sendTestAlert's own comment (telegram.h).
 BackgroundJobStartOutcome startTestAlertAsync(const CameraConfig& cfg, CameraState& st,
-                                               MotionDetectionKind kind = MotionDetectionKind::Generic);
+                                               MotionDetectionKind kind = MotionDetectionKind::Generic,
+                                               bool isPetEvent = false);
 
 // Renders the current Send-Test-Alert status: "sending in the background"
 // while one is in progress, the last completed run's result once one
