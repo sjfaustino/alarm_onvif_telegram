@@ -9,6 +9,7 @@
 #include <WiFi.h>
 #include <vector>
 #include <cstring>
+#include <algorithm>
 
 void cameraStateInit(CameraState& st) {
   if (!st.stateMutex) st.stateMutex = xSemaphoreCreateMutex();
@@ -186,6 +187,52 @@ static String scanKnownEventTopics(const String& response) {
   return found;
 }
 
+// Every element in xml carrying the WS-Topics topic="true" attribute
+// (ONVIF's own standard way of marking a TopicSet leaf as a real,
+// subscribable topic, not just a grouping node above it - e.g.
+// <tnsaxis:FireDetection wstop:topic="true">) - just its own local
+// (unprefixed) tag name, e.g. "FireDetection". Doesn't need to understand
+// the tree's nesting/namespaces to do that: for each topic="true" marker
+// found, it only reads backward to that ONE element's own opening tag -
+// see scanKnownEventTopics' own comment for why this project stops short
+// of a full TopicSet parse otherwise. Best-effort like everything else in
+// this file - a vendor that doesn't set this attribute at all simply
+// yields nothing extra here, same as if this function didn't exist.
+// Unique names only, in order of first appearance.
+static std::vector<String> findAllTopicElementNames(const String& xml) {
+  std::vector<String> names;
+  int searchFrom = 0;
+  while (true) {
+    int viaDouble = xml.indexOf("topic=\"true\"", searchFrom);
+    int viaSingle = xml.indexOf("topic='true'", searchFrom);
+    int markerPos = (viaDouble < 0) ? viaSingle : (viaSingle < 0 ? viaDouble : std::min(viaDouble, viaSingle));
+    if (markerPos < 0) break;
+
+    int tagStart = xml.lastIndexOf('<', markerPos);
+    if (tagStart < 0) { searchFrom = markerPos + 1; continue; }
+    int nameStart = tagStart + 1;
+    int nameEnd = nameStart;
+    while (nameEnd < (int)xml.length()) {
+      char c = xml[nameEnd];
+      if (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '>' || c == '/') break;
+      nameEnd++;
+    }
+    String fullName = xml.substring(nameStart, nameEnd);
+    int colon = fullName.indexOf(':');
+    String localName = colon >= 0 ? fullName.substring(colon + 1) : fullName;
+
+    if (localName.length() > 0) {
+      bool alreadySeen = false;
+      for (auto& n : names) {
+        if (n == localName) { alreadySeen = true; break; }
+      }
+      if (!alreadySeen) names.push_back(localName);
+    }
+    searchFrom = markerPos + 1;
+  }
+  return names;
+}
+
 bool cameraGetEventProperties(const CameraConfig& cfg, CameraState& st, String* outTopics) {
   String action = "http://www.onvif.org/ver10/events/wsdl/EventPortType/GetEventPropertiesRequest";
   String body = "<tev:GetEventProperties/>";
@@ -197,6 +244,29 @@ bool cameraGetEventProperties(const CameraConfig& cfg, CameraState& st, String* 
     return false;
   }
   if (outTopics) *outTopics = scanKnownEventTopics(response);
+
+  // Logged (not surfaced on the dashboard - this is a hint for whoever
+  // maintains the firmware, not an end-user-actionable status) so a topic
+  // this project doesn't act on yet - "FireDetection", a line-crossing
+  // detector, whatever a given camera's own AI happens to support - shows
+  // up somewhere a developer would actually see it, instead of silently
+  // being ignored forever. Only the ones NOT already in kKnownEventTopics
+  // are worth mentioning.
+  std::vector<String> allTopicNames = findAllTopicElementNames(response);
+  String unusedTopics;
+  for (auto& name : allTopicNames) {
+    bool known = false;
+    for (const char* k : kKnownEventTopics) {
+      if (name == k) { known = true; break; }
+    }
+    if (known) continue;
+    if (unusedTopics.length() > 0) unusedTopics += ", ";
+    unusedTopics += name;
+  }
+  if (unusedTopics.length() > 0) {
+    logEvent(cfg.name + ": event schema also advertises " + unusedTopics +
+             " - not used by this firmware yet");
+  }
   return true;
 }
 
