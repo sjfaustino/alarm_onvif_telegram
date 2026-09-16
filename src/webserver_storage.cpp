@@ -28,6 +28,10 @@ String renderStoragePanel() {
     html += "<tr><th>Card type</th><td>" + htmlEscape(status.cardTypeName) + "</td></tr>";
     html += "<tr><th>Used</th><td>" + String(usedMB, 1) + " MB / " + String(totalMB, 1) + " MB</td></tr>";
     html += "</table>";
+    html += "<p class=\"hint\">Snapshots are filed under /snapshots/&lt;year&gt;/&lt;month&gt;/&lt;day&gt;/"
+            "&lt;camera&gt;/ - browsable by date if you plug the card into a computer. History written "
+            "before this layout existed stays in its original flat /snapshots/&lt;camera&gt;/ folder "
+            "rather than being moved - both are read normally either way.</p>";
   }
 
   html += "<fieldset><legend>Enable</legend>";

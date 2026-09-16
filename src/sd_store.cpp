@@ -12,6 +12,9 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 #include <algorithm>
+#include <functional>
+#include <map>
+#include <set>
 #include <time.h>
 
 static const char* NVS_NAMESPACE = "sdstore";
@@ -114,9 +117,9 @@ void initSdStorage() {
   Serial.printf("[sd_store] SD card mounted: %.1fMB used / %.1fMB total.\n",
                 (double)SD.usedBytes() / (1024.0 * 1024.0), (double)SD.totalBytes() / (1024.0 * 1024.0));
 
-  // Bounded (one file per existing camera directory), unlike the full
-  // on-demand check - see checkNewestSnapshots' own comment for why this
-  // one is safe to run unconditionally here. Cached, not alerted on
+  // Bounded (one file per distinct camera directory found), unlike the
+  // full on-demand check - see checkNewestSnapshots' own comment for why
+  // this one is safe to run unconditionally here. Cached, not alerted on
   // directly - see lastBootCheckResult()'s own comment for why.
   g_lastBootCheckResult = checkNewestSnapshots();
 }
@@ -178,40 +181,177 @@ static void markSdFailed(const char* reason) {
   sendTelegramMessage([reasonStr](TelegramLang lang) { return trSdFailure(lang, reasonStr); });
 }
 
-// Caller must hold g_sdMutex. Lists dirName's own files (basenames only,
-// not full paths - see FS.h's File::name() vs path()), unsorted.
-static std::vector<SnapshotFileInfo> listDirFiles(const String& dirName) {
-  std::vector<SnapshotFileInfo> files;
-  File dir = SD.open(dirName);
-  if (!dir || !dir.isDirectory()) return files;
+// ============================================================
+// Directory layout: /snapshots/<YYYY>/<MM>/<DD>/<camera>/<file>.jpg -
+// lets a card be browsed by date on a computer, not just one giant
+// per-camera folder. Existing history written before this layout existed
+// (a flat /snapshots/<camera>/<file>.jpg) is deliberately left exactly
+// where it is - no migration - so every function below that needs "this
+// camera's whole file list" has to discover files regardless of how deep
+// they're nested, not assume a fixed depth. walkAllFiles is the one place
+// that recursion lives; everything else is built on top of it.
+// ============================================================
 
+// Recursively visits every FILE (not directory) anywhere under dirPath,
+// regardless of nesting depth - handles the old flat <camera>/ layout,
+// the new <Y>/<M>/<D>/<camera>/ layout, and any mix of the two on the
+// same card transparently, since it never assumes a fixed depth. `visit`
+// gets the file's full path, its bare filename, its size, and its
+// immediate parent directory's own name (e.g. "D05-Traseiras" for a file
+// under either layout) - callers use that last one to tell which camera a
+// file belongs to without caring how deep it was found. Caller must hold
+// g_sdMutex.
+static void walkAllFiles(const String& dirPath,
+                          const std::function<void(const String& filePath, const String& fileName, uint64_t size,
+                                                    const String& parentDirName)>& visit) {
+  File dir = SD.open(dirPath);
+  if (!dir || !dir.isDirectory()) {
+    if (dir) dir.close();
+    return;
+  }
+
+  // Collect entries before recursing/visiting - same "don't mutate/rely on
+  // FS state out from under an in-progress openNextFile() walk" caution
+  // this project already applies wherever a walk's results feed a delete
+  // (this one doesn't delete anything itself, but every caller that does
+  // built on top of it already collects its own full list before acting).
+  struct Entry {
+    String name;
+    bool isDir;
+    uint64_t size;
+  };
+  std::vector<Entry> entries;
   File entry = dir.openNextFile();
   while (entry) {
-    if (!entry.isDirectory()) {
-      SnapshotFileInfo info;
-      info.name = entry.name();
-      info.size = (uint64_t)entry.size();
-      files.push_back(info);
-    }
+    entries.push_back({String(entry.name()), entry.isDirectory(), (uint64_t)entry.size()});
     entry.close();
     entry = dir.openNextFile();
   }
   dir.close();
+
+  String dirName = dirPath.substring(dirPath.lastIndexOf('/') + 1);
+  for (auto& e : entries) {
+    String childPath = dirPath + "/" + e.name;
+    if (e.isDir) {
+      walkAllFiles(childPath, visit);
+    } else {
+      visit(childPath, e.name, e.size, dirName);
+    }
+  }
+}
+
+// Every stored file belonging to cameraDirName, wherever it lives (any
+// Year/Month/Day folder, or the legacy flat layout) - the one place every
+// per-camera operation below (write/prune, count, read, retention) gets
+// its file list from, so none of them need their own opinion about the
+// directory layout. Caller must hold g_sdMutex.
+static std::vector<SnapshotFileInfo> listAllFilesForCamera(const String& cameraDirName) {
+  std::vector<SnapshotFileInfo> files;
+  walkAllFiles(SNAPSHOTS_ROOT, [&](const String& filePath, const String& fileName, uint64_t size,
+                                    const String& parentDirName) {
+    if (parentDirName != cameraDirName) return;
+    SnapshotFileInfo info;
+    info.name = fileName;
+    info.size = size;
+    info.path = filePath;
+    files.push_back(info);
+  });
   return files;
 }
 
-// Caller must hold g_sdMutex. Ensures dirName exists and has enough room
-// (free-space reserve + per-camera file-count ceiling, config.h) for one
-// more newFileSize-byte file, pruning this camera's own oldest files
-// first if not - capped per call via SD_PRUNE_MAX_FILES_PER_WRITE (see
+// Same as listAllFilesForCamera above, sorted newest-first (age=0 is index
+// 0) - shared by readSdSnapshot/sdSnapshotSourceAt/sdSnapshotSourcesAll,
+// all of which need this camera's files in that order. Caller must hold
+// g_sdMutex.
+static std::vector<SnapshotFileInfo> listCameraFilesNewestFirst(const String& cameraDirName) {
+  std::vector<SnapshotFileInfo> files = listAllFilesForCamera(cameraDirName);
+  std::sort(files.begin(), files.end(), [](const SnapshotFileInfo& a, const SnapshotFileInfo& b) {
+    return a.name > b.name; // filenames are timestamp-prefixed - newest-first
+  });
+  return files;
+}
+
+// Removes dirPath only if it's currently empty. Returns whether it was
+// actually removed - cleanupEmptyAncestors below uses that to stop
+// walking upward as soon as a non-empty ancestor is found (nothing above
+// it can be empty either, since it still contains that directory).
+// Silently no-ops (false) if dirPath doesn't exist or can't be opened -
+// this is tidiness, never worth failing the caller's own delete over.
+static bool rmdirIfEmpty(const String& dirPath) {
+  File dir = SD.open(dirPath);
+  if (!dir || !dir.isDirectory()) {
+    if (dir) dir.close();
+    return false;
+  }
+  File entry = dir.openNextFile();
+  bool empty = !entry;
+  if (entry) entry.close();
+  dir.close();
+  return empty && SD.rmdir(dirPath);
+}
+
+// After deleting filePath, removes each ancestor directory that's now
+// empty, walking upward until one isn't (or SNAPSHOTS_ROOT itself is
+// reached - never removed). Handles both the old flat <camera>/ layout
+// (one ancestor above the root) and the new <Y>/<M>/<D>/<camera>/ layout
+// (four) without needing to know which shape it's looking at - it just
+// keeps walking up while directories keep turning out empty. Otherwise a
+// card that's been pruning/expiring daily for a year would accumulate
+// hundreds of empty day folders per camera, forever.
+static void cleanupEmptyAncestors(const String& filePath) {
+  String root = SNAPSHOTS_ROOT;
+  String dirPath = filePath.substring(0, filePath.lastIndexOf('/'));
+  while (dirPath.length() > root.length() && dirPath.startsWith(root)) {
+    if (!rmdirIfEmpty(dirPath)) break;
+    dirPath = dirPath.substring(0, dirPath.lastIndexOf('/'));
+  }
+}
+
+// SD.mkdir() only reliably creates one path level at a time on ESP32's FS
+// wrapper - unlike a shell's `mkdir -p`, there's no guarantee it walks
+// intermediate segments itself. Creates each of dirPath's segments in
+// turn, tolerating one that already exists, so the whole nested
+// Year/Month/Day/Camera path always ends up present regardless of which
+// prefix already did.
+static bool ensureDirPath(const String& dirPath) {
+  int start = 1; // dirPath always starts with "/" (SNAPSHOTS_ROOT does)
+  int slash;
+  while ((slash = dirPath.indexOf('/', start)) >= 0) {
+    String prefix = dirPath.substring(0, slash);
+    if (!SD.exists(prefix) && !SD.mkdir(prefix)) return false;
+    start = slash + 1;
+  }
+  if (!SD.exists(dirPath) && !SD.mkdir(dirPath)) return false;
+  return true;
+}
+
+// Today's Year/Month/Day folder for cameraDirName - where a snapshot
+// captured right now belongs. Local time, matching buildSnapshotFilename's
+// own localtime_r below.
+static String buildCameraDayDir(const String& cameraDirName) {
+  time_t now; time(&now);
+  struct tm tmStruct; localtime_r(&now, &tmStruct);
+  char buf[16];
+  strftime(buf, sizeof(buf), "%Y/%m/%d", &tmStruct);
+  return String(SNAPSHOTS_ROOT) + "/" + String(buf) + "/" + cameraDirName;
+}
+
+// Caller must hold g_sdMutex. Ensures dayDir (this camera's Year/Month/Day
+// folder for a snapshot captured right now) exists and there's enough
+// room (free-space reserve + per-camera file-count ceiling, config.h) for
+// one more newFileSize-byte file, pruning this camera's own oldest files
+// first if not - gathered from EVERY Year/Month/Day folder it has any
+// files in (listAllFilesForCamera), not just dayDir, so the per-camera
+// cap is still enforced globally, not reset to zero every time the date
+// rolls over. Capped per call via SD_PRUNE_MAX_FILES_PER_WRITE (see
 // filesToPrune's own comment on why: bounds how long this holds the
 // mutex, blocking every other camera's own writes, during one prune-then-
-// write pass). Returns false only if the directory doesn't exist and
-// couldn't be created.
-static bool ensureDirAndPrune(const String& dirName, size_t newFileSize) {
-  if (!SD.exists(dirName) && !SD.mkdir(dirName)) return false;
+// write pass). Returns false only if dayDir doesn't exist and couldn't be
+// created.
+static bool ensureDirAndPrune(const String& cameraDirName, const String& dayDir, size_t newFileSize) {
+  if (!ensureDirPath(dayDir)) return false;
 
-  std::vector<SnapshotFileInfo> files = listDirFiles(dirName);
+  std::vector<SnapshotFileInfo> files = listAllFilesForCamera(cameraDirName);
   std::sort(files.begin(), files.end(), [](const SnapshotFileInfo& a, const SnapshotFileInfo& b) {
     return a.name < b.name; // filenames are timestamp-prefixed - this sorts oldest-first
   });
@@ -230,21 +370,22 @@ static bool ensureDirAndPrune(const String& dirName, size_t newFileSize) {
   size_t pruneCount = std::max(pruneForSpace, pruneForCount);
 
   for (size_t i = 0; i < pruneCount && i < files.size(); i++) {
-    String fullPath = dirName + "/" + files[i].name;
-    if (!SD.remove(fullPath)) {
-      Serial.printf("[sd_store] Could not delete %s while pruning.\n", fullPath.c_str());
+    if (!SD.remove(files[i].path)) {
+      Serial.printf("[sd_store] Could not delete %s while pruning.\n", files[i].path.c_str());
+    } else {
+      cleanupEmptyAncestors(files[i].path);
     }
   }
   return true;
 }
 
 // "<YYYYMMDD-HHMMSS>_<millis>_<source>.jpg" - sortable (chronological as a
-// plain string, matching how listDirFiles/ensureDirAndPrune rely on
-// filename order - the trailing "_<source>" never affects that ordering,
-// since millis() already guarantees uniqueness before it's ever compared),
-// and unique even for several shots within the same second (a motion
-// burst can fetch multiple snapshots faster than one second apart, but
-// never faster than a millisecond apart in practice). The source suffix
+// plain string, matching how every sort in this file relies on filename
+// order - the trailing "_<source>" never affects that ordering, since
+// millis() already guarantees uniqueness before it's ever compared), and
+// unique even for several shots within the same second (a motion burst
+// can fetch multiple snapshots faster than one second apart, but never
+// faster than a millisecond apart in practice). The source suffix
 // (snapshot_source.h) is what parseSnapshotSourceFromFilename below reads
 // back for the Gallery/Preview column - encoded into the filename rather
 // than a separate metadata file, so it survives a reboot for free and
@@ -272,28 +413,18 @@ static SnapshotSource parseSnapshotSourceFromFilename(const String& name) {
   return snapshotSourceFromLabel(name.substring(secondUnderscore + 1, dot));
 }
 
-// Shared by readSdSnapshot/sdSnapshotSourceAt below - both need this
-// camera's files newest-first so age=0 means "most recent." Caller must
-// hold g_sdMutex.
-static std::vector<SnapshotFileInfo> listSnapshotsNewestFirst(const String& dirName) {
-  std::vector<SnapshotFileInfo> files = listDirFiles(dirName);
-  std::sort(files.begin(), files.end(), [](const SnapshotFileInfo& a, const SnapshotFileInfo& b) {
-    return a.name > b.name; // newest-first, so age=0 is index 0
-  });
-  return files;
-}
-
 bool writeSdSnapshot(const CameraConfig& cfg, uint8_t* jpg, size_t jpgLen, SnapshotSource source) {
   if (!sdActive()) { free(jpg); return false; }
 
-  String dirName = String(SNAPSHOTS_ROOT) + "/" + sanitizeCameraDirName(cfg.name);
+  String cameraDirName = sanitizeCameraDirName(cfg.name);
+  String dayDir = buildCameraDayDir(cameraDirName);
   bool ok;
   String filePath;
 
   xSemaphoreTake(g_sdMutex, portMAX_DELAY);
-  ok = ensureDirAndPrune(dirName, jpgLen);
+  ok = ensureDirAndPrune(cameraDirName, dayDir, jpgLen);
   if (ok) {
-    filePath = dirName + "/" + buildSnapshotFilename(source);
+    filePath = dayDir + "/" + buildSnapshotFilename(source);
     File f = SD.open(filePath, FILE_WRITE);
     if (f) {
       size_t written = f.write(jpg, jpgLen);
@@ -301,7 +432,7 @@ bool writeSdSnapshot(const CameraConfig& cfg, uint8_t* jpg, size_t jpgLen, Snaps
       ok = (written == jpgLen);
       // A short write (card nearly full, power dip, bus glitch) leaves a
       // truncated file that would otherwise sit in this camera's
-      // directory indistinguishable from a real snapshot - listDirFiles/
+      // directory indistinguishable from a real snapshot - listAllFilesForCamera/
       // sdSnapshotCount count it, and it's a nonzero size so neither
       // checkSnapshotStorage nor checkNewestSnapshots' readability check
       // (which only catches f.size()==0) would ever flag it. It would go
@@ -317,7 +448,7 @@ bool writeSdSnapshot(const CameraConfig& cfg, uint8_t* jpg, size_t jpgLen, Snaps
 
   if (!ok) {
     Serial.printf("[%s] SD snapshot write failed (%s).\n", cfg.name.c_str(),
-                  filePath.length() > 0 ? filePath.c_str() : dirName.c_str());
+                  filePath.length() > 0 ? filePath.c_str() : dayDir.c_str());
     markSdFailed("write");
   }
   free(jpg);
@@ -326,28 +457,27 @@ bool writeSdSnapshot(const CameraConfig& cfg, uint8_t* jpg, size_t jpgLen, Snaps
 
 size_t sdSnapshotCount(const CameraConfig& cfg) {
   if (!sdActive()) return 0;
-  String dirName = String(SNAPSHOTS_ROOT) + "/" + sanitizeCameraDirName(cfg.name);
+  String cameraDirName = sanitizeCameraDirName(cfg.name);
 
   xSemaphoreTake(g_sdMutex, portMAX_DELAY);
-  size_t count = listDirFiles(dirName).size();
+  size_t count = listAllFilesForCamera(cameraDirName).size();
   xSemaphoreGive(g_sdMutex);
   return count;
 }
 
 bool readSdSnapshot(const CameraConfig& cfg, size_t age, uint8_t** outBuf, size_t* outLen) {
   if (!sdActive()) return false;
-  String dirName = String(SNAPSHOTS_ROOT) + "/" + sanitizeCameraDirName(cfg.name);
+  String cameraDirName = sanitizeCameraDirName(cfg.name);
 
   xSemaphoreTake(g_sdMutex, portMAX_DELAY);
-  std::vector<SnapshotFileInfo> files = listSnapshotsNewestFirst(dirName);
+  std::vector<SnapshotFileInfo> files = listCameraFilesNewestFirst(cameraDirName);
 
   if (age >= files.size()) {
     xSemaphoreGive(g_sdMutex);
     return false;
   }
 
-  String filePath = dirName + "/" + files[age].name;
-  File f = SD.open(filePath, FILE_READ);
+  File f = SD.open(files[age].path, FILE_READ);
   if (!f) {
     xSemaphoreGive(g_sdMutex);
     markSdFailed("read");
@@ -374,10 +504,10 @@ bool readSdSnapshot(const CameraConfig& cfg, size_t age, uint8_t** outBuf, size_
 
 SnapshotSource sdSnapshotSourceAt(const CameraConfig& cfg, size_t age) {
   if (!sdActive()) return SnapshotSource::Motion;
-  String dirName = String(SNAPSHOTS_ROOT) + "/" + sanitizeCameraDirName(cfg.name);
+  String cameraDirName = sanitizeCameraDirName(cfg.name);
 
   xSemaphoreTake(g_sdMutex, portMAX_DELAY);
-  std::vector<SnapshotFileInfo> files = listSnapshotsNewestFirst(dirName);
+  std::vector<SnapshotFileInfo> files = listCameraFilesNewestFirst(cameraDirName);
   SnapshotSource source = SnapshotSource::Motion;
   if (age < files.size()) source = parseSnapshotSourceFromFilename(files[age].name);
   xSemaphoreGive(g_sdMutex);
@@ -387,10 +517,10 @@ SnapshotSource sdSnapshotSourceAt(const CameraConfig& cfg, size_t age) {
 std::vector<SnapshotSource> sdSnapshotSourcesAll(const CameraConfig& cfg) {
   std::vector<SnapshotSource> sources;
   if (!sdActive()) return sources;
-  String dirName = String(SNAPSHOTS_ROOT) + "/" + sanitizeCameraDirName(cfg.name);
+  String cameraDirName = sanitizeCameraDirName(cfg.name);
 
   xSemaphoreTake(g_sdMutex, portMAX_DELAY);
-  std::vector<SnapshotFileInfo> files = listSnapshotsNewestFirst(dirName);
+  std::vector<SnapshotFileInfo> files = listCameraFilesNewestFirst(cameraDirName);
   xSemaphoreGive(g_sdMutex);
 
   // Parsing filenames doesn't need the SD mutex - only the directory
@@ -400,33 +530,55 @@ std::vector<SnapshotSource> sdSnapshotSourcesAll(const CameraConfig& cfg) {
   return sources;
 }
 
+// Recursively deletes every file and subdirectory under dirPath, then
+// dirPath itself - used by eraseAllSnapshots below for a full wipe.
+// Doesn't need to know whether it's looking at the old flat <camera>/
+// layout, the new <Y>/<M>/<D>/<camera>/ layout, or a mix of both on the
+// same card (the expected real-world case after this layout shipped,
+// since existing history was deliberately left in place) - it just
+// removes whatever's actually there, at whatever depth.
+static bool removeTreeRecursive(const String& dirPath) {
+  File dir = SD.open(dirPath);
+  if (!dir || !dir.isDirectory()) {
+    if (dir) dir.close();
+    return true; // doesn't exist - nothing to do
+  }
+
+  struct Entry {
+    String name;
+    bool isDir;
+  };
+  std::vector<Entry> entries;
+  File entry = dir.openNextFile();
+  while (entry) {
+    entries.push_back({String(entry.name()), entry.isDirectory()});
+    entry.close();
+    entry = dir.openNextFile();
+  }
+  dir.close();
+
+  bool ok = true;
+  for (auto& e : entries) {
+    String childPath = dirPath + "/" + e.name;
+    if (e.isDir) {
+      if (!removeTreeRecursive(childPath)) ok = false;
+    } else if (!SD.remove(childPath)) {
+      ok = false;
+    }
+  }
+  if (!SD.rmdir(dirPath)) ok = false;
+  return ok;
+}
+
 bool eraseAllSnapshots() {
   if (!sdActive()) return false;
 
   xSemaphoreTake(g_sdMutex, portMAX_DELAY);
-  bool ok = true;
-  File root = SD.open(SNAPSHOTS_ROOT);
-  if (root && root.isDirectory()) {
-    File camDir = root.openNextFile();
-    while (camDir) {
-      if (camDir.isDirectory()) {
-        String camDirPath = String(SNAPSHOTS_ROOT) + "/" + String(camDir.name());
-        // Collect filenames before deleting - removing entries out from
-        // under an in-progress openNextFile() walk on this FS layer isn't
-        // documented as safe, so this project doesn't rely on it.
-        std::vector<SnapshotFileInfo> files = listDirFiles(camDirPath);
-        for (auto& file : files) {
-          if (!SD.remove(camDirPath + "/" + file.name)) ok = false;
-        }
-        camDir.close();
-        if (!SD.rmdir(camDirPath)) ok = false;
-      } else {
-        camDir.close();
-      }
-      camDir = root.openNextFile();
-    }
-    root.close();
-  }
+  // removeTreeRecursive above just deleted SNAPSHOTS_ROOT itself along
+  // with everything under it - put the empty root back immediately rather
+  // than leaving it to the next write's own ensureDirPath to notice.
+  bool ok = removeTreeRecursive(SNAPSHOTS_ROOT);
+  if (ok) ok = SD.mkdir(SNAPSHOTS_ROOT);
   xSemaphoreGive(g_sdMutex);
 
   Serial.printf("[sd_store] Erase all snapshot history: %s.\n", ok ? "done" : "completed with errors");
@@ -440,46 +592,32 @@ SnapshotStorageCheckResult checkSnapshotStorage() {
   result.ok = true;
 
   xSemaphoreTake(g_sdMutex, portMAX_DELAY);
-  File root = SD.open(SNAPSHOTS_ROOT);
-  if (root && root.isDirectory()) {
-    File camDir = root.openNextFile();
-    while (camDir) {
-      if (camDir.isDirectory()) {
-        result.directoriesChecked++;
-        String camDirPath = String(SNAPSHOTS_ROOT) + "/" + String(camDir.name());
-        camDir.close();
-        std::vector<SnapshotFileInfo> files = listDirFiles(camDirPath);
-        for (auto& file : files) {
-          result.filesChecked++;
-          File f = SD.open(camDirPath + "/" + file.name, FILE_READ);
-          if (!f || f.size() == 0) {
-            result.unreadableFiles++;
-            result.ok = false;
-          } else {
-            result.totalBytes += f.size();
-          }
-          if (f) f.close();
-          // History is unbounded by design (that's the whole point of SD
-          // over the fixed-size PSRAM ring) - this walk can run long
-          // enough on a large card to trip loop()'s 90s task watchdog
-          // (main.cpp's initWatchdog()) when called from there (the
-          // automatic periodic check, sdCheckIntervalHours). A watchdog
-          // panic reboots immediately, without waitForSdIdle()'s
-          // in-flight-operation wait - exactly the "reboot cuts off a FAT
-          // operation mid-write" corruption risk that function exists to
-          // prevent. No-op (harmless) when called from the Storage page's
-          // "check storage" button instead, which runs on PsychicHttp's
-          // own task - never subscribed to this watchdog in the first
-          // place.
-          esp_task_wdt_reset();
-        }
-      } else {
-        camDir.close();
-      }
-      camDir = root.openNextFile();
+  std::set<String> dirsSeen; // distinct leaf directories actually holding files - what "directoriesChecked" counts
+  walkAllFiles(SNAPSHOTS_ROOT, [&](const String& filePath, const String&, uint64_t, const String&) {
+    dirsSeen.insert(filePath.substring(0, filePath.lastIndexOf('/')));
+    result.filesChecked++;
+    File f = SD.open(filePath, FILE_READ);
+    if (!f || f.size() == 0) {
+      result.unreadableFiles++;
+      result.ok = false;
+    } else {
+      result.totalBytes += f.size();
     }
-    root.close();
-  }
+    if (f) f.close();
+    // History is unbounded by design (that's the whole point of SD over
+    // the fixed-size PSRAM ring) - this walk can run long enough on a
+    // large card to trip loop()'s 90s task watchdog (main.cpp's
+    // initWatchdog()) when called from there (the automatic periodic
+    // check, sdCheckIntervalHours). A watchdog panic reboots immediately,
+    // without waitForSdIdle()'s in-flight-operation wait - exactly the
+    // "reboot cuts off a FAT operation mid-write" corruption risk that
+    // function exists to prevent. No-op (harmless) when called from the
+    // Storage page's "check storage" button instead, which runs on
+    // PsychicHttp's own task - never subscribed to this watchdog in the
+    // first place.
+    esp_task_wdt_reset();
+  });
+  result.directoriesChecked = dirsSeen.size();
   xSemaphoreGive(g_sdMutex);
 
   Serial.printf("[sd_store] Storage check: %u director(ies), %u file(s), %u unreadable.\n",
@@ -519,17 +657,29 @@ SnapshotRetentionResult enforceSnapshotRetention(const std::vector<CameraConfig>
     uint16_t effectiveDays = cameraRetentionDays != 0 ? cameraRetentionDays : globalRetentionDays;
     if (effectiveDays == 0) continue; // this camera's effective setting is "keep forever"
 
-    String dirName = String(SNAPSHOTS_ROOT) + "/" + sanitizeCameraDirName(cfg.name);
+    String cameraDirName = sanitizeCameraDirName(cfg.name);
     result.camerasSwept++;
 
     xSemaphoreTake(g_sdMutex, portMAX_DELAY);
-    std::vector<SnapshotFileInfo> files = listDirFiles(dirName);
-    std::vector<String> toDelete = filesToExpire(files, effectiveDays, now);
-    for (auto& name : toDelete) {
-      if (SD.remove(dirName + "/" + name)) {
-        result.filesDeleted++;
-      } else {
-        Serial.printf("[sd_store] Retention: could not delete %s.\n", (dirName + "/" + name).c_str());
+    std::vector<SnapshotFileInfo> files = listAllFilesForCamera(cameraDirName);
+    std::sort(files.begin(), files.end(), [](const SnapshotFileInfo& a, const SnapshotFileInfo& b) {
+      return a.name < b.name; // oldest-first, same as filesToExpire's own expectation
+    });
+    std::vector<String> toDeleteNames = filesToExpire(files, effectiveDays, now);
+    for (auto& name : toDeleteNames) {
+      // Names are unique per camera (timestamp+millis-based), so this
+      // always finds exactly the right file regardless of which
+      // Year/Month/Day folder (or the legacy flat layout) it's actually
+      // stored under.
+      for (auto& f : files) {
+        if (f.name != name) continue;
+        if (SD.remove(f.path)) {
+          result.filesDeleted++;
+          cleanupEmptyAncestors(f.path);
+        } else {
+          Serial.printf("[sd_store] Retention: could not delete %s.\n", f.path.c_str());
+        }
+        break;
       }
       // Same defensive per-file watchdog reset as checkSnapshotStorage's
       // own walk above - harmless no-op when called from a task never
@@ -558,40 +708,37 @@ QuickSnapshotCheckResult checkNewestSnapshots() {
   result.ok = true;
 
   xSemaphoreTake(g_sdMutex, portMAX_DELAY);
-  File root = SD.open(SNAPSHOTS_ROOT);
-  if (root && root.isDirectory()) {
-    File camDir = root.openNextFile();
-    while (camDir) {
-      if (camDir.isDirectory()) {
-        result.directoriesChecked++;
-        String camDirPath = String(SNAPSHOTS_ROOT) + "/" + String(camDir.name());
-        camDir.close();
-
-        std::vector<SnapshotFileInfo> files = listDirFiles(camDirPath);
-        if (!files.empty()) {
-          std::sort(files.begin(), files.end(), [](const SnapshotFileInfo& a, const SnapshotFileInfo& b) {
-            return a.name > b.name; // newest first - only files[0] is actually checked
-          });
-          String newestPath = camDirPath + "/" + files[0].name;
-          File f = SD.open(newestPath, FILE_READ);
-          if (!f || f.size() == 0) {
-            result.unreadableFiles++;
-            result.ok = false;
-            Serial.printf("[sd_store] Boot check: newest file in %s is unreadable or empty (%s).\n",
-                          camDirPath.c_str(), newestPath.c_str());
-          }
-          if (f) f.close();
-        }
-      } else {
-        camDir.close();
-      }
-      camDir = root.openNextFile();
+  // Newest file seen so far, per DISTINCT CAMERA (not per leaf directory -
+  // a camera can have many Year/Month/Day folders, plus possibly a legacy
+  // flat one; this compares across all of them so directoriesChecked
+  // keeps meaning "how many cameras have any history", the same bounded
+  // cost this function has always had, rather than growing with how many
+  // calendar days of retention have accumulated).
+  std::map<String, String> newestNameByCamera;
+  std::map<String, String> newestPathByCamera;
+  walkAllFiles(SNAPSHOTS_ROOT, [&](const String& filePath, const String& fileName, uint64_t,
+                                    const String& parentDirName) {
+    auto it = newestNameByCamera.find(parentDirName);
+    if (it == newestNameByCamera.end() || fileName > it->second) {
+      newestNameByCamera[parentDirName] = fileName;
+      newestPathByCamera[parentDirName] = filePath;
     }
-    root.close();
+  });
+
+  for (auto& kv : newestPathByCamera) {
+    result.directoriesChecked++;
+    File f = SD.open(kv.second, FILE_READ);
+    if (!f || f.size() == 0) {
+      result.unreadableFiles++;
+      result.ok = false;
+      Serial.printf("[sd_store] Boot check: newest file for %s is unreadable or empty (%s).\n",
+                    kv.first.c_str(), kv.second.c_str());
+    }
+    if (f) f.close();
   }
   xSemaphoreGive(g_sdMutex);
 
-  Serial.printf("[sd_store] Boot check: newest snapshot in each of %u director(ies) - %s.\n",
+  Serial.printf("[sd_store] Boot check: newest snapshot for each of %u camera(s) - %s.\n",
                 (unsigned)result.directoriesChecked,
                 result.ok ? "all readable" : "problem(s) found, see above");
   return result;

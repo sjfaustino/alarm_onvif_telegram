@@ -25,12 +25,15 @@
 // so their full directory names differ in more than just letter case.
 String sanitizeCameraDirName(const String& cameraName);
 
-// One file already on SD, for pruning decisions - filename only (no
-// path), since filesToPrune operates within a single camera's own
-// directory.
+// One file already on SD, for pruning decisions. filesToPrune/filesToExpire
+// below only ever look at name/size - a camera's files can now live under
+// several different Year/Month/Day folders (sd_store.cpp's layout), so
+// path carries the full path needed to actually open/delete the right one;
+// it's simply unused (left "") by anything that doesn't need it.
 struct SnapshotFileInfo {
   String name;
   uint64_t size = 0;
+  String path;
 };
 
 // Given a camera's own files (OLDEST FIRST - the caller sorts, since
