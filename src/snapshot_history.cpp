@@ -67,6 +67,17 @@ static SnapshotSource ramSnapshotSourceAt(CameraState& st, size_t age) {
   return st.snapshotHistory[ringIdx].source;
 }
 
+static std::vector<SnapshotSource> ramSnapshotSourcesAll(CameraState& st) {
+  std::vector<SnapshotSource> sources;
+  CameraStateLock lock(st);
+  sources.reserve(st.snapshotHistoryCount);
+  for (size_t age = 0; age < st.snapshotHistoryCount; age++) {
+    size_t ringIdx = (st.snapshotHistoryNext + SNAPSHOT_HISTORY_SIZE - 1 - age) % SNAPSHOT_HISTORY_SIZE;
+    sources.push_back(st.snapshotHistory[ringIdx].source);
+  }
+  return sources;
+}
+
 // ============================================================
 // Dispatch
 // ============================================================
@@ -112,4 +123,9 @@ bool readCameraSnapshot(const CameraConfig& cfg, CameraState& st, size_t age, ui
 SnapshotSource cameraSnapshotSourceAt(const CameraConfig& cfg, CameraState& st, size_t age) {
   if (sdActive()) return sdSnapshotSourceAt(cfg, age);
   return ramSnapshotSourceAt(st, age);
+}
+
+std::vector<SnapshotSource> cameraSnapshotSourcesAll(const CameraConfig& cfg, CameraState& st) {
+  if (sdActive()) return sdSnapshotSourcesAll(cfg);
+  return ramSnapshotSourcesAll(st);
 }

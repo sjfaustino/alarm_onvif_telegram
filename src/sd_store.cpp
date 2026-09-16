@@ -367,6 +367,22 @@ SnapshotSource sdSnapshotSourceAt(const CameraConfig& cfg, size_t age) {
   return source;
 }
 
+std::vector<SnapshotSource> sdSnapshotSourcesAll(const CameraConfig& cfg) {
+  std::vector<SnapshotSource> sources;
+  if (!sdActive()) return sources;
+  String dirName = String(SNAPSHOTS_ROOT) + "/" + sanitizeCameraDirName(cfg.name);
+
+  xSemaphoreTake(g_sdMutex, portMAX_DELAY);
+  std::vector<SnapshotFileInfo> files = listSnapshotsNewestFirst(dirName);
+  xSemaphoreGive(g_sdMutex);
+
+  // Parsing filenames doesn't need the SD mutex - only the directory
+  // listing above did.
+  sources.reserve(files.size());
+  for (auto& f : files) sources.push_back(parseSnapshotSourceFromFilename(f.name));
+  return sources;
+}
+
 bool eraseAllSnapshots() {
   if (!sdActive()) return false;
 

@@ -1,5 +1,6 @@
 #pragma once
 #include <Arduino.h>
+#include <vector>
 #include "camera.h" // CameraConfig, CameraState
 
 // The single place that decides "SD or PSRAM ring" for a camera's
@@ -42,3 +43,12 @@ bool readCameraSnapshot(const CameraConfig& cfg, CameraState& st, size_t age, ui
 // image reads just to label them. Returns SnapshotSource::Motion (the
 // safe generic default) if age is out of range.
 SnapshotSource cameraSnapshotSourceAt(const CameraConfig& cfg, CameraState& st, size_t age);
+
+// Returns every stored snapshot's SnapshotSource at once, newest-first
+// (index i == age i) - one bulk fetch instead of calling
+// cameraSnapshotSourceAt once per age, which for the SD backend would
+// mean re-listing and re-sorting this camera's whole directory (up to
+// SD_MAX_FILES_PER_CAMERA entries) from scratch for every single entry.
+// Built for the Gallery page's per-kind filter/counts (webserver_gallery.cpp),
+// which needs to inspect every entry anyway.
+std::vector<SnapshotSource> cameraSnapshotSourcesAll(const CameraConfig& cfg, CameraState& st);

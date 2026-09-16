@@ -104,6 +104,12 @@ bool readSdSnapshot(const CameraConfig& cfg, size_t age, uint8_t** outBuf, size_
 // SnapshotSource::Motion if age is out of range or SD isn't active.
 SnapshotSource sdSnapshotSourceAt(const CameraConfig& cfg, size_t age);
 
+// Every stored snapshot's SnapshotSource at once, newest-first (index i ==
+// age i) - one directory listing instead of one per age. Empty if SD
+// isn't active. See cameraSnapshotSourcesAll's own comment
+// (snapshot_history.h) for why this exists.
+std::vector<SnapshotSource> sdSnapshotSourcesAll(const CameraConfig& cfg);
+
 // Recursively deletes everything this project has ever written to SD (all
 // cameras' directories) - a logical wipe of this project's own files, NOT
 // a low-level FAT reformat (Arduino-ESP32's SD library doesn't expose
