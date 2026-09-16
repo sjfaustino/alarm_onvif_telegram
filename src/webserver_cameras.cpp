@@ -692,38 +692,60 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
             "end the same (e.g. both 00:00) means no active window, same as the per-camera form.</p>";
     html += "</fieldset>";
 
+    // Status, not just action: each checkbox below starts pre-checked
+    // only if EVERY camera currently has that setting on, so submitting
+    // without touching it is a genuine no-op rather than an accidental
+    // reset - and each gets its own "X of Y cameras" line since a plain
+    // checkbox can't represent a MIXED state (some on, some off) any more
+    // precisely than "not all". Computed from cams (loadCameras(), just
+    // above) - the real persisted setting, so this reflects whatever
+    // landed from the last bulk apply or any since-then per-camera edit,
+    // not a stale snapshot from when this button was last clicked.
+    size_t personOnCount = 0, vehicleOnCount = 0, petOnCount = 0;
+    for (auto& c : cams) {
+      if (c.personAlertsEnabled) personOnCount++;
+      if (c.vehicleAlertsEnabled) vehicleOnCount++;
+      if (c.petAlertsEnabled) petOnCount++;
+    }
     html += "<fieldset><legend>Set person/vehicle/pet alerts for all cameras</legend>";
     html += "<form method=\"POST\" action=\"/cameras/person-alerts-all\" "
             "onsubmit=\"return confirm('Overwrite every camera\\'s individual PERSON alert setting with "
             "this one? Vehicle and pet alert settings are left untouched. There is no way to see what "
             "each camera currently has before this replaces it.');\">";
-    html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"enabled\" checked> "
+    html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"enabled\"" +
+            String(personOnCount == cams.size() ? " checked" : "") + "> "
             "Alert on person detection</label>";
+    html += "<p class=\"hint\">Currently on for " + String((unsigned)personOnCount) + " of " +
+            String((unsigned)cams.size()) + " camera(s).</p>";
     html += "<p><button type=\"submit\">Apply person alerts to all cameras</button></p></form>";
     html += "<form method=\"POST\" action=\"/cameras/vehicle-alerts-all\" "
             "onsubmit=\"return confirm('Overwrite every camera\\'s individual VEHICLE alert setting with "
             "this one? Person and pet alert settings are left untouched. There is no way to see what "
             "each camera currently has before this replaces it.');\">";
-    html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"enabled\" checked> "
+    html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"enabled\"" +
+            String(vehicleOnCount == cams.size() ? " checked" : "") + "> "
             "Alert on vehicle detection</label>";
+    html += "<p class=\"hint\">Currently on for " + String((unsigned)vehicleOnCount) + " of " +
+            String((unsigned)cams.size()) + " camera(s).</p>";
     html += "<p><button type=\"submit\">Apply vehicle alerts to all cameras</button></p></form>";
     html += "<form method=\"POST\" action=\"/cameras/pet-alerts-all\" "
             "onsubmit=\"return confirm('Overwrite every camera\\'s individual PET alert setting with this "
             "one? Person and vehicle alert settings are left untouched. There is no way to see what each "
             "camera currently has before this replaces it.');\">";
-    // Unchecked by default, unlike the person/vehicle buttons above -
-    // matches CameraConfig::petAlertsEnabled's own opt-in-off default
-    // (a person/vehicle-only camera would otherwise start paging you for
-    // your own pet the moment this button gets clicked without looking).
-    html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"enabled\"> "
+    html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"enabled\"" +
+            String(petOnCount == cams.size() ? " checked" : "") + "> "
             "Alert on pet (dog/cat) detection</label>";
+    html += "<p class=\"hint\">Currently on for " + String((unsigned)petOnCount) + " of " +
+            String((unsigned)cams.size()) + " camera(s).</p>";
     html += "<p><button type=\"submit\">Apply pet alerts to all cameras</button></p></form>";
     html += "<p class=\"hint\">Each button only overwrites its own setting (person, vehicle, or pet) "
             "across every camera (both enabled and disabled ones) - the other two stay whatever each "
             "camera already has, so bulk-setting one never undoes a deliberate per-camera choice on "
-            "another. There's no per-camera preview here, so check each camera's own Edit form afterward "
-            "if you need to confirm what landed. Person/vehicle only affects cameras whose own ONVIF AI "
-            "actually distinguishes that detection - a plain motion sensor always alerts regardless.</p>";
+            "another. The \"currently on for X of Y\" counts (and each checkbox's own starting state) "
+            "reflect the real setting right now, but only as an all-on/not-all-on summary - if it's "
+            "mixed, check each camera's own Edit form for the specific breakdown. Person/vehicle only "
+            "affects cameras whose own ONVIF AI actually distinguishes that detection - a plain motion "
+            "sensor always alerts regardless.</p>";
     html += "</fieldset>";
   }
 
