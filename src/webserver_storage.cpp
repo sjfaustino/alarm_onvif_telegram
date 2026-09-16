@@ -15,10 +15,12 @@ String renderStoragePanel() {
             "reboot). Enable it below to use a microSD card instead, for far more history that "
             "survives a reboot.</p>";
   } else if (!status.available) {
-    html += "<p class=\"hint\">SD card storage is enabled, but no module or card was detected at "
-            "boot - snapshot history is using the in-memory fallback instead, and monitoring itself "
-            "is unaffected. Check the wiring and the SD_CS_PIN/SD_SCK_PIN/SD_MISO_PIN/SD_MOSI_PIN "
-            "values in <code>config.h</code>, then reboot.</p>";
+    html += "<p class=\"hint\">SD card storage is enabled, but wasn't available at boot" +
+            (status.unavailableReason.length() > 0 ? (" (" + htmlEscape(status.unavailableReason) + ")") : String("")) +
+            " - snapshot history is using the in-memory fallback instead, and monitoring itself is "
+            "unaffected. Check the wiring and the SD_CS_PIN/SD_SCK_PIN/SD_MISO_PIN/SD_MOSI_PIN values "
+            "in <code>config.h</code>, then reboot. You were also sent a Telegram alert about this at "
+            "boot.</p>";
   } else {
     double totalMB = (double)status.totalBytes / (1024.0 * 1024.0);
     double usedMB = (double)status.usedBytes / (1024.0 * 1024.0);

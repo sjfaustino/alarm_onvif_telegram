@@ -243,6 +243,15 @@ void test_trSdFailure_and_trSdCheckWarning(void) {
   assertDiffersAndContains(en2, pt2, "100");
 }
 
+// Distinct wording from trSdFailure above (never mounted at boot, not a
+// mid-session degradation) but embeds the same caller-supplied reason.
+void test_trSdNotAvailableAtBoot(void) {
+  String en = trSdNotAvailableAtBoot(TelegramLang::English, "no card inserted");
+  String pt = trSdNotAvailableAtBoot(TelegramLang::Portuguese, "no card inserted");
+  assertDiffersAndContains(en, pt, "no card inserted");
+  TEST_ASSERT_TRUE(en.indexOf("boot") >= 0);
+}
+
 void test_trMissingCredentials_both_variants(void) {
   String enStartup = trMissingCredentials(TelegramLang::English, "D01", false);
   String enEdit = trMissingCredentials(TelegramLang::English, "D01", true);
@@ -562,6 +571,7 @@ int main(int argc, char** argv) {
   RUN_TEST(test_trInternetRecovered_with_and_without_since_time);
   RUN_TEST(test_trBridgeRecovered_with_and_without_since_time);
   RUN_TEST(test_trSdFailure_and_trSdCheckWarning);
+  RUN_TEST(test_trSdNotAvailableAtBoot);
   RUN_TEST(test_trMissingCredentials_both_variants);
   RUN_TEST(test_trTestMessage);
   RUN_TEST(test_trHeartbeatHeader_and_trBootHeader);

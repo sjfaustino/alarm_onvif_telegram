@@ -840,12 +840,23 @@ static void startMonitoring() {
   size_t sdBootDirsChecked = sdBootCheck.directoriesChecked;
   bool powerMonitorEnabled = powerMonitorActive();
   bool powerPresentAtBoot = getPowerMonitorStatus().powerPresent;
+  // Distinct from sdBootCheckFailed above (that's a readability check on
+  // snapshots SD already has) - this is SD storage being enabled but never
+  // having mounted at boot at all (initSdStorage/sd_store.cpp couldn't
+  // send this itself - no network yet at that point in setup()), same
+  // "fold a boot-time condition into this one notice" pattern as
+  // powerMonitorEnabled/powerPresentAtBoot above.
+  SdStatus sdStatus = getSdStatus();
+  bool sdUnavailableAtBoot = sdStatus.settingEnabled && !sdStatus.available;
+  String sdUnavailableReason = sdStatus.unavailableReason;
   bool sendOk = sendTelegramMessage([enabledCount, sdBootCheckFailed, sdBootUnreadable, sdBootDirsChecked,
-                                      powerMonitorEnabled, powerPresentAtBoot](TelegramLang lang) {
+                                      powerMonitorEnabled, powerPresentAtBoot, sdUnavailableAtBoot,
+                                      sdUnavailableReason](TelegramLang lang) {
     String msg = trBootHeader(lang, FIRMWARE_VERSION) + "\n";
     msg += trRebootReasonLine(lang, describeResetReasonLocalized(lang)) + "\n";
     msg += trEnabledCamerasLine(lang, (size_t)enabledCount, g_cameras.size()) + "\n";
     if (powerMonitorEnabled) msg += trPowerStatusLine(lang, powerPresentAtBoot) + "\n";
+    if (sdUnavailableAtBoot) msg += trSdNotAvailableAtBoot(lang, sdUnavailableReason) + "\n";
     msg += buildCameraListMessage(lang);
     if (sdBootCheckFailed) {
       msg += "\n" + trSdBootCheckWarning(lang, sdBootUnreadable, sdBootDirsChecked);

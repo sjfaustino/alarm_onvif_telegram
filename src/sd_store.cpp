@@ -24,6 +24,7 @@ static bool g_sdSettingEnabled = false;         // cached at boot, see initSdSto
 static uint32_t g_sdCheckIntervalHours = 0;      // cached, see sdCheckIntervalHours()
 static uint16_t g_sdRetentionDays = SD_RETENTION_DAYS_DEFAULT; // cached, see sdRetentionDays()
 static bool g_sdAvailable = false;              // see sdActive()'s comment
+static String g_sdUnavailableReason;            // see SdStatus::unavailableReason's own comment
 static SemaphoreHandle_t g_sdMutex = xSemaphoreCreateMutex();
 static QuickSnapshotCheckResult g_lastBootCheckResult; // see lastBootCheckResult()'s own comment
 
@@ -78,6 +79,7 @@ void initSdStorage() {
   if (!SD.begin(SD_CS_PIN, SPI)) {
     Serial.println("[sd_store] SD storage is enabled, but no module responded on the configured SPI "
                     "pins - check wiring/CS pin in config.h. Falling back to the PSRAM ring.");
+    g_sdUnavailableReason = "no module responded on the configured SPI pins";
     return;
   }
 
@@ -85,6 +87,7 @@ void initSdStorage() {
   if (type == CARD_NONE) {
     Serial.println("[sd_store] SD storage is enabled and a module responded, but no card is "
                     "inserted. Falling back to the PSRAM ring.");
+    g_sdUnavailableReason = "no card inserted";
     SD.end();
     return;
   }
@@ -92,6 +95,7 @@ void initSdStorage() {
   if (!SD.exists(SNAPSHOTS_ROOT) && !SD.mkdir(SNAPSHOTS_ROOT)) {
     Serial.println("[sd_store] SD card detected, but the /snapshots directory could not be created "
                     "- card may be write-protected or corrupted. Falling back to the PSRAM ring.");
+    g_sdUnavailableReason = "/snapshots directory could not be created - card may be write-protected or corrupted";
     SD.end();
     return;
   }
@@ -124,7 +128,10 @@ SdStatus getSdStatus() {
   status.available = g_sdAvailable;
   status.checkIntervalHours = g_sdCheckIntervalHours;
   status.retentionDays = g_sdRetentionDays;
-  if (!g_sdAvailable) return status;
+  if (!g_sdAvailable) {
+    status.unavailableReason = g_sdUnavailableReason; // "" if settingEnabled is false too - never set otherwise
+    return status;
+  }
 
   xSemaphoreTake(g_sdMutex, portMAX_DELAY);
   switch (SD.cardType()) {

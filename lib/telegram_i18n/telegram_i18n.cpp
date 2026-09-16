@@ -283,6 +283,18 @@ String trSdFailure(TelegramLang lang, const String& reason) {
          "reboot. Check the card/wiring.";
 }
 
+String trSdNotAvailableAtBoot(TelegramLang lang, const String& reason) {
+  if (lang == TelegramLang::Portuguese) {
+    return "\xE2\x9A\xA0\xEF\xB8\x8F Armazenamento em cart\xC3\xA3o SD est\xC3\xA1 ativado, mas n\xC3\xA3o "
+           "ficou dispon\xC3\xADvel no arranque (" + reason + ") - o hist\xC3\xB3rico de capturas est\xC3\xA1 "
+           "a usar apenas a reserva PSRAM at\xC3\xA9 ao pr\xC3\xB3ximo rein\xC3\xAD" "cio bem-sucedido. "
+           "Verifique o cart\xC3\xA3o/a fia\xC3\xA7\xC3\xA3o.";
+  }
+  return "\xE2\x9A\xA0\xEF\xB8\x8F SD card storage is enabled, but wasn't available at boot (" + reason +
+         ") - snapshot history is using the PSRAM-only fallback until the next successful mount. Check "
+         "the card/wiring.";
+}
+
 String trSdCheckWarning(TelegramLang lang, size_t unreadableFiles, size_t filesChecked) {
   if (lang == TelegramLang::Portuguese) {
     return "\xE2\x9A\xA0\xEF\xB8\x8F A verifica\xC3\xA7\xC3\xA3o do armazenamento SD encontrou " +

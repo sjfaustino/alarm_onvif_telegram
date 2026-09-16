@@ -65,6 +65,11 @@ struct SdStatus {
   uint64_t usedBytes = 0;   // 0 if not available
   uint32_t checkIntervalHours = 0; // persisted setting, reported regardless of `available`
   uint16_t retentionDays = SD_RETENTION_DAYS_DEFAULT; // persisted setting, reported regardless of `available`
+  // Which of initSdStorage()'s three failure branches happened, in plain
+  // English - "" if available, or if settingEnabled is false. Surfaced on
+  // the Storage page and (main.cpp's boot notice) trSdNotAvailableAtBoot,
+  // so "check the wiring" can be more specific than "something's wrong".
+  String unavailableReason;
 };
 SdStatus getSdStatus();
 

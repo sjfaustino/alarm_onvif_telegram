@@ -113,6 +113,13 @@ String trPowerStatusLine(TelegramLang lang, bool present);
 String trPowerLost(TelegramLang lang);
 String trPowerRestored(TelegramLang lang);
 String trSdFailure(TelegramLang lang, const String& reason);
+// Folded into the boot message (main.cpp), same as trPowerStatusLine above -
+// unlike trSdFailure (a mid-session I/O failure disabling SD for the rest
+// of the session), this is SD never having come up in the first place at
+// boot (initSdStorage/sd_store.cpp's three failure reasons: no module, no
+// card, or the /snapshots directory couldn't be created) - previously only
+// a Serial.println nobody watching the dashboard would ever see.
+String trSdNotAvailableAtBoot(TelegramLang lang, const String& reason);
 String trSdCheckWarning(TelegramLang lang, size_t unreadableFiles, size_t filesChecked);
 // afterLiveEdit: false = discovered at camera-task startup, true = discovered
 // after a live dashboard edit removed the credentials (camera.cpp's two sites).
