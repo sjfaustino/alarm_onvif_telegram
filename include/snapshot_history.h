@@ -52,3 +52,12 @@ SnapshotSource cameraSnapshotSourceAt(const CameraConfig& cfg, CameraState& st, 
 // Built for the Gallery page's per-kind filter/counts (webserver_gallery.cpp),
 // which needs to inspect every entry anyway.
 std::vector<SnapshotSource> cameraSnapshotSourcesAll(const CameraConfig& cfg, CameraState& st);
+
+// Same bulk fetch as cameraSnapshotSourcesAll above, but each entry also
+// carries its capture date (SnapshotEntryInfo::date, snapshot_source.h) -
+// only ever populated for SD-backed history (parsed from the filename);
+// every entry is "" for the PSRAM ring, which has no wall-clock timestamp
+// to report (see sd_store.h's sdSnapshotEntriesAll and
+// SnapshotEntryInfo's own comment for why). Built for the Gallery page's
+// date-range browsing (webserver_gallery.cpp).
+std::vector<SnapshotEntryInfo> cameraSnapshotEntriesAll(const CameraConfig& cfg, CameraState& st);

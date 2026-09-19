@@ -12,6 +12,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 #include <algorithm>
+#include <cctype>
 #include <functional>
 #include <map>
 #include <set>
@@ -413,6 +414,22 @@ static SnapshotSource parseSnapshotSourceFromFilename(const String& name) {
   return snapshotSourceFromLabel(name.substring(secondUnderscore + 1, dot));
 }
 
+// The "YYYYMMDD" prefix of a filename built by buildSnapshotFilename above
+// (before the "-HHMMSS..." remainder) - "" if the first 8 characters
+// aren't all digits (a name this project never actually wrote, or one
+// truncated/corrupted enough to not even have a real prefix). Used for
+// the Gallery page's date-range browsing (sdSnapshotEntriesAll below) -
+// deliberately just the leading digits, not a full parseSnapshotTimestamp-
+// style validation (lib/snapshot_storage), since a plain string match
+// against this same 8-character prefix is all date filtering needs.
+static String parseSnapshotDateFromFilename(const String& name) {
+  if (name.length() < 8) return "";
+  for (int i = 0; i < 8; i++) {
+    if (!isdigit((unsigned char)name[i])) return "";
+  }
+  return name.substring(0, 8);
+}
+
 bool writeSdSnapshot(const CameraConfig& cfg, uint8_t* jpg, size_t jpgLen, SnapshotSource source) {
   if (!sdActive()) { free(jpg); return false; }
 
@@ -528,6 +545,25 @@ std::vector<SnapshotSource> sdSnapshotSourcesAll(const CameraConfig& cfg) {
   sources.reserve(files.size());
   for (auto& f : files) sources.push_back(parseSnapshotSourceFromFilename(f.name));
   return sources;
+}
+
+std::vector<SnapshotEntryInfo> sdSnapshotEntriesAll(const CameraConfig& cfg) {
+  std::vector<SnapshotEntryInfo> entries;
+  if (!sdActive()) return entries;
+  String cameraDirName = sanitizeCameraDirName(cfg.name);
+
+  xSemaphoreTake(g_sdMutex, portMAX_DELAY);
+  std::vector<SnapshotFileInfo> files = listCameraFilesNewestFirst(cameraDirName);
+  xSemaphoreGive(g_sdMutex);
+
+  entries.reserve(files.size());
+  for (auto& f : files) {
+    SnapshotEntryInfo info;
+    info.source = parseSnapshotSourceFromFilename(f.name);
+    info.date = parseSnapshotDateFromFilename(f.name);
+    entries.push_back(info);
+  }
+  return entries;
 }
 
 // Recursively deletes every file and subdirectory under dirPath, then

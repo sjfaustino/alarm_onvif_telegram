@@ -78,6 +78,23 @@ static std::vector<SnapshotSource> ramSnapshotSourcesAll(CameraState& st) {
   return sources;
 }
 
+// date is left "" for every entry - the PSRAM ring only stores a boot-
+// relative millis() timestamp (SnapshotHistoryEntry::ms), not a wall-clock
+// date, so there's nothing to report here. See SnapshotEntryInfo's own
+// comment (snapshot_source.h).
+static std::vector<SnapshotEntryInfo> ramSnapshotEntriesAll(CameraState& st) {
+  std::vector<SnapshotEntryInfo> entries;
+  CameraStateLock lock(st);
+  entries.reserve(st.snapshotHistoryCount);
+  for (size_t age = 0; age < st.snapshotHistoryCount; age++) {
+    size_t ringIdx = (st.snapshotHistoryNext + SNAPSHOT_HISTORY_SIZE - 1 - age) % SNAPSHOT_HISTORY_SIZE;
+    SnapshotEntryInfo info;
+    info.source = st.snapshotHistory[ringIdx].source;
+    entries.push_back(info);
+  }
+  return entries;
+}
+
 // ============================================================
 // Dispatch
 // ============================================================
@@ -128,4 +145,9 @@ SnapshotSource cameraSnapshotSourceAt(const CameraConfig& cfg, CameraState& st, 
 std::vector<SnapshotSource> cameraSnapshotSourcesAll(const CameraConfig& cfg, CameraState& st) {
   if (sdActive()) return sdSnapshotSourcesAll(cfg);
   return ramSnapshotSourcesAll(st);
+}
+
+std::vector<SnapshotEntryInfo> cameraSnapshotEntriesAll(const CameraConfig& cfg, CameraState& st) {
+  if (sdActive()) return sdSnapshotEntriesAll(cfg);
+  return ramSnapshotEntriesAll(st);
 }

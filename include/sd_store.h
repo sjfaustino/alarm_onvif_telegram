@@ -115,6 +115,14 @@ SnapshotSource sdSnapshotSourceAt(const CameraConfig& cfg, size_t age);
 // (snapshot_history.h) for why this exists.
 std::vector<SnapshotSource> sdSnapshotSourcesAll(const CameraConfig& cfg);
 
+// Same bulk fetch as sdSnapshotSourcesAll above, but each entry also
+// carries its capture date (SnapshotEntryInfo::date, snapshot_source.h) -
+// parsed from the filename's own "YYYYMMDD" prefix, which survives
+// regardless of which Year/Month/Day folder (or the legacy flat layout)
+// the file is actually stored under. Built for the Gallery page's date-
+// range browsing (webserver_gallery.cpp). Empty if SD isn't active.
+std::vector<SnapshotEntryInfo> sdSnapshotEntriesAll(const CameraConfig& cfg);
+
 // Recursively deletes everything this project has ever written to SD (all
 // cameras' directories) - a logical wipe of this project's own files, NOT
 // a low-level FAT reformat (Arduino-ESP32's SD library doesn't expose

@@ -38,3 +38,17 @@ const char* snapshotSourceLabel(SnapshotSource source);
 // or missing label - indistinguishable from (and just as correct a
 // fallback for) a plain generic-motion snapshot.
 SnapshotSource snapshotSourceFromLabel(const String& label);
+
+// One stored snapshot's source tag plus which calendar day it was
+// captured on ("YYYYMMDD", local time, matching sd_store.cpp's
+// buildSnapshotFilename) - the Gallery page's date-range browsing
+// (webserver_gallery.cpp) needs both per entry. date is only ever
+// populated for SD-backed history, parsed from the filename (which
+// encodes it regardless of which Year/Month/Day folder, or the legacy
+// flat layout, it's actually stored under) - the PSRAM ring only keeps a
+// boot-relative millis() timestamp, not a wall-clock date, so every entry
+// there reports "" (see snapshot_history.cpp's ramSnapshotEntriesAll).
+struct SnapshotEntryInfo {
+  SnapshotSource source = SnapshotSource::Motion;
+  String date;
+};
