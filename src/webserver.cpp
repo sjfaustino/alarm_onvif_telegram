@@ -11,6 +11,7 @@
 #include "webserver_activity.h"
 #include "webserver_gallery.h"
 #include "webserver_storage.h"
+#include "webserver_capabilities.h"
 #include "ui_settings.h"
 #include "rtc_store.h"
 #include "net_watchdog.h"
@@ -171,7 +172,7 @@ static RateLimitMiddleware g_rateLimitMiddleware;
 // ============================================================
 
 enum class Tab { None, Network, Cameras, Users, Activity, Gallery, Firmware, Maintenance, Storage, Security,
-                  HardwareInternet, HardwareBridge, HardwarePower };
+                  HardwareInternet, HardwareBridge, HardwarePower, Capabilities };
 
 // Whether the tab currently being rendered has a background job in
 // progress (a camera connection test, a WS-Discovery search, a WiFi scan,
@@ -384,7 +385,8 @@ static String renderShell(Tab active, const String& banner, const String& conten
   // separate <script> block - consistent with this project's "no client-
   // side framework" stance elsewhere, just enough JS to open/close a menu
   // on a full-page-reload site.
-  bool systemOpen = (active == Tab::Firmware || active == Tab::Maintenance || active == Tab::Storage);
+  bool systemOpen = (active == Tab::Firmware || active == Tab::Maintenance || active == Tab::Storage ||
+                      active == Tab::Capabilities);
   // Same reasoning as systemOpen above, for the three relay/sensor pages
   // (Internet Watchdog, Camera Bridge Watchdog, 220V Power Monitor).
   bool hardwareOpen = (active == Tab::HardwareInternet || active == Tab::HardwareBridge ||
@@ -420,6 +422,9 @@ static String renderShell(Tab active, const String& banner, const String& conten
   html += "<a href=\"/storage\" class=\"";
   html += (active == Tab::Storage) ? "active" : "";
   html += "\">Storage</a>";
+  html += "<a href=\"/capabilities\" class=\"";
+  html += (active == Tab::Capabilities) ? "active" : "";
+  html += "\">Capabilities</a>";
   html += "</div>";
   html += "<a href=\"#\" class=\"sidebar-parent\" onclick=\"var m=document.getElementById('hardware-submenu');"
           "m.style.display=(m.style.display==='block')?'none':'block';return false;\">Hardware</a>";
@@ -1262,6 +1267,12 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
 
   server.on("/storage", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
     return response->send(200, "text/html", renderShell(Tab::Storage, "", renderStoragePanel()).c_str());
+  });
+
+  server.on("/capabilities", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
+    return response->send(
+        200, "text/html",
+        renderShell(Tab::Capabilities, "", renderCapabilitiesPanel(g_liveCameras, g_liveStates)).c_str());
   });
 
   server.on("/storage/save", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {

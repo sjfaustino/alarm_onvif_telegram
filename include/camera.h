@@ -68,6 +68,16 @@ struct CameraState {
   // advertise person/pet detection" without needing to click Test
   // Connection or wait for a real detection event to find out the hard way.
   String   supportedEventTopics;
+  // Comma-joined list of topic names (from the same GetEventPropertiesResponse
+  // scan as supportedEventTopics above, via WS-Topics' topic="true" marker -
+  // see findAllTopicElementNames' own comment, camera.cpp) this camera
+  // advertises that AREN'T one of the known keywords - candidates for
+  // something this firmware could support later (fire detection, line
+  // crossing, whatever a given vendor's own AI happens to add). "" if none
+  // found, or GetEventProperties never succeeded yet. Also logged once via
+  // logEvent when first discovered; kept here too so the
+  // Capabilities/Cameras pages can show it live without re-reading the log.
+  String   unusedEventTopics;
   String   profileToken;
   bool     subscriptionActive = false;
   unsigned long lastPull  = 0;
@@ -218,6 +228,23 @@ struct CameraState {
   // suppressedMotionCount above.
   unsigned long lastSuppressedMotionMs = 0;
 
+  // Plain counts of real, cooldown-clearing detections since the last
+  // daily activity digest (checkDailyActivityDigest, telegram.cpp) -
+  // incremented at both points triggerMotionAlert actually records a
+  // detection (the quiet-hours-suppressed-send branch and the real-send
+  // branch), read and reset to 0 by that digest once it fires. A plain
+  // resettable counter, not a ring like reconnectHistory/offlineHistory
+  // above - those need "how many in the last 24h" computed from a fixed-
+  // size ring because they're read continuously by the dashboard at any
+  // moment; this only ever needs "how many since the last digest sent",
+  // which a ring sized for a realistically busy day would cost more RAM
+  // to track than a counter for no benefit. Lock-guarded - written by
+  // this camera's own task, read+reset cross-task by loop()'s digest check.
+  uint32_t digestPersonCount = 0;
+  uint32_t digestVehicleCount = 0;
+  uint32_t digestPetCount = 0;
+  uint32_t digestMotionCount = 0; // generic/plain motion - no finer classification available
+
   // Copied once from cfg.user/cfg.pass by resolveCameraCredentials() at
   // startup. Safe as const char*: cfg lives in main.cpp's g_cameras vector,
   // which never REALLOCATES for the process lifetime (it may still GROW,
@@ -275,7 +302,9 @@ struct CameraState {
   size_t snapshotHistoryCount = 0;
 
   // Guards subscriptionActive, isOffline, alertsEnabled, hasAlerted,
-  // lastAlert, snapshotUri, streamUri, mjpegUri, supportedEventTopics, user, pass, scheduledRevertDueMs,
+  // lastAlert, snapshotUri, streamUri, mjpegUri, supportedEventTopics,
+  // unusedEventTopics, digestPersonCount, digestVehicleCount,
+  // digestPetCount, digestMotionCount, user, pass, scheduledRevertDueMs,
   // scheduledRevertToOn, pendingConfig, stopRequested, snapshotInFlight,
   // snapshotHistory (+Next/Count), lastContactMs, totalReconnects,
   // reconnectHistory (+Next/Count), offlineHistory (+Next/Count), and
@@ -364,12 +393,14 @@ bool cameraSetupSequence(const CameraConfig& cfg, CameraState& st);
 // subscription without re-doing capability discovery every time.
 bool cameraDiscoverServices(const CameraConfig& cfg, CameraState& st);
 bool cameraGetEventServiceCapabilities(const CameraConfig& cfg, CameraState& st);
-// outTopics (optional) receives the same comma-joined scan
-// CameraState::supportedEventTopics documents, on success - lets a caller
-// with its own throwaway CameraState (webserver_cameras.cpp's
-// testCameraConnection) capture it without needing st itself to be the
-// live, persisted one. Left untouched on failure.
-bool cameraGetEventProperties(const CameraConfig& cfg, CameraState& st, String* outTopics = nullptr);
+// outTopics/outUnusedTopics (optional) receive the same comma-joined scans
+// CameraState::supportedEventTopics/unusedEventTopics document, on
+// success - lets a caller with its own throwaway CameraState
+// (webserver_cameras.cpp's testCameraConnection) capture them without
+// needing st itself to be the live, persisted one. Left untouched on
+// failure.
+bool cameraGetEventProperties(const CameraConfig& cfg, CameraState& st, String* outTopics = nullptr,
+                               String* outUnusedTopics = nullptr);
 bool cameraFetchProfileAndSnapshotUri(const CameraConfig& cfg, CameraState& st);
 bool cameraCreatePullPoint(const CameraConfig& cfg, CameraState& st);
 bool cameraPullMessages(const CameraConfig& cfg, CameraState& st);

@@ -117,6 +117,30 @@ void test_trMultiCameraDigest_contains_count_and_list(void) {
   TEST_ASSERT_TRUE(pt.indexOf("3") >= 0);
 }
 
+void test_trDailyDigest_header_and_camera_line(void) {
+  String enHeader = trDailyDigestHeader(TelegramLang::English);
+  String ptHeader = trDailyDigestHeader(TelegramLang::Portuguese);
+  TEST_ASSERT_TRUE(enHeader != ptHeader);
+
+  // Every count non-zero - all four labels must appear.
+  String en = trDailyDigestCameraLine(TelegramLang::English, "D05-Traseiras", 14, 3, 0, 2);
+  TEST_ASSERT_TRUE(en.indexOf("D05-Traseiras") >= 0);
+  TEST_ASSERT_TRUE(en.indexOf("14") >= 0 && en.indexOf("person") >= 0);
+  TEST_ASSERT_TRUE(en.indexOf("3") >= 0 && en.indexOf("vehicle") >= 0);
+  TEST_ASSERT_TRUE(en.indexOf("pet") < 0); // zero count must be omitted, not printed as "0 pet"
+  TEST_ASSERT_TRUE(en.indexOf("2") >= 0 && en.indexOf("motion") >= 0);
+
+  // All zero - must say something (not an empty/blank line), not silently
+  // print every label at 0.
+  String allZero = trDailyDigestCameraLine(TelegramLang::English, "D07", 0, 0, 0, 0);
+  TEST_ASSERT_TRUE(allZero.indexOf("D07") >= 0);
+  TEST_ASSERT_TRUE(allZero.length() > String("  D07: ").length());
+
+  String pt = trDailyDigestCameraLine(TelegramLang::Portuguese, "D05-Traseiras", 14, 3, 0, 2);
+  TEST_ASSERT_TRUE(pt != en);
+  TEST_ASSERT_TRUE(pt.indexOf("D05-Traseiras") >= 0);
+}
+
 void test_trCameraOffline_contains_name_and_minutes(void) {
   String en = trCameraOffline(TelegramLang::English, "D07-PortariaEsq", 15);
   String pt = trCameraOffline(TelegramLang::Portuguese, "D07-PortariaEsq", 15);
@@ -557,6 +581,7 @@ int main(int argc, char** argv) {
   RUN_TEST(test_trTestAlertCaption_person_and_vehicle_kinds);
   RUN_TEST(test_trTestAlertCaption_pet_event);
   RUN_TEST(test_trMultiCameraDigest_contains_count_and_list);
+  RUN_TEST(test_trDailyDigest_header_and_camera_line);
   RUN_TEST(test_trCameraOffline_contains_name_and_minutes);
   RUN_TEST(test_trCameraBackOnline);
   RUN_TEST(test_trSubscriptionLost);

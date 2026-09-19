@@ -769,6 +769,21 @@ static SnapshotSource snapshotSourceForMotion(bool isPetEvent, MotionDetectionKi
   return SnapshotSource::Motion; // unreachable if every enumerator above is handled
 }
 
+// Feeds checkDailyActivityDigest's per-camera rollup below - called from
+// every triggerMotionAlert point that just recorded a real, cooldown-
+// clearing detection (quiet-hours-suppressed send, pet-text-only send,
+// and the main real-send path). Caller must already hold st's
+// CameraStateLock - all three call sites already do, for the
+// lastAlert/hasAlerted write right alongside this.
+static void incrementDigestCounter(CameraState& st, bool isPetEvent, MotionDetectionKind kind) {
+  if (isPetEvent) { st.digestPetCount++; return; }
+  switch (kind) {
+    case MotionDetectionKind::Person:  st.digestPersonCount++;  return;
+    case MotionDetectionKind::Vehicle: st.digestVehicleCount++; return;
+    case MotionDetectionKind::Generic: st.digestMotionCount++;  return;
+  }
+}
+
 void triggerMotionAlert(const CameraConfig& cfg, CameraState& st, bool isPetEvent, MotionDetectionKind kind) {
   // alertsEnabled is written by loop()'s task (pollTelegramCommands'
   // /on//off), this function runs on the camera's own task - cross-task
@@ -828,7 +843,8 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st, bool isPetEven
     // cycle") was already assuming this - it just wasn't actually enforced.
     st.digestArmed = false;
     st.suppressedMotionCount = 0;
-    { CameraStateLock lock(st); st.lastAlert = nowMs; st.hasAlerted = true; }
+    { CameraStateLock lock(st); st.lastAlert = nowMs; st.hasAlerted = true;
+      incrementDigestCounter(st, isPetEvent, kind); }
     logEvent(cfg.name + ": " + (isPetEvent ? "pet" : motionKindLogLabel(kind)) +
              " detected (quiet hours - no Telegram alert)");
     size_t jpgLen = 0;
@@ -857,7 +873,8 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st, bool isPetEven
   // the burst-loop/latency-tracking machinery below applies since there's
   // only ever one shot and no photo to attach.
   if (isPetEvent && cfg.petAlertsTextOnly) {
-    { CameraStateLock lock(st); st.lastAlert = nowMs; st.hasAlerted = true; }
+    { CameraStateLock lock(st); st.lastAlert = nowMs; st.hasAlerted = true;
+      incrementDigestCounter(st, isPetEvent, kind); }
     st.digestArmed = true;
     st.suppressedMotionCount = 0;
     String timestamp = nowTimestampString();
@@ -884,7 +901,8 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st, bool isPetEven
   // an unresolved snapshot URI, silently burn every motion event's cooldown
   // doing nothing. A failure past this point still spends it, on purpose,
   // to stop sustained motion from retry-storming a misbehaving camera.
-  { CameraStateLock lock(st); st.lastAlert = nowMs; st.hasAlerted = true; }
+  { CameraStateLock lock(st); st.lastAlert = nowMs; st.hasAlerted = true;
+    incrementDigestCounter(st, isPetEvent, kind); }
   // Starts a fresh digest cycle for checkPendingMotionDigest - see
   // suppressedMotionCount's own comment (camera.h). Reset here, not just
   // left to accumulate, so a digest never double-counts events already
@@ -2158,6 +2176,52 @@ void checkScheduledAlertReverts(const CameraConfig cameras[], CameraState states
     });
     esp_task_wdt_reset();
   }
+}
+
+// One camera's tally for checkDailyActivityDigest below - only built for a
+// camera that actually had at least one non-zero count, so an idle
+// property with a handful of quiet cameras doesn't produce a wall of
+// "no activity" lines.
+struct DailyDigestTally {
+  String name;
+  uint32_t person, vehicle, pet, motion;
+};
+
+void checkDailyActivityDigest(const CameraConfig cameras[], CameraState states[], size_t numCameras) {
+  std::vector<DailyDigestTally> tallies;
+  for (size_t i = 0; i < numCameras; i++) {
+    uint32_t person, vehicle, pet, motion;
+    {
+      // Read AND reset under the same lock - this is the one place these
+      // four counters are ever cleared (incrementDigestCounter above only
+      // ever adds to them), so every camera's counting window restarts
+      // together, right here, regardless of whether it had any activity
+      // this cycle.
+      CameraStateLock lock(states[i]);
+      person = states[i].digestPersonCount;
+      vehicle = states[i].digestVehicleCount;
+      pet = states[i].digestPetCount;
+      motion = states[i].digestMotionCount;
+      states[i].digestPersonCount = 0;
+      states[i].digestVehicleCount = 0;
+      states[i].digestPetCount = 0;
+      states[i].digestMotionCount = 0;
+    }
+    if (person == 0 && vehicle == 0 && pet == 0 && motion == 0) continue;
+    tallies.push_back({cameras[i].name, person, vehicle, pet, motion});
+  }
+
+  if (tallies.empty()) return; // every camera was quiet - nothing worth a notification over
+
+  sendTelegramMessage([tallies](TelegramLang lang) {
+    String msg = trDailyDigestHeader(lang);
+    for (auto& t : tallies) {
+      msg += "\n" + trDailyDigestCameraLine(lang, t.name, t.person, t.vehicle, t.pet, t.motion);
+    }
+    return msg;
+  });
+  logEvent("Daily activity digest sent (" + String((unsigned)tallies.size()) + " of " +
+           String((unsigned)numCameras) + " camera(s) had activity)");
 }
 
 // Bot API's own two-step file download (https://core.telegram.org/bots/api#getfile):

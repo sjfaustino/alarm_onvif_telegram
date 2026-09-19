@@ -82,6 +82,13 @@ static const unsigned long CAMERA_POLL_INTERVAL_MAX_MS = 30000UL; // 30s
 static const unsigned long SNAPSHOT_URI_RETRY_INTERVAL_MS = 5UL * 60UL * 1000UL; // 5 minutes
 static const uint16_t      HTTP_TIMEOUT_MS          = 10000;
 static const unsigned long HEARTBEAT_INTERVAL_MS    = 6UL * 60UL * 60UL * 1000UL; // liveness ping cadence
+// checkDailyActivityDigest's cadence (telegram.h/main.cpp's loop()) - every
+// N hours from boot, same "fixed interval from whenever the board last
+// rebooted" convention as HEARTBEAT_INTERVAL_MS/NVS_USAGE_CHECK_INTERVAL_MS
+// above, not a specific wall-clock time of day (which would need a synced
+// clock and its own scheduling logic this project doesn't otherwise need).
+// A reboot restarts the count, same as every other interval here.
+static const unsigned long DAILY_DIGEST_INTERVAL_MS = 24UL * 60UL * 60UL * 1000UL; // 24 hours
 static const unsigned long TELEGRAM_COMMAND_POLL_MS = 5000UL;        // /on, /off, /status polling cadence
 // How long a task waits to acquire telegram.cpp's g_telegramNetMutex
 // before treating a Telegram send/poll as failed rather than blocking

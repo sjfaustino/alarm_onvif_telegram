@@ -93,6 +93,31 @@ String trMultiCameraDigest(TelegramLang lang, uint32_t count, const String& came
   return "\xE2\x9A\xA0\xEF\xB8\x8F " + String(count) + " cameras detected motion together: " + cameraList;
 }
 
+String trDailyDigestHeader(TelegramLang lang) {
+  if (lang == TelegramLang::Portuguese) return "\xF0\x9F\x93\x8A Resumo de atividade:";
+  return "\xF0\x9F\x93\x8A Activity summary:";
+}
+
+String trDailyDigestCameraLine(TelegramLang lang, const String& cameraName, uint32_t personCount,
+                                uint32_t vehicleCount, uint32_t petCount, uint32_t motionCount) {
+  bool pt = lang == TelegramLang::Portuguese;
+  String parts;
+  // Only non-zero counts are worth a word - a quiet camera's line would
+  // otherwise read "0 person, 0 vehicle, 0 pet, 0 motion" every single
+  // time, which is exactly the noise a digest is supposed to cut through.
+  auto addPart = [&](uint32_t count, const char* enLabel, const char* ptLabel) {
+    if (count == 0) return;
+    if (parts.length() > 0) parts += ", ";
+    parts += String(count) + " " + (pt ? ptLabel : enLabel);
+  };
+  addPart(personCount, "person", "pessoa(s)");
+  addPart(vehicleCount, "vehicle", "ve\xC3\xAD" "culo(s)");
+  addPart(petCount, "pet", "animal(is)");
+  addPart(motionCount, "motion", "movimento(s)");
+  if (parts.length() == 0) parts = pt ? "sem atividade" : "no activity";
+  return "  " + cameraName + ": " + parts;
+}
+
 String trCameraOffline(TelegramLang lang, const String& cameraName, unsigned long minutes) {
   if (lang == TelegramLang::Portuguese) {
     return "\xE2\x9A\xA0\xEF\xB8\x8F " + cameraName + " est\xC3\xA1 OFFLINE - sem resposta h\xC3\xA1 mais de " +

@@ -42,6 +42,7 @@ static unsigned long lastCommandPollMs = 0;
 static unsigned long lastSdCheckMs = 0;
 static unsigned long lastRetentionCheckMs = 0;
 static unsigned long lastNvsCheckMs = 0;
+static unsigned long lastDigestMs = 0;
 // True once checkNvsUsage() has already alerted for the current high-usage
 // stretch - re-armed (set back false) once usage drops back under
 // NVS_USAGE_WARN_PERCENT, same "alert once per state transition, not every
@@ -901,6 +902,7 @@ static void startMonitoring() {
   }
 
   lastHeartbeatMs = millis(); // first heartbeat fires HEARTBEAT_INTERVAL_MS from now, not immediately
+  lastDigestMs = millis(); // first daily activity digest fires DAILY_DIGEST_INTERVAL_MS from now, not immediately
   // Same idea for the automatic SD check (if enabled): first one fires a
   // full sdCheckIntervalHours() from now, not immediately - the boot-time
   // checkNewestSnapshots() call in initSdStorage() already just covered
@@ -1103,6 +1105,16 @@ void loop() {
   if (WiFi.status() == WL_CONNECTED && millis() - lastHeartbeatMs >= HEARTBEAT_INTERVAL_MS) {
     lastHeartbeatMs = millis();
     sendHeartbeat();
+    esp_task_wdt_reset();
+  }
+
+  // Same cadence style as the heartbeat above, independent interval -
+  // checkDailyActivityDigest resets every camera's counters the moment
+  // it's called, so this must only run once per DAILY_DIGEST_INTERVAL_MS,
+  // never every tick.
+  if (WiFi.status() == WL_CONNECTED && millis() - lastDigestMs >= DAILY_DIGEST_INTERVAL_MS) {
+    lastDigestMs = millis();
+    checkDailyActivityDigest(g_cameras.data(), g_cameraStates.data(), g_cameras.size());
     esp_task_wdt_reset();
   }
 

@@ -1232,8 +1232,8 @@ String testCameraConnection(CameraConfig cfg) {
 
   String result = "Test result for \"" + safeName + "\": device service reachable, event service found.";
 
-  String topics;
-  if (cameraGetEventServiceCapabilities(cfg, st) && cameraGetEventProperties(cfg, st, &topics)) {
+  String topics, unusedTopics;
+  if (cameraGetEventServiceCapabilities(cfg, st) && cameraGetEventProperties(cfg, st, &topics, &unusedTopics)) {
     result += " Event service responds normally.";
     // Answers "what detection types does this camera even support" -
     // see scanKnownEventTopics' own comment (camera.cpp) for why this is
@@ -1245,6 +1245,9 @@ String testCameraConnection(CameraConfig cfg) {
            "name (PeopleDetect/VehicleDetect/DogCatDetect/MotionAlarm/CellMotionDetector/"
            "TamperDetector/SignalLoss) - it may still report plain motion under a topic name this "
            "project doesn't know to look for yet, or use a vendor-specific scheme entirely.");
+    if (unusedTopics.length() > 0) {
+      result += " It also advertises: " + htmlEscape(unusedTopics) + " - not used by this firmware yet.";
+    }
   } else {
     result += " WARNING: the event service didn't respond to GetServiceCapabilities/GetEventProperties - "
               "this camera may not support ONVIF eventing at all.";

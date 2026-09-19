@@ -58,6 +58,19 @@ String trMotionDigest(TelegramLang lang, const String& cameraName, uint32_t coun
 // ONE camera during its own cooldown. cameraList is already comma-joined
 // by the caller - language-neutral, not part of this.
 String trMultiCameraDigest(TelegramLang lang, uint32_t count, const String& cameraList);
+// Periodic activity-volume summary (main.cpp's loop(), telegram.cpp's
+// checkDailyActivityDigest) - a per-camera detection count over the
+// interval since the last digest, distinct from trMotionDigest above (one
+// camera's own cooldown-triggered follow-up) and trMultiCameraDigest
+// (several cameras correlated together in one short window): this is a
+// periodic volume rollup sent regardless of whether any single alert's
+// own cooldown ever fired a digest of its own. trDailyDigestHeader is the
+// message's first line; trDailyDigestCameraLine is one camera's own line
+// within it (only cameras with at least one non-zero count get a line -
+// the caller skips the rest).
+String trDailyDigestHeader(TelegramLang lang);
+String trDailyDigestCameraLine(TelegramLang lang, const String& cameraName, uint32_t personCount,
+                                uint32_t vehicleCount, uint32_t petCount, uint32_t motionCount);
 // Manual "Send test alert" button (Cameras dashboard page) - a real photo
 // send through the same recipient list a real motion alert would use,
 // clearly labeled so it's never mistaken for one.

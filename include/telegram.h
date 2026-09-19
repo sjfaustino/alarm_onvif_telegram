@@ -244,6 +244,20 @@ void pollTelegramCommands(const CameraConfig cameras[], CameraState states[], si
 // Cheap when nothing's due: just a millis() comparison per camera.
 void checkScheduledAlertReverts(const CameraConfig cameras[], CameraState states[], size_t numCameras);
 
+// Call once every DAILY_DIGEST_INTERVAL_MS (config.h) from main.cpp's
+// loop() - NOT every tick, unlike most other checkX functions here, since
+// this one unconditionally reads AND RESETS every camera's
+// digestPersonCount/digestVehicleCount/digestPetCount/digestMotionCount
+// (CameraState, camera.h) the moment it's called, restarting all of their
+// counting windows together. Sends nothing (a quiet no-op, not an empty
+// message) if every camera's counts were all zero - a digest with nothing
+// to report isn't worth a notification. Distinct from
+// checkMultiCameraAlertDigest/checkPendingMotionDigest above, which are
+// both event-triggered and short-window; this is a periodic volume
+// summary over whatever interval main.cpp checks it at, regardless of
+// whether any single alert ever triggered either of those.
+void checkDailyActivityDigest(const CameraConfig cameras[], CameraState states[], size_t numCameras);
+
 // Formats a future millis()-timestamp (e.g. CameraState::scheduledRevertDueMs)
 // as a local "HH:MM" wall-clock string, for showing WHEN a timed /on or
 // /off will revert rather than just how long from now (main.cpp's

@@ -233,7 +233,8 @@ static std::vector<String> findAllTopicElementNames(const String& xml) {
   return names;
 }
 
-bool cameraGetEventProperties(const CameraConfig& cfg, CameraState& st, String* outTopics) {
+bool cameraGetEventProperties(const CameraConfig& cfg, CameraState& st, String* outTopics,
+                               String* outUnusedTopics) {
   String action = "http://www.onvif.org/ver10/events/wsdl/EventPortType/GetEventPropertiesRequest";
   String body = "<tev:GetEventProperties/>";
   String response = cameraSoapCall(cfg, st, st.eventServiceUrl, st.eventServiceUrl, action, body);
@@ -245,13 +246,13 @@ bool cameraGetEventProperties(const CameraConfig& cfg, CameraState& st, String* 
   }
   if (outTopics) *outTopics = scanKnownEventTopics(response);
 
-  // Logged (not surfaced on the dashboard - this is a hint for whoever
-  // maintains the firmware, not an end-user-actionable status) so a topic
-  // this project doesn't act on yet - "FireDetection", a line-crossing
-  // detector, whatever a given camera's own AI happens to support - shows
-  // up somewhere a developer would actually see it, instead of silently
-  // being ignored forever. Only the ones NOT already in kKnownEventTopics
-  // are worth mentioning.
+  // Surfaced both live (CameraState::unusedEventTopics, via outUnusedTopics -
+  // the Cameras/Capabilities pages) and logged once here, so a topic this
+  // project doesn't act on yet - "FireDetection", a line-crossing detector,
+  // whatever a given camera's own AI happens to support - shows up
+  // somewhere a maintainer would actually see it when deciding what to add
+  // next, instead of silently being ignored forever. Only the ones NOT
+  // already in kKnownEventTopics are worth mentioning.
   std::vector<String> allTopicNames = findAllTopicElementNames(response);
   String unusedTopics;
   for (auto& name : allTopicNames) {
@@ -263,6 +264,7 @@ bool cameraGetEventProperties(const CameraConfig& cfg, CameraState& st, String* 
     if (unusedTopics.length() > 0) unusedTopics += ", ";
     unusedTopics += name;
   }
+  if (outUnusedTopics) *outUnusedTopics = unusedTopics;
   if (unusedTopics.length() > 0) {
     logEvent(cfg.name + ": event schema also advertises " + unusedTopics +
              " - not used by this firmware yet");
@@ -644,12 +646,12 @@ bool cameraSetupSequence(const CameraConfig& cfg, CameraState& st) {
     // deliberately not returning false: detection/logging still has value
   }
   if (!cameraGetEventServiceCapabilities(cfg, st)) return false;
-  String topics;
-  if (!cameraGetEventProperties(cfg, st, &topics)) return false;
-  // Cross-task field (dashboard render reads it) - see CameraState's own
-  // mutex comment. Written once here per setup, same as streamUri/mjpegUri
-  // just above in this same sequence.
-  { CameraStateLock lock(st); st.supportedEventTopics = topics; }
+  String topics, unusedTopics;
+  if (!cameraGetEventProperties(cfg, st, &topics, &unusedTopics)) return false;
+  // Cross-task fields (dashboard render reads them) - see CameraState's
+  // own mutex comment. Written once here per setup, same as streamUri/
+  // mjpegUri just above in this same sequence.
+  { CameraStateLock lock(st); st.supportedEventTopics = topics; st.unusedEventTopics = unusedTopics; }
   if (!cameraCreatePullPoint(cfg, st)) return false;
   return true;
 }
