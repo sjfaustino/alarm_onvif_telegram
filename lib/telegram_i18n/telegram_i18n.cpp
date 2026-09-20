@@ -332,6 +332,18 @@ String trOtaConfirmedHealthy(TelegramLang lang) {
   return "\xE2\x9C\x85 OTA update confirmed healthy - rollback canceled";
 }
 
+String trOtaRolledBack(TelegramLang lang, const String& invalidPartitionLabel) {
+  if (lang == TelegramLang::Portuguese) {
+    return "\xE2\x9A\xA0\xEF\xB8\x8F A \xC3\xBAltima atualiza\xC3\xA7\xC3\xA3o OTA falhou a valida\xC3\xA7\xC3\xA3o "
+           "e foi revertida para o firmware anterior (parti\xC3\xA7\xC3\xA3o " + invalidPartitionLabel +
+           " marcada como inv\xC3\xA1lida). O firmware atual voltou a funcionar sozinho, mas vale a pena "
+           "investigar o que correu mal antes de tentar novamente.";
+  }
+  return "\xE2\x9A\xA0\xEF\xB8\x8F The last OTA update failed validation and was rolled back to the "
+         "previous firmware (partition " + invalidPartitionLabel + " marked invalid). This board recovered "
+         "on its own, but it's worth investigating what went wrong before trying that update again.";
+}
+
 String trSdCheckWarning(TelegramLang lang, size_t unreadableFiles, size_t filesChecked) {
   if (lang == TelegramLang::Portuguese) {
     return "\xE2\x9A\xA0\xEF\xB8\x8F A verifica\xC3\xA7\xC3\xA3o do armazenamento SD encontrou " +

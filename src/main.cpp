@@ -9,6 +9,7 @@
 #include <esp_ota_ops.h>  // esp_ota_mark_app_valid_cancel_rollback()
 #include <nvs_flash.h>    // nvs_get_stats() - checkNvsUsage()
 #include <nvs.h>
+#include <Preferences.h>  // checkOtaRollback()'s own small NVS dedup marker
 #include <cstdlib>
 #include <time.h>      // timegm/gmtime_r - seedSystemClockFromRtc/setupTime's RTC writeback
 #include <sys/time.h>  // settimeofday - seedSystemClockFromRtc
@@ -1067,6 +1068,34 @@ void setup() {
     logEvent("OTA update confirmed healthy - rollback canceled");
     sendTelegramMessage([](TelegramLang lang) { return trOtaConfirmedHealthy(lang); });
   }
+
+  // The counterpart the block above never had: a firmware update that
+  // boot-looped and got auto-reverted by the bootloader's own rollback
+  // safety net was previously invisible - the board would just quietly
+  // come back up on the old, previously-good partition with no record
+  // anything had gone wrong. esp_ota_get_last_invalid_partition() is
+  // ESP-IDF's own record of which partition (if any) most recently failed
+  // validation - unlike wasPendingVerify above, this stays set across
+  // every later boot until that same slot gets overwritten by another OTA
+  // attempt, so alerting on it unconditionally would repeat forever; a
+  // tiny persisted marker (separate from anything else in NVS) remembers
+  // which failure this board already reported, and is cleared again once
+  // the slot stops being invalid (a fresh, successful OTA overwrote it),
+  // so a FUTURE rollback onto that same slot is still caught fresh.
+  const esp_partition_t* invalidPartition = esp_ota_get_last_invalid_partition();
+  String invalidLabel = invalidPartition ? String(invalidPartition->label) : "";
+  Preferences otaPrefs;
+  otaPrefs.begin("otastate", false);
+  String lastReportedInvalid = otaPrefs.getString("invalidPart", "");
+  if (invalidLabel.length() > 0 && invalidLabel != lastReportedInvalid) {
+    logEvent("OTA update failed validation - rolled back to the previous firmware (" + invalidLabel +
+             " marked invalid)");
+    sendTelegramMessage([invalidLabel](TelegramLang lang) { return trOtaRolledBack(lang, invalidLabel); });
+    otaPrefs.putString("invalidPart", invalidLabel);
+  } else if (invalidLabel.length() == 0 && lastReportedInvalid.length() > 0) {
+    otaPrefs.remove("invalidPart");
+  }
+  otaPrefs.end();
 }
 
 void loop() {

@@ -147,6 +147,17 @@ String trSdCheckWarning(TelegramLang lang, size_t unreadableFiles, size_t filesC
 // than a serial monitor someone happened to have plugged in at that exact
 // reboot.
 String trOtaConfirmedHealthy(TelegramLang lang);
+// The counterpart trOtaConfirmedHealthy never had: sent once, the first
+// boot main.cpp notices esp_ota_get_last_invalid_partition() naming a
+// partition it hasn't already reported (checkOtaRollback's own small NVS
+// marker dedups repeats across every later boot, the same "just this one
+// boot" problem trOtaConfirmedHealthy's own wasPendingVerify check
+// solves) - a firmware update that boot-looped and got auto-reverted to
+// the previous partition by the bootloader's own rollback safety net,
+// previously invisible: the board would just quietly come back up on old
+// firmware with no record anything had gone wrong. invalidPartitionLabel
+// names which OTA slot failed validation, for whoever's debugging why.
+String trOtaRolledBack(TelegramLang lang, const String& invalidPartitionLabel);
 // afterLiveEdit: false = discovered at camera-task startup, true = discovered
 // after a live dashboard edit removed the credentials (camera.cpp's two sites).
 String trMissingCredentials(TelegramLang lang, const String& cameraName, bool afterLiveEdit);

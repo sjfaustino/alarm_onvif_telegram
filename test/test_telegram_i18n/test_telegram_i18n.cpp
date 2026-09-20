@@ -286,6 +286,15 @@ void test_trOtaConfirmedHealthy(void) {
   TEST_ASSERT_TRUE(en.indexOf("healthy") >= 0);
 }
 
+void test_trOtaRolledBack_embeds_partition_label(void) {
+  String en = trOtaRolledBack(TelegramLang::English, "ota_1");
+  String pt = trOtaRolledBack(TelegramLang::Portuguese, "ota_1");
+  TEST_ASSERT_TRUE(en != pt);
+  TEST_ASSERT_TRUE(en.indexOf("ota_1") >= 0);
+  TEST_ASSERT_TRUE(pt.indexOf("ota_1") >= 0);
+  TEST_ASSERT_TRUE(en.indexOf("rolled back") >= 0);
+}
+
 void test_trMissingCredentials_both_variants(void) {
   String enStartup = trMissingCredentials(TelegramLang::English, "D01", false);
   String enEdit = trMissingCredentials(TelegramLang::English, "D01", true);
@@ -608,6 +617,7 @@ int main(int argc, char** argv) {
   RUN_TEST(test_trSdFailure_and_trSdCheckWarning);
   RUN_TEST(test_trSdNotAvailableAtBoot);
   RUN_TEST(test_trOtaConfirmedHealthy);
+  RUN_TEST(test_trOtaRolledBack_embeds_partition_label);
   RUN_TEST(test_trMissingCredentials_both_variants);
   RUN_TEST(test_trTestMessage);
   RUN_TEST(test_trHeartbeatHeader_and_trBootHeader);
