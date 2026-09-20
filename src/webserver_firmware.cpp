@@ -3,10 +3,24 @@
 #include "config.h" // NVS_USAGE_WARN_PERCENT, HEAP_LOW_WARN_BYTES
 #include "telegram_retry_queue.h" // getTelegramRetryQueueStatus
 #include "format_utils.h" // formatUptime
+#include "ota_history.h" // loadOtaHistory
 #include <esp_ota_ops.h>
 #include <esp_heap_caps.h> // heap_caps_get_free_size(MALLOC_CAP_SPIRAM)
 #include <nvs_flash.h>
 #include <nvs.h>
+#include <time.h>
+
+// "" if epoch is 0 (unknown - main.cpp's checks run after WiFi connects,
+// so the clock is normally already synced by then, but a very old record
+// from before this feature existed would have no timestamp at all).
+static String formatEpochLocal(time_t epoch) {
+  if (epoch == 0) return "";
+  struct tm tmStruct;
+  localtime_r(&epoch, &tmStruct);
+  char buf[25];
+  strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &tmStruct);
+  return String(buf);
+}
 
 String renderFirmwarePanel() {
   const esp_partition_t* running = esp_ota_get_running_partition();
@@ -16,6 +30,20 @@ String renderFirmwarePanel() {
   html += "<tr><th>Version</th><td>" + String(FIRMWARE_VERSION) + "</td></tr>";
   html += "<tr><th>Build</th><td>" + String(__DATE__) + " " + String(__TIME__) + "</td></tr>";
   html += "<tr><th>Running partition</th><td>" + String(running ? running->label : "?") + "</td></tr>";
+  // Persisted (ota_history.h) by main.cpp's boot-time OTA checks - "" (no
+  // row) until the first update this board ever confirms healthy or rolls
+  // back, so a board that's never had an OTA update just doesn't mention
+  // it, rather than showing a misleading "None" row.
+  OtaHistoryEntry otaHistory = loadOtaHistory();
+  if (otaHistory.outcome != OtaOutcome::None) {
+    String when = formatEpochLocal(otaHistory.epoch);
+    String outcomeText = otaHistory.outcome == OtaOutcome::Healthy
+        ? ("<span class=\"badge badge-on\">confirmed healthy</span>")
+        : ("<span class=\"badge badge-offline\">rolled back</span>");
+    html += "<tr><th>Last OTA update</th><td>" + outcomeText + " (partition " +
+            htmlEscape(otaHistory.partitionLabel) + ")" +
+            (when.length() > 0 ? " on " + when : "") + "</td></tr>";
+  }
   html += "<tr><th>Sketch size</th><td>" + String(ESP.getSketchSize() / 1024) + " KB</td></tr>";
   html += "<tr><th>Free space for update</th><td>" + String(ESP.getFreeSketchSpace() / 1024) + " KB</td></tr>";
 

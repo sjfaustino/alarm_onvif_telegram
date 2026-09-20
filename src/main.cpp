@@ -9,7 +9,6 @@
 #include <esp_ota_ops.h>  // esp_ota_mark_app_valid_cancel_rollback()
 #include <nvs_flash.h>    // nvs_get_stats() - checkNvsUsage()
 #include <nvs.h>
-#include <Preferences.h>  // checkOtaRollback()'s own small NVS dedup marker
 #include <cstdlib>
 #include <time.h>      // timegm/gmtime_r - seedSystemClockFromRtc/setupTime's RTC writeback
 #include <sys/time.h>  // settimeofday - seedSystemClockFromRtc
@@ -34,6 +33,7 @@
 #include "heap_health.h"
 #include "telegram_i18n.h"
 #include "http_date_parse.h" // parseHttpDate - seedSystemClockFromRouterHttpDate
+#include "ota_history.h"
 
 static std::vector<CameraConfig> g_cameras;
 static std::vector<CameraState> g_cameraStates;
@@ -1067,6 +1067,11 @@ void setup() {
   if (rollbackErr == ESP_OK && wasPendingVerify) {
     logEvent("OTA update confirmed healthy - rollback canceled");
     sendTelegramMessage([](TelegramLang lang) { return trOtaConfirmedHealthy(lang); });
+    // Persisted (ota_history.h) so the Firmware page can show this
+    // outcome from then on, not just the one-time push above - otherwise
+    // the only record of it ever having happened is whatever's left in
+    // the Activity log's own bounded/rotating history.
+    recordOtaOutcome(OtaOutcome::Healthy, runningPartition ? String(runningPartition->label) : "");
   }
 
   // The counterpart the block above never had: a firmware update that
@@ -1077,25 +1082,22 @@ void setup() {
   // ESP-IDF's own record of which partition (if any) most recently failed
   // validation - unlike wasPendingVerify above, this stays set across
   // every later boot until that same slot gets overwritten by another OTA
-  // attempt, so alerting on it unconditionally would repeat forever; a
-  // tiny persisted marker (separate from anything else in NVS) remembers
-  // which failure this board already reported, and is cleared again once
-  // the slot stops being invalid (a fresh, successful OTA overwrote it),
-  // so a FUTURE rollback onto that same slot is still caught fresh.
+  // attempt, so alerting on it unconditionally would repeat forever;
+  // ota_history.h's dedup marker remembers which failure this board
+  // already reported, and is cleared again once the slot stops being
+  // invalid (a fresh, successful OTA overwrote it), so a FUTURE rollback
+  // onto that same slot is still caught fresh.
   const esp_partition_t* invalidPartition = esp_ota_get_last_invalid_partition();
   String invalidLabel = invalidPartition ? String(invalidPartition->label) : "";
-  Preferences otaPrefs;
-  otaPrefs.begin("otastate", false);
-  String lastReportedInvalid = otaPrefs.getString("invalidPart", "");
-  if (invalidLabel.length() > 0 && invalidLabel != lastReportedInvalid) {
+  if (invalidLabel.length() > 0 && !alreadyReportedInvalidPartition(invalidLabel)) {
     logEvent("OTA update failed validation - rolled back to the previous firmware (" + invalidLabel +
              " marked invalid)");
     sendTelegramMessage([invalidLabel](TelegramLang lang) { return trOtaRolledBack(lang, invalidLabel); });
-    otaPrefs.putString("invalidPart", invalidLabel);
-  } else if (invalidLabel.length() == 0 && lastReportedInvalid.length() > 0) {
-    otaPrefs.remove("invalidPart");
+    rememberReportedInvalidPartition(invalidLabel);
+    recordOtaOutcome(OtaOutcome::RolledBack, invalidLabel); // same "persist for the Firmware page" reasoning as the healthy case above
+  } else if (invalidLabel.length() == 0) {
+    forgetReportedInvalidPartition();
   }
-  otaPrefs.end();
 }
 
 void loop() {
