@@ -137,6 +137,16 @@ String trSdFailure(TelegramLang lang, const String& reason);
 // instead.
 String trSdNotAvailableAtBoot(TelegramLang lang);
 String trSdCheckWarning(TelegramLang lang, size_t unreadableFiles, size_t filesChecked);
+// Folded into the boot message (main.cpp), same pattern as
+// trSdNotAvailableAtBoot/trPowerStatusLine above - only added on the ONE
+// boot right after a firmware update (the partition's OTA state was
+// ESP_OTA_IMG_PENDING_VERIFY before esp_ota_mark_app_valid_cancel_rollback()
+// cleared it), not every ordinary boot, so this doesn't repeat forever.
+// The previous firmware's own rollback safety net is what protects a bad
+// update; this is just making that confirmation visible somewhere other
+// than a serial monitor someone happened to have plugged in at that exact
+// reboot.
+String trOtaConfirmedHealthy(TelegramLang lang);
 // afterLiveEdit: false = discovered at camera-task startup, true = discovered
 // after a live dashboard edit removed the credentials (camera.cpp's two sites).
 String trMissingCredentials(TelegramLang lang, const String& cameraName, bool afterLiveEdit);

@@ -325,6 +325,13 @@ String trSdNotAvailableAtBoot(TelegramLang lang) {
   return "\xE2\x9A\xA0\xEF\xB8\x8F SD card storage enabled but not available";
 }
 
+String trOtaConfirmedHealthy(TelegramLang lang) {
+  if (lang == TelegramLang::Portuguese) {
+    return "\xE2\x9C\x85 Atualiza\xC3\xA7\xC3\xA3o OTA confirmada como saud\xC3\xA1vel - rollback cancelado";
+  }
+  return "\xE2\x9C\x85 OTA update confirmed healthy - rollback canceled";
+}
+
 String trSdCheckWarning(TelegramLang lang, size_t unreadableFiles, size_t filesChecked) {
   if (lang == TelegramLang::Portuguese) {
     return "\xE2\x9A\xA0\xEF\xB8\x8F A verifica\xC3\xA7\xC3\xA3o do armazenamento SD encontrou " +

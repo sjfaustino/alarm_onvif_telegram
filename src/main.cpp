@@ -1033,12 +1033,40 @@ void setup() {
   // network outage during an update shouldn't roll back otherwise-good
   // firmware, and reaching this line already means every crash-prone init
   // step survived without a panic or watchdog reset.
+  //
+  // wasPendingVerify is captured BEFORE the mark-valid call below, which
+  // is exactly what changes it - PENDING_VERIFY is the state ONLY the
+  // very first boot after a fresh OTA flash starts in; every ordinary
+  // boot after that already reads VALID. esp_ota_mark_app_valid_cancel_rollback()
+  // returning ESP_OK on its own can't tell those apart - it succeeds on
+  // literally every boot, not just a just-flashed one - so logging/
+  // alerting on ESP_OK alone would fire forever, not just once per update.
+  const esp_partition_t* runningPartition = esp_ota_get_running_partition();
+  esp_ota_img_states_t otaState = ESP_OTA_IMG_UNDEFINED;
+  bool wasPendingVerify = runningPartition &&
+      esp_ota_get_state_partition(runningPartition, &otaState) == ESP_OK &&
+      otaState == ESP_OTA_IMG_PENDING_VERIFY;
+
   esp_err_t rollbackErr = esp_ota_mark_app_valid_cancel_rollback();
   if (rollbackErr == ESP_OK) {
     Serial.println("OTA rollback: this firmware confirmed healthy - won't auto-revert on the next reboot.");
   }
   // Any other result (e.g. no rollback pending - the normal case except
   // right after a firmware update) is expected, not logged as an error.
+
+  // Only on the one boot that actually just cleared a pending OTA
+  // validation (see wasPendingVerify above) - a durable Activity-log line
+  // plus a Telegram push, since previously the only confirmation this
+  // ever happened was the Serial.println above, invisible unless someone
+  // had a cable plugged in at that exact reboot. Sent as its own message,
+  // not folded into startMonitoring()'s earlier boot notice - this call
+  // is deliberately AFTER that one runs (see this whole block's own
+  // comment on why), so that message has already gone out by the time
+  // this is known.
+  if (rollbackErr == ESP_OK && wasPendingVerify) {
+    logEvent("OTA update confirmed healthy - rollback canceled");
+    sendTelegramMessage([](TelegramLang lang) { return trOtaConfirmedHealthy(lang); });
+  }
 }
 
 void loop() {
