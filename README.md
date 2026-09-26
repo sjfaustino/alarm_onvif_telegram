@@ -571,6 +571,7 @@ lib/                 # pure-logic modules with no hardware dependencies, split o
                       # files above specifically so they're unit-testable - see test/README.md
   xml_helpers/            # ONVIF response substring parsing + XML escaping
   camera_serialize/       # CameraConfig <-> NVS blob (de)serialization, schema-versioned
+  camera_form/            # camera Add/Edit form: rendering and parsing/clamping (golden-tested)
   telegram_user_serialize/ # TelegramUser <-> NVS blob (de)serialization, schema-versioned
   telegram_parse/         # Telegram JSON escaping, /on,/off,/snap camera-name matching, and
                            # /on,/off timer-token parsing (minutes or HH:MM)
