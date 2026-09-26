@@ -143,9 +143,9 @@ String buildConfigExport() {
   out += "=== Camera Monitor v" + String(FIRMWARE_VERSION) + " Configuration Export ===\n";
   out += "Firmware build: " + String(__DATE__) + " " + String(__TIME__) + "\n";
   out += "Board uptime at export: " + formatUptime(millis()) + "\n\n";
-  out += "Passwords (camera and WiFi) are deliberately NOT included below - re-enter them\n";
-  out += "manually after a restore. Everything else here is what's tedious to reconstruct\n";
-  out += "from memory via the dashboard.\n";
+  out += "KEEP THIS FILE PRIVATE: the machine-readable CAMERAS block below contains every\n";
+  out += "camera's username and password, so an import restores them. WiFi passwords are\n";
+  out += "never exported - re-enter the WiFi password after importing a Network section.\n";
   out += "\nEach section below is followed by a machine-readable block (marked '### ...') used\n";
   out += "by the Security page's Import - its lines contain non-printable field separators, so\n";
   out += "they'll look like run-together text in a plain text editor; that's expected, don't\n";

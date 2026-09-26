@@ -299,8 +299,8 @@ Arduino-ESP32/IDF releases.
   to 30 minutes) - HTTP Basic Auth has no throttling of its own, so without this
   a wrong-password guess would otherwise cost an attacker nothing. The Security
   page also has a config export/backup - a plain-text download of every camera,
-  Telegram user, and network setting (no passwords - those still have to be
-  re-entered by hand), for reconstructing the tedious parts of the configuration
+  Telegram user, and network setting (including camera usernames and passwords,
+  so keep the file private; WiFi passwords are never exported), for reconstructing the tedious parts of the configuration
   if NVS is ever erased or a board gets replaced. A matching Import restores from
   a previously exported file - a real file upload (not a size-limited form field,
   so it scales to as many cameras/users as you actually have), REPLACING whichever
@@ -311,10 +311,9 @@ Arduino-ESP32/IDF releases.
   ambiguous pair - the same rule the Add-camera/Add-user forms already enforce
   one at a time. Every import automatically saves a one-slot backup of whatever
   was stored just before it, downloadable from the same page, so importing the
-  wrong file is undoable by importing that backup back. Imported cameras/network
-  always have blank passwords (never in an export) - re-enter them before
-  rebooting, since network settings missing the WiFi password will otherwise
-  strand the board off the network entirely. Takes effect after a reboot, same
+  wrong file is undoable by importing that backup back. Camera passwords are
+  restored from the file; an imported network section has no WiFi password -
+  re-enter it before rebooting, or the board is stranded off the network. Takes effect after a reboot, same
   as any other bulk camera/network change.
 
 ## Hardware

@@ -41,17 +41,11 @@ String summarizeImportResult(const ConfigImportApplyResult& r, ImportSummaryForm
               "were left unchanged.";
   }
   if (r.networkImported) {
-    // Stronger wording than the plain camera-password note below -
-    // rebooting with a blank WiFi password (not just a broken camera)
-    // strands the board off the network entirely, reachable only via
-    // physical/serial access to fix.
+    // Rebooting with a blank WiFi password strands the board off the
+    // network, fixable only with physical access.
     banner += " \xE2\x9A\xA0\xEF\xB8\x8F Network was imported WITHOUT a WiFi password (never "
               "included in an export) - go to the Network page and re-enter it now. Rebooting "
               "before fixing this will leave the board unable to reconnect to WiFi at all.";
-  }
-  if (r.camerasImported) {
-    banner += " Imported camera(s) also have blank passwords - re-enter them on the Cameras "
-              "page before rebooting.";
   }
   if (imported.length() > 0) {
     if (r.backupSaved) {

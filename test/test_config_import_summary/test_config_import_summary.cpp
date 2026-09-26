@@ -28,8 +28,7 @@ void test_html_banner_exact(void) {
   TEST_ASSERT_EQUAL_STRING(
       "Imported 2 camera(s). Telegram Users, Network, SD Settings, Internet Watchdog, "
       "Camera Bridge Watchdog, 220V Power Monitor not found in this file (or failed to save) - "
-      "left unchanged. Imported camera(s) also have blank passwords - re-enter them on the "
-      "Cameras page before rebooting. A backup of what was stored just before this import was "
+      "left unchanged. A backup of what was stored just before this import was "
       "saved automatically - <a href=\"/import/backup\">download it</a> if you need to undo "
       "this. Reboot the board (Maintenance page) to apply.",
       summarizeImportResult(camerasOnly(true), ImportSummaryFormat::Html).c_str());

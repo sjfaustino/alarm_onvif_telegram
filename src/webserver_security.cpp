@@ -31,8 +31,8 @@ String renderSecurityPanel() {
 
   html += "<fieldset><legend>Backup</legend>";
   html += "<p class=\"hint\">Downloads every camera, Telegram user, and network setting currently "
-          "stored, as plain text - not the passwords (camera or WiFi), which aren't exported and "
-          "have to be re-entered manually. Useful to have on hand if NVS is ever erased (see above) "
+          "stored, as plain text. It includes every camera's username and password (so keep the file "
+          "private), but never the WiFi password. Useful to have on hand if NVS is ever erased (see above) "
           "or a board gets replaced - reconstructing everything else from memory is the tedious part.</p>";
   html += "<p><a href=\"/export\"><button type=\"button\">Export configuration</button></a></p>";
   html += "</fieldset>";
@@ -41,9 +41,8 @@ String renderSecurityPanel() {
   html += "<p class=\"hint\">Restores cameras, Telegram users, network settings, and SD settings "
           "from a previously exported configuration file - REPLACES whichever of those sections "
           "the file actually contains (a section missing from the file is left untouched). "
-          "Passwords are never in an export, so imported cameras/network will need theirs "
-          "re-entered before they'll work - if Network is included, that means the WiFi password "
-          "too: rebooting before fixing it strands the board off the network entirely, reachable "
+          "Camera passwords are restored from the file; the WiFi password is never exported, so if "
+          "Network is included it must be re-entered before rebooting - rebooting first strands the board off the network entirely, reachable "
           "only via physical/serial access. Takes effect after a reboot, same as any other "
           "camera/network change. Only files exported by this Import feature (this build or "
           "later) can be restored - older exports have nothing for it to read. Every import "
@@ -63,7 +62,7 @@ String renderSecurityPanel() {
           "onsubmit=\"return confirm('Import this "
           "configuration? This REPLACES cameras/Telegram users/network/SD settings currently "
           "stored with whatever the file contains (a section missing from the file is left "
-          "alone). Passwords will need to be re-entered - if the file includes Network, do NOT "
+          "alone). The WiFi password is not in the file - if it includes Network, do NOT "
           "reboot until you have re-entered the WiFi password, or the board will be unable to "
           "reconnect.');\">";
   html += "<label>Configuration file (.txt from Export above)"
