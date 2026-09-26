@@ -3,38 +3,25 @@
 #include <freertos/semphr.h>
 #include "background_job_state.h"
 
-// Generic single-slot background job: a mutex-guarded "start (no-op if
-// already running) / finish / read status" wrapper around
-// BackgroundJobState's pure transition rules (lib/background_job_state).
-// Used by webserver_cameras.cpp for both the "Test all cameras" and
-// "Search network for cameras" buttons, which used to each hand-write an
-// identical bool inProgress/bool hasResult/std::vector<T> results/mutex
-// block - one implementation now, instead of two independently-typed
-// copies of the same locking logic.
+// Single-slot background job: mutex-guarded start / finish / status around
+// BackgroundJobState's pure rules.
 //
-// What happened when a caller tried to start a job - lets a PsychicHttp
-// route handler tell the person who actually clicked the button what
-// happened, instead of always assuming success. Before this existed, every
-// startXAsync() returned void and every route handler hardcoded an
-// optimistic "started in the background" banner regardless of outcome -
-// including the FailedToStart case below, where the only trace was a
-// Serial.println nobody browsing the dashboard would ever see.
+// Start outcome, so the route handler's banner tells the truth (including a
+// failed task launch).
 enum class BackgroundJobStartOutcome {
   Started,        // tryStart() and the task creation that followed both succeeded - a new run is in flight
   AlreadyRunning, // tryStart() returned false - one was already in flight, this call changed nothing
   FailedToStart,  // xTaskCreate failed (out of memory?) after tryStart() succeeded; rolled back via cancelStart()
 };
 
-// T is whatever the job produces - a std::vector<CameraTestResult>, a
-// std::vector<DiscoveredCamera>. Must be default-constructible.
+// T is the job's result type; must be default-constructible.
 template <typename T>
 class BackgroundJob {
  public:
   BackgroundJob() : mutex_(xSemaphoreCreateMutex()) {}
 
-  // False (a no-op) if a run is already in progress - the caller must NOT
-  // spawn a second overlapping task in that case. True means the caller
-  // now owns starting a task that eventually calls finish().
+  // False if a run is in progress - don't start another. True: the caller must
+  // start a task that eventually calls finish().
   bool tryStart() {
     bool started;
     xSemaphoreTake(mutex_, portMAX_DELAY);
@@ -44,19 +31,13 @@ class BackgroundJob {
     return started;
   }
 
-  // Call this if tryStart() returned true but the caller then failed to
-  // actually launch the task (e.g. xTaskCreate returned pdFAIL) - rolls
-  // inProgress back to false via markBackgroundJobStartFailed
-  // (background_job_state.h) so the NEXT tryStart() isn't permanently
-  // wedged waiting for a finish() that will never come. Does not touch
-  // hasResult/result - see that function's own comment.
+  // Undo tryStart() when the task failed to launch, so the job isn't wedged.
   void cancelStart() {
     xSemaphoreTake(mutex_, portMAX_DELAY);
     state_ = markBackgroundJobStartFailed(state_);
     xSemaphoreGive(mutex_);
   }
 
-  // Called once, by the background task itself, when the work is done.
   void finish(T result) {
     xSemaphoreTake(mutex_, portMAX_DELAY);
     result_ = result;
@@ -70,9 +51,7 @@ class BackgroundJob {
     T result; // only meaningful if hasResult
   };
 
-  // Safe to call from any task. result is copied out under the lock, same
-  // as both hand-written versions this replaced did - the caller renders
-  // it outside the lock.
+  // Any task. The result is copied out so the caller renders outside the lock.
   Status status() {
     Status s;
     xSemaphoreTake(mutex_, portMAX_DELAY);

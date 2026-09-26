@@ -34,15 +34,12 @@ static QuickSnapshotCheckResult g_lastBootCheckResult; // see lastBootCheckResul
 
 SdSettings loadSdSettings() {
   Preferences prefs;
-  // Read-write, not read-only - see auth_store.cpp's loadDashboardAuth for why.
+  // Read-write (see loadDashboardAuth).
   prefs.begin(NVS_NAMESPACE, false);
   SdSettings settings;
   settings.enabled = prefs.getBool(NVS_KEY_ENABLED, false);
   settings.checkIntervalHours = prefs.getUInt(NVS_KEY_CHECK_HOURS, 0);
-  // getUShort's own default (SD_RETENTION_DAYS_DEFAULT) is what makes this
-  // backward-compatible for free: an NVS blob saved before this field
-  // existed simply never wrote this key, so it reads back as the sensible
-  // default instead of 0 ("keep forever", which nothing chose on purpose).
+  // Missing key (older settings) reads as the default, not 0 ("keep forever").
   settings.retentionDays = prefs.getUShort(NVS_KEY_RETENTION_DAYS, SD_RETENTION_DAYS_DEFAULT);
   prefs.end();
   return settings;
@@ -60,9 +57,7 @@ bool saveSdSettings(const SdSettings& settings) {
                     "revert to the previous value on the next reboot.");
     return false;
   }
-  // checkIntervalHours/retentionDays need no reboot to take effect (unlike
-  // `enabled` - see the struct's own comment) - update the caches
-  // main.cpp's loop() reads immediately, not just on the next boot.
+  // These apply immediately, unlike `enabled`.
   g_sdCheckIntervalHours = settings.checkIntervalHours;
   g_sdRetentionDays = settings.retentionDays;
   return true;
@@ -79,13 +74,7 @@ void initSdStorage() {
     return;
   }
 
-  // logEvent() is safe this early - no network dependency (see its own
-  // comment, event_log_store.cpp): purely in-RAM, plus an SD append that
-  // immediately no-ops via sdActive() below since SD isn't active yet at
-  // any of these three failure points. The Telegram boot notice
-  // (main.cpp, trSdNotAvailableAtBoot) deliberately stays short - the
-  // detailed reason belongs here, in the Activity log, not repeated to
-  // every recipient's phone.
+  // Log the specific failure reason; the boot notice stays short.
   SPI.begin(SD_SCK_PIN, SD_MISO_PIN, SD_MOSI_PIN, SD_CS_PIN);
   if (!SD.begin(SD_CS_PIN, SPI)) {
     Serial.println("[sd_store] SD storage is enabled, but no module responded on the configured SPI "
@@ -118,10 +107,8 @@ void initSdStorage() {
   Serial.printf("[sd_store] SD card mounted: %.1fMB used / %.1fMB total.\n",
                 (double)SD.usedBytes() / (1024.0 * 1024.0), (double)SD.totalBytes() / (1024.0 * 1024.0));
 
-  // Bounded (one file per distinct camera directory found), unlike the
-  // full on-demand check - see checkNewestSnapshots' own comment for why
-  // this one is safe to run unconditionally here. Cached, not alerted on
-  // directly - see lastBootCheckResult()'s own comment for why.
+  // Bounded (newest file per camera), so safe at every boot. Cached for the
+  // boot notice, since WiFi isn't up yet.
   g_lastBootCheckResult = checkNewestSnapshots();
 }
 
@@ -160,48 +147,28 @@ SdStatus getSdStatus() {
   return status;
 }
 
-// Marks SD unavailable for the rest of this session - called on any I/O
-// failure past the boot-time check, not just there. See sdActive()'s
-// comment for why: a card that degrades mid-session should fall back to
-// the PSRAM ring from that point on, not silently drop every future
-// snapshot.
+// Any I/O failure turns SD off for the rest of the boot; history falls back to
+// the PSRAM ring.
 static void markSdFailed(const char* reason) {
   Serial.printf("[sd_store] SD I/O failure (%s) - marking SD unavailable for the rest of this "
                 "session, falling back to the PSRAM snapshot ring.\n", reason);
   g_sdAvailable = false;
-  // Safe to call unconditionally: this is only ever reached from
-  // writeSdSnapshot/readSdSnapshot, both only reachable once camera tasks
-  // are running, which is well after WiFi/the webserver are up - unlike
-  // checkNewestSnapshots(), which can't send from its own boot-time call
-  // site (see that function's comment). All three call sites are also
-  // outside their own g_sdMutex critical section by the time they reach
-  // here, so this blocking network call never holds up another camera's
-  // SD access.
+  // Only reached once tasks run (WiFi is up), and outside the SD mutex, so the
+  // blocking send doesn't stall other cameras.
   logEvent(String("SD storage failed (") + reason + ") - falling back to PSRAM history");
   String reasonStr = reason;
   sendTelegramMessage([reasonStr](TelegramLang lang) { return trSdFailure(lang, reasonStr); });
 }
 
 // ============================================================
-// Directory layout: /snapshots/<YYYY>/<MM>/<DD>/<camera>/<file>.jpg -
-// lets a card be browsed by date on a computer, not just one giant
-// per-camera folder. Existing history written before this layout existed
-// (a flat /snapshots/<camera>/<file>.jpg) is deliberately left exactly
-// where it is - no migration - so every function below that needs "this
-// camera's whole file list" has to discover files regardless of how deep
-// they're nested, not assume a fixed depth. walkAllFiles is the one place
-// that recursion lives; everything else is built on top of it.
+// Layout: /snapshots/<YYYY>/<MM>/<DD>/<camera>/<file>.jpg. Older history in
+// the flat /snapshots/<camera>/ layout was left in place, so everything below
+// discovers files at any depth via walkAllFiles.
 // ============================================================
 
-// Recursively visits every FILE (not directory) anywhere under dirPath,
-// regardless of nesting depth - handles the old flat <camera>/ layout,
-// the new <Y>/<M>/<D>/<camera>/ layout, and any mix of the two on the
-// same card transparently, since it never assumes a fixed depth. `visit`
-// gets the file's full path, its bare filename, its size, and its
-// immediate parent directory's own name (e.g. "D05-Traseiras" for a file
-// under either layout) - callers use that last one to tell which camera a
-// file belongs to without caring how deep it was found. Caller must hold
-// g_sdMutex.
+// Visits every file under dirPath at any depth, passing its path, name, size
+// and parent directory name (which identifies the camera in either layout).
+// Caller holds g_sdMutex.
 static void walkAllFiles(const String& dirPath,
                           const std::function<void(const String& filePath, const String& fileName, uint64_t size,
                                                     const String& parentDirName)>& visit) {
@@ -211,11 +178,8 @@ static void walkAllFiles(const String& dirPath,
     return;
   }
 
-  // Collect entries before recursing/visiting - same "don't mutate/rely on
-  // FS state out from under an in-progress openNextFile() walk" caution
-  // this project already applies wherever a walk's results feed a delete
-  // (this one doesn't delete anything itself, but every caller that does
-  // built on top of it already collects its own full list before acting).
+  // Collect entries before recursing rather than relying on FS state
+  // mid-openNextFile().
   struct Entry {
     String name;
     bool isDir;
@@ -241,11 +205,8 @@ static void walkAllFiles(const String& dirPath,
   }
 }
 
-// Every stored file belonging to cameraDirName, wherever it lives (any
-// Year/Month/Day folder, or the legacy flat layout) - the one place every
-// per-camera operation below (write/prune, count, read, retention) gets
-// its file list from, so none of them need their own opinion about the
-// directory layout. Caller must hold g_sdMutex.
+// All of a camera's files in any layout - the one source every per-camera
+// operation uses. Caller holds g_sdMutex.
 static std::vector<SnapshotFileInfo> listAllFilesForCamera(const String& cameraDirName) {
   std::vector<SnapshotFileInfo> files;
   walkAllFiles(SNAPSHOTS_ROOT, [&](const String& filePath, const String& fileName, uint64_t size,
@@ -260,10 +221,7 @@ static std::vector<SnapshotFileInfo> listAllFilesForCamera(const String& cameraD
   return files;
 }
 
-// Same as listAllFilesForCamera above, sorted newest-first (age=0 is index
-// 0) - shared by readSdSnapshot/sdSnapshotSourceAt/sdSnapshotSourcesAll,
-// all of which need this camera's files in that order. Caller must hold
-// g_sdMutex.
+// Newest first (age 0 = index 0). Caller holds g_sdMutex.
 static std::vector<SnapshotFileInfo> listCameraFilesNewestFirst(const String& cameraDirName) {
   std::vector<SnapshotFileInfo> files = listAllFilesForCamera(cameraDirName);
   std::sort(files.begin(), files.end(), [](const SnapshotFileInfo& a, const SnapshotFileInfo& b) {
@@ -272,12 +230,7 @@ static std::vector<SnapshotFileInfo> listCameraFilesNewestFirst(const String& ca
   return files;
 }
 
-// Removes dirPath only if it's currently empty. Returns whether it was
-// actually removed - cleanupEmptyAncestors below uses that to stop
-// walking upward as soon as a non-empty ancestor is found (nothing above
-// it can be empty either, since it still contains that directory).
-// Silently no-ops (false) if dirPath doesn't exist or can't be opened -
-// this is tidiness, never worth failing the caller's own delete over.
+// Returns whether it removed it; failures are ignored (tidiness only).
 static bool rmdirIfEmpty(const String& dirPath) {
   File dir = SD.open(dirPath);
   if (!dir || !dir.isDirectory()) {
@@ -291,14 +244,8 @@ static bool rmdirIfEmpty(const String& dirPath) {
   return empty && SD.rmdir(dirPath);
 }
 
-// After deleting filePath, removes each ancestor directory that's now
-// empty, walking upward until one isn't (or SNAPSHOTS_ROOT itself is
-// reached - never removed). Handles both the old flat <camera>/ layout
-// (one ancestor above the root) and the new <Y>/<M>/<D>/<camera>/ layout
-// (four) without needing to know which shape it's looking at - it just
-// keeps walking up while directories keep turning out empty. Otherwise a
-// card that's been pruning/expiring daily for a year would accumulate
-// hundreds of empty day folders per camera, forever.
+// Removes now-empty ancestors up to (not including) the root, whatever the
+// layout depth, so daily folders don't pile up forever.
 static void cleanupEmptyAncestors(const String& filePath) {
   String root = SNAPSHOTS_ROOT;
   String dirPath = filePath.substring(0, filePath.lastIndexOf('/'));
@@ -308,12 +255,7 @@ static void cleanupEmptyAncestors(const String& filePath) {
   }
 }
 
-// SD.mkdir() only reliably creates one path level at a time on ESP32's FS
-// wrapper - unlike a shell's `mkdir -p`, there's no guarantee it walks
-// intermediate segments itself. Creates each of dirPath's segments in
-// turn, tolerating one that already exists, so the whole nested
-// Year/Month/Day/Camera path always ends up present regardless of which
-// prefix already did.
+// SD.mkdir() creates one level at a time; create each segment in turn.
 static bool ensureDirPath(const String& dirPath) {
   int start = 1; // dirPath always starts with "/" (SNAPSHOTS_ROOT does)
   int slash;
@@ -326,9 +268,7 @@ static bool ensureDirPath(const String& dirPath) {
   return true;
 }
 
-// Today's Year/Month/Day folder for cameraDirName - where a snapshot
-// captured right now belongs. Local time, matching buildSnapshotFilename's
-// own localtime_r below.
+// Local date, matching buildSnapshotFilename.
 static String buildCameraDayDir(const String& cameraDirName) {
   time_t now; time(&now);
   struct tm tmStruct; localtime_r(&now, &tmStruct);
@@ -337,18 +277,10 @@ static String buildCameraDayDir(const String& cameraDirName) {
   return String(SNAPSHOTS_ROOT) + "/" + String(buf) + "/" + cameraDirName;
 }
 
-// Caller must hold g_sdMutex. Ensures dayDir (this camera's Year/Month/Day
-// folder for a snapshot captured right now) exists and there's enough
-// room (free-space reserve + per-camera file-count ceiling, config.h) for
-// one more newFileSize-byte file, pruning this camera's own oldest files
-// first if not - gathered from EVERY Year/Month/Day folder it has any
-// files in (listAllFilesForCamera), not just dayDir, so the per-camera
-// cap is still enforced globally, not reset to zero every time the date
-// rolls over. Capped per call via SD_PRUNE_MAX_FILES_PER_WRITE (see
-// filesToPrune's own comment on why: bounds how long this holds the
-// mutex, blocking every other camera's own writes, during one prune-then-
-// write pass). Returns false only if dayDir doesn't exist and couldn't be
-// created.
+// Caller holds g_sdMutex. Creates dayDir and prunes this camera's oldest files
+// (across all dates) to fit one more file under the reserve and per-camera
+// cap, at most SD_PRUNE_MAX_FILES_PER_WRITE per call. False only if dayDir
+// can't be created.
 static bool ensureDirAndPrune(const String& cameraDirName, const String& dayDir, size_t newFileSize) {
   if (!ensureDirPath(dayDir)) return false;
 
@@ -380,17 +312,8 @@ static bool ensureDirAndPrune(const String& cameraDirName, const String& dayDir,
   return true;
 }
 
-// "<YYYYMMDD-HHMMSS>_<millis>_<source>.jpg" - sortable (chronological as a
-// plain string, matching how every sort in this file relies on filename
-// order - the trailing "_<source>" never affects that ordering, since
-// millis() already guarantees uniqueness before it's ever compared), and
-// unique even for several shots within the same second (a motion burst
-// can fetch multiple snapshots faster than one second apart, but never
-// faster than a millisecond apart in practice). The source suffix
-// (snapshot_source.h) is what parseSnapshotSourceFromFilename below reads
-// back for the Gallery/Preview column - encoded into the filename rather
-// than a separate metadata file, so it survives a reboot for free and
-// never needs its own retention/pruning logic.
+// "<YYYYMMDD-HHMMSS>_<millis>_<source>.jpg": sorts chronologically as text,
+// unique within a burst, and carries the source so no metadata file is needed.
 static String buildSnapshotFilename(SnapshotSource source) {
   time_t now; time(&now);
   struct tm tmStruct; localtime_r(&now, &tmStruct);
@@ -399,11 +322,7 @@ static String buildSnapshotFilename(SnapshotSource source) {
   return String(buf) + "_" + String(millis()) + "_" + snapshotSourceLabel(source) + ".jpg";
 }
 
-// Reverse of buildSnapshotFilename's source suffix. A filename written
-// before this feature existed has only two underscore-separated fields
-// (no source at all) - falls back to SnapshotSource::Motion for that, and
-// for any other unrecognized shape, rather than failing the read over a
-// cosmetic label.
+// Old two-field names (no source) and anything odd read as Motion.
 static SnapshotSource parseSnapshotSourceFromFilename(const String& name) {
   int firstUnderscore = name.indexOf('_');
   if (firstUnderscore < 0) return SnapshotSource::Motion;
@@ -414,14 +333,7 @@ static SnapshotSource parseSnapshotSourceFromFilename(const String& name) {
   return snapshotSourceFromLabel(name.substring(secondUnderscore + 1, dot));
 }
 
-// The "YYYYMMDD" prefix of a filename built by buildSnapshotFilename above
-// (before the "-HHMMSS..." remainder) - "" if the first 8 characters
-// aren't all digits (a name this project never actually wrote, or one
-// truncated/corrupted enough to not even have a real prefix). Used for
-// the Gallery page's date-range browsing (sdSnapshotEntriesAll below) -
-// deliberately just the leading digits, not a full parseSnapshotTimestamp-
-// style validation (lib/snapshot_storage), since a plain string match
-// against this same 8-character prefix is all date filtering needs.
+// Leading "YYYYMMDD", or "" if not 8 digits. Enough for date filtering.
 static String parseSnapshotDateFromFilename(const String& name) {
   if (name.length() < 8) return "";
   for (int i = 0; i < 8; i++) {
@@ -447,15 +359,8 @@ bool writeSdSnapshot(const CameraConfig& cfg, uint8_t* jpg, size_t jpgLen, Snaps
       size_t written = f.write(jpg, jpgLen);
       f.close();
       ok = (written == jpgLen);
-      // A short write (card nearly full, power dip, bus glitch) leaves a
-      // truncated file that would otherwise sit in this camera's
-      // directory indistinguishable from a real snapshot - listAllFilesForCamera/
-      // sdSnapshotCount count it, and it's a nonzero size so neither
-      // checkSnapshotStorage nor checkNewestSnapshots' readability check
-      // (which only catches f.size()==0) would ever flag it. It would go
-      // on to get served as a corrupted JPEG to a /snap or Gallery
-      // request the next time SD is active. Remove it rather than leave
-      // it for a future boot to discover.
+      // Remove a short write: the truncated file isn't zero-size, so the
+      // checks wouldn't flag it, and it would be served as a corrupt JPEG.
       if (!ok) SD.remove(filePath);
     } else {
       ok = false;
@@ -540,8 +445,7 @@ std::vector<SnapshotSource> sdSnapshotSourcesAll(const CameraConfig& cfg) {
   std::vector<SnapshotFileInfo> files = listCameraFilesNewestFirst(cameraDirName);
   xSemaphoreGive(g_sdMutex);
 
-  // Parsing filenames doesn't need the SD mutex - only the directory
-  // listing above did.
+  // Parsing needs no mutex, only the listing did.
   sources.reserve(files.size());
   for (auto& f : files) sources.push_back(parseSnapshotSourceFromFilename(f.name));
   return sources;
@@ -566,13 +470,7 @@ std::vector<SnapshotEntryInfo> sdSnapshotEntriesAll(const CameraConfig& cfg) {
   return entries;
 }
 
-// Recursively deletes every file and subdirectory under dirPath, then
-// dirPath itself - used by eraseAllSnapshots below for a full wipe.
-// Doesn't need to know whether it's looking at the old flat <camera>/
-// layout, the new <Y>/<M>/<D>/<camera>/ layout, or a mix of both on the
-// same card (the expected real-world case after this layout shipped,
-// since existing history was deliberately left in place) - it just
-// removes whatever's actually there, at whatever depth.
+// Deletes everything under dirPath at any depth, then dirPath itself.
 static bool removeTreeRecursive(const String& dirPath) {
   File dir = SD.open(dirPath);
   if (!dir || !dir.isDirectory()) {
@@ -610,9 +508,7 @@ bool eraseAllSnapshots() {
   if (!sdActive()) return false;
 
   xSemaphoreTake(g_sdMutex, portMAX_DELAY);
-  // removeTreeRecursive above just deleted SNAPSHOTS_ROOT itself along
-  // with everything under it - put the empty root back immediately rather
-  // than leaving it to the next write's own ensureDirPath to notice.
+  // Recreate the root right away.
   bool ok = removeTreeRecursive(SNAPSHOTS_ROOT);
   if (ok) ok = SD.mkdir(SNAPSHOTS_ROOT);
   xSemaphoreGive(g_sdMutex);
@@ -640,17 +536,9 @@ SnapshotStorageCheckResult checkSnapshotStorage() {
       result.totalBytes += f.size();
     }
     if (f) f.close();
-    // History is unbounded by design (that's the whole point of SD over
-    // the fixed-size PSRAM ring) - this walk can run long enough on a
-    // large card to trip loop()'s 90s task watchdog (main.cpp's
-    // initWatchdog()) when called from there (the automatic periodic
-    // check, sdCheckIntervalHours). A watchdog panic reboots immediately,
-    // without waitForSdIdle()'s in-flight-operation wait - exactly the
-    // "reboot cuts off a FAT operation mid-write" corruption risk that
-    // function exists to prevent. No-op (harmless) when called from the
-    // Storage page's "check storage" button instead, which runs on
-    // PsychicHttp's own task - never subscribed to this watchdog in the
-    // first place.
+    // The walk is unbounded, so when run from loop() it could trip the 90s
+    // watchdog - whose panic reboot is exactly the mid-write corruption
+    // waitForSdIdle avoids. Harmless on the web server task.
     esp_task_wdt_reset();
   });
   result.directoriesChecked = dirsSeen.size();
@@ -679,15 +567,9 @@ SnapshotRetentionResult enforceSnapshotRetention(const std::vector<CameraConfig>
   time(&now);
 
   for (auto& cfg : cameras) {
-    // Re-clamped here, at the point of use, not just at the dashboard form
-    // (parseCameraForm) - a config Import writes camera records straight
-    // to NVS via deserializeCamera/replaceAllCameras, bypassing that
-    // clamp entirely, so cfg.retentionDays can arrive as any uint16_t up
-    // to 65535. Without this, filesToExpire's cutoff computation
-    // ((time_t)retentionDays * 24 * 60 * 60, a 32-bit signed multiply)
-    // overflows for a large enough value - wrapping to an arbitrary
-    // cutoff instead of failing safe, in the worst case one that makes
-    // every stored file for that camera look expired at once.
+    // Clamped at use: imported records can carry up to 65535, and the cutoff's
+    // 32-bit multiply would overflow into an arbitrary (possibly
+    // expire-everything) value.
     uint16_t cameraRetentionDays = cfg.retentionDays;
     if (cameraRetentionDays > SD_RETENTION_MAX_DAYS) cameraRetentionDays = SD_RETENTION_MAX_DAYS;
     uint16_t effectiveDays = cameraRetentionDays != 0 ? cameraRetentionDays : globalRetentionDays;
@@ -703,10 +585,7 @@ SnapshotRetentionResult enforceSnapshotRetention(const std::vector<CameraConfig>
     });
     std::vector<String> toDeleteNames = filesToExpire(files, effectiveDays, now);
     for (auto& name : toDeleteNames) {
-      // Names are unique per camera (timestamp+millis-based), so this
-      // always finds exactly the right file regardless of which
-      // Year/Month/Day folder (or the legacy flat layout) it's actually
-      // stored under.
+      // Names are unique, so this finds the right file in any folder.
       for (auto& f : files) {
         if (f.name != name) continue;
         if (SD.remove(f.path)) {
@@ -717,10 +596,7 @@ SnapshotRetentionResult enforceSnapshotRetention(const std::vector<CameraConfig>
         }
         break;
       }
-      // Same defensive per-file watchdog reset as checkSnapshotStorage's
-      // own walk above - harmless no-op when called from a task never
-      // subscribed to the TWDT in the first place (see that function's
-      // comment); load-bearing when called from main.cpp's loop().
+      // As in checkSnapshotStorage.
       esp_task_wdt_reset();
     }
     xSemaphoreGive(g_sdMutex);
@@ -729,8 +605,7 @@ SnapshotRetentionResult enforceSnapshotRetention(const std::vector<CameraConfig>
   if (result.filesDeleted > 0) {
     Serial.printf("[sd_store] Retention: deleted %u snapshot(s) across %u camera(s).\n",
                   (unsigned)result.filesDeleted, (unsigned)result.camerasSwept);
-    // Activity log only, deliberately no Telegram push - routine
-    // housekeeping running on a schedule, not something needing attention.
+    // Log only; routine housekeeping.
     logEvent("Retention: deleted " + String((unsigned)result.filesDeleted) +
              " snapshot(s) older than the configured limit");
   }
@@ -744,12 +619,8 @@ QuickSnapshotCheckResult checkNewestSnapshots() {
   result.ok = true;
 
   xSemaphoreTake(g_sdMutex, portMAX_DELAY);
-  // Newest file seen so far, per DISTINCT CAMERA (not per leaf directory -
-  // a camera can have many Year/Month/Day folders, plus possibly a legacy
-  // flat one; this compares across all of them so directoriesChecked
-  // keeps meaning "how many cameras have any history", the same bounded
-  // cost this function has always had, rather than growing with how many
-  // calendar days of retention have accumulated).
+  // Newest file per camera (across all its folders), so the cost stays one
+  // file per camera.
   std::map<String, String> newestNameByCamera;
   std::map<String, String> newestPathByCamera;
   walkAllFiles(SNAPSHOTS_ROOT, [&](const String& filePath, const String& fileName, uint64_t,
@@ -786,12 +657,8 @@ void waitForSdIdle() {
   if (xSemaphoreTake(g_sdMutex, pdMS_TO_TICKS(SD_IDLE_WAIT_TIMEOUT_MS)) == pdTRUE) {
     xSemaphoreGive(g_sdMutex);
   } else {
-    // Every SD-touching function in this module takes g_sdMutex for its
-    // whole operation, so failing to acquire it within the timeout means
-    // something has genuinely been mid-operation (or wedged) for that
-    // whole span - logged, not treated as fatal: the caller asked for a
-    // reboot, and a stuck SD operation is itself a reason to grant it,
-    // not withhold it.
+    // Every SD operation holds this mutex throughout; a timeout means
+    // something is stuck, which is itself a reason to allow the reboot.
     Serial.println("[sd_store] waitForSdIdle: timed out waiting for an in-flight SD operation - "
                     "proceeding with the reboot anyway.");
   }
@@ -812,36 +679,22 @@ void appendActivityLogLine(const String& line) {
     size_t sz = f.size();
     f.close();
     if (sz > ACTIVITY_LOG_MAX_BYTES) {
-      // Bounded - wipe and start fresh rather than grow forever. The line
-      // that just crossed the cap gets re-written into the fresh file
-      // (not just discarded with everything before it) - the event it
-      // records already happened, so it belongs at the start of the new
-      // file, not lost entirely just because it was also the one that
-      // tipped the old file over the limit.
+      // Past the cap, start a fresh file beginning with this line.
       SD.remove(ACTIVITY_LOG_PATH);
       File fresh = SD.open(ACTIVITY_LOG_PATH, FILE_APPEND);
       if (fresh) {
         fresh.println(line);
         fresh.close();
       } else {
-        // Reopen failed right after a successful remove - the log file is
-        // now simply gone, and without this, `failed` would stay false
-        // (only the FIRST open above sets it), so markSdFailed below would
-        // never fire and this loss would have no trace anywhere.
+        // Reopen failed after the remove: mark it so the loss gets reported.
         failed = true;
       }
     }
   }
   xSemaphoreGive(g_sdMutex);
 
-  // Released g_sdMutex above BEFORE calling markSdFailed, exactly like
-  // writeSdSnapshot/readSdSnapshot/checkSnapshotStorage - it calls
-  // logEvent+sendTelegramMessage, a blocking network call that must never
-  // happen while holding this mutex, or every other camera's SD write
-  // stalls behind it. Recursion-safe too: markSdFailed sets
-  // g_sdAvailable=false before calling logEvent, so the nested
-  // logEvent -> appendActivityLogLine call immediately no-ops via
-  // sdActive() above - one harmless extra log line, not a loop.
+  // Outside the mutex, since markSdFailed does a blocking send. Its nested
+  // logEvent no-ops because SD is already marked unavailable.
   if (failed) markSdFailed("activity log append");
 }
 
@@ -852,8 +705,7 @@ bool readActivityLogFile(String* outContent) {
   xSemaphoreTake(g_sdMutex, portMAX_DELAY);
   File f = SD.open(ACTIVITY_LOG_PATH, FILE_READ);
   if (f) {
-    // Bounded by ACTIVITY_LOG_MAX_BYTES (appendActivityLogLine never lets
-    // the file grow past it) - safe as a single in-memory String.
+    // Bounded by ACTIVITY_LOG_MAX_BYTES.
     String content;
     content.reserve(f.size());
     while (f.available()) content += (char)f.read();

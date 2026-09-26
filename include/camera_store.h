@@ -4,9 +4,8 @@
 #include <functional>
 #include "config.h" // PULL_INTERVAL_MS - CameraConfig::pollIntervalMs's own default
 
-// A camera's full configuration - persisted in NVS (Preferences, namespace
-// "camstore") so cameras can be added/deleted at runtime via the web UI.
-// Changes take effect after a reboot.
+// A camera's configuration, persisted in NVS ("camstore") and edited from the
+// dashboard.
 struct CameraConfig {
   String name;
   String deviceServiceUrl;
@@ -17,19 +16,16 @@ struct CameraConfig {
   // flip OFF if every request comes back with an auth fault.
   bool useWSSecurity = true;
 
-  // Workarounds for CreatePullPointSubscription faults seen on several
-  // cameras (Xiongmai-derived stacks, even a spec-correct ONVIF 2.40
-  // device). Try ON first; flip both OFF if only this call faults while
-  // other Events-service calls succeed. A camera with a very short default
-  // subscription lifetime (some Reolinks: ~10s) instead needs
-  // includeInitialTerminationTime ON.
+  // Workarounds for CreatePullPointSubscription faults on some stacks
+  // (Xiongmai-derived, even a spec-correct 2.40 device): try ON, flip both OFF
+  // if only this call faults. Cameras with a very short default lifetime (some
+  // Reolinks, ~10s) need includeInitialTerminationTime ON instead.
   bool includeInitialTerminationTime = false;
   bool includeReplyToAnonymous = false;
 
-  // Set only if the camera's own GetSnapshotUri response is broken and a
-  // working URL was found by hand. {USER}/{PASS} are substituted at
-  // runtime for cameras wanting credentials as query params. Empty uses
-  // the standard GetProfiles -> GetSnapshotUri flow.
+  // Hand-found snapshot URL for cameras whose GetSnapshotUri is broken; empty
+  // uses the standard flow. {USER}/{PASS} (and {WIDTH}/{HEIGHT}) are
+  // substituted at runtime.
   String snapshotUriOverride;
 
   // Matched case-insensitively against each profile's <Name> to pick which
@@ -39,165 +35,90 @@ struct CameraConfig {
   String user;
   String pass;
 
-  // Minimum time between alerts for this camera; a motion event within
-  // this window is still detected/logged, just not re-sent.
+  // Minimum time between alerts; events inside it are still logged.
   unsigned long alertCooldownMs = 30000;
 
-  // How long this camera can go without answering a SOAP request before
-  // it's flagged OFFLINE.
+  // Silence before the camera is flagged OFFLINE.
   unsigned long offlineThresholdMs = 5UL * 60UL * 1000UL;
 
-  // Free-text context for future-you. Shown in the web UI, never sent anywhere.
+  // Shown in the web UI only.
   String notes;
 
   // Consecutive fresh snapshots to send per motion event (captioned
   // "(n/N)" once more than one).
   unsigned int snapshotBurstCount = 1;
 
-  // Recurring daily do-not-disturb window - motion alerts only (tamper/
-  // signal-loss stay always-on, see telegram.cpp's triggerMotionAlert).
-  // quietStartMinute/quietEndMinute are minutes since local midnight
-  // (0-1439). quietStartMinute == quietEndMinute means "no active window"
-  // (see lib/quiet_hours' own comment for why that's the safe default,
-  // not "always quiet").
+  // Daily do-not-disturb window for motion alerts (tamper/signal loss always
+  // alert). Minutes since local midnight; start == end means no window.
   bool quietHoursEnabled = false;
   uint16_t quietStartMinute = 0;
   uint16_t quietEndMinute = 0;
 
-  // Alerts (Telegram + Activity log) if this camera hasn't seen a real
-  // motion event in over this many hours - catches a dead PIR or a camera
-  // knocked to face the wrong way, which otherwise looks identical to "a
-  // quiet day". 0 = off (default - many cameras legitimately go long
-  // stretches without motion).
+  // Alert if no real motion for this many hours (dead PIR, camera knocked
+  // askew). 0 = off.
   uint16_t motionWatchdogHours = 0;
 
-  // Captures one snapshot on this interval regardless of motion, stored
-  // the same way as an alert snapshot (SD if active, RAM ring otherwise).
-  // 0 = off (default). By default never sent to Telegram - see
-  // timelapseSendToTelegram below to also deliver these captures.
+  // Periodic snapshot regardless of motion, stored like alert snapshots. 0 =
+  // off.
   uint16_t timelapseIntervalMin = 0;
 
-  // If true, each timelapse capture above is also sent to Telegram (same
-  // recipient filtering as a motion alert - telegramUserWantsCamera), with
-  // a caption that reads as routine rather than an alert. Ignored while
-  // timelapseIntervalMin is 0. Default off - most cameras that want a
-  // periodic capture just want it stored, not pushed as a notification.
+  // Also send timelapse captures to Telegram, with a routine caption.
   bool timelapseSendToTelegram = false;
 
-  // Auto-deletes this camera's own stored snapshots (SD only - see
-  // sd_store.h's enforceSnapshotRetention) once they're older than this
-  // many days. 0 = use the Storage page's global SdSettings.retentionDays
-  // instead of a per-camera value - the normal case. A nonzero value here
-  // is for the exceptional camera that needs a different retention window
-  // than everything else (e.g. longer, to preserve evidence for a specific
-  // ongoing concern).
+  // Per-camera retention in days; 0 = use the global Storage setting.
   uint16_t retentionDays = 0;
 
-  // If true, a DogCatDetect event (camera_parse.h) also triggers an alert,
-  // same as PeopleDetect/VehicleDetect. Off by default - unlike person/
-  // vehicle detection, many users' own pets would otherwise trigger an
-  // alert on every ordinary trip through the yard, defeating the point of
-  // a camera's AI-detection filtering in the first place. See camera.cpp's
-  // parseEvents for how this gates a pet event separately from real motion.
+  // Opt-in: pets would otherwise alert on every trip through the yard.
   bool petAlertsEnabled = false;
 
-  // When a pet alert fires (petAlertsEnabled must also be true), send a
-  // single text-only message instead of the usual snapshot-burst photo
-  // alert - a lower-priority "FYI" notification for someone who wants to
-  // know their pet was seen without a photo each time. Ignored while
-  // petAlertsEnabled is false.
+  // Send pet alerts as text only, without photos.
   bool petAlertsTextOnly = false;
 
-  // How often this camera's own task asks "anything new?" via ONVIF
-  // PullMessages (camera.cpp's cameraTaskFn) - lower means motion is
-  // noticed sooner (PullMessages' own PT1S long-poll is designed for
-  // frequent re-polling), at the cost of more frequent SOAP round-trips to
-  // this specific camera. Per-camera, not global, since cheaper embedded
-  // HTTP stacks tolerate more frequent polling worse than others do.
+  // PullMessages cadence. Lower notices motion sooner but loads the camera;
+  // cheap HTTP stacks tolerate less.
   unsigned long pollIntervalMs = PULL_INTERVAL_MS;
 
-  // Substituted into snapshotUriOverride as {WIDTH}/{HEIGHT}, same
-  // mechanism as {USER}/{PASS} above - for a camera whose own snapshot URL
-  // accepts a resolution query param (e.g. "...&width={WIDTH}&height={HEIGHT}"),
-  // letting a lower-bandwidth snapshot be requested without touching the
-  // camera's own persistent encoder configuration (which would affect
-  // every other viewer/NVR of that camera too). 0 = unset - no
-  // substitution happens, so this is a no-op unless snapshotUriOverride
-  // actually references the token. Ignored entirely when
-  // snapshotUriOverride is empty (the standard GetSnapshotUri flow has no
-  // way to request a resolution).
+  // {WIDTH}/{HEIGHT} values for snapshotUriOverride, to request a smaller
+  // snapshot without changing the camera's encoder settings. 0 = unset.
   uint16_t snapshotMaxWidth = 0;
   uint16_t snapshotMaxHeight = 0;
 
-  // Opt-OUT (default true), unlike petAlertsEnabled's opt-in above - a
-  // PeopleDetect/VehicleDetect event is exactly the security signal this
-  // project exists to alert on, so upgrading to a firmware version that
-  // adds these must never silently stop alerting on a real detection
-  // nobody asked to mute. Exists for the opposite, narrower case: a
-  // camera facing a busy street getting spammed with vehicle alerts (or
-  // one that only cares about vehicles muting person alerts instead).
-  // Plain MotionAlarm/CellMotionDetector has no finer classification to
-  // opt out of - only a camera whose own AI actually distinguishes
-  // person/vehicle can be selectively muted this way; see camera.cpp's
-  // parseEvents for where this is checked, and MotionDetectionKind
-  // (telegram_i18n.h) for the classification itself.
+  // Opt-out: person/vehicle detection is the core security signal, so it must
+  // never silently turn off. For e.g. a camera facing a busy street. Only
+  // affects cameras whose AI classifies person/vehicle.
   bool personAlertsEnabled = true;
   bool vehicleAlertsEnabled = true;
 
-  // Opt-OUT (default true) - preserves this project's original, always-on
-  // behavior (checkPendingMotionDigest, telegram.cpp) for anyone already
-  // relying on it. Controls only the FOLLOW-UP "motion continued - N more
-  // event(s) in the last X seconds" summary sent once the cooldown after a
-  // real alert ends; the alert itself (and the cooldown/suppressed-count
-  // bookkeeping that feeds this) is unaffected either way. Exists for a
-  // camera whose motion is frequent enough that the follow-up summary
-  // itself becomes noise on top of the real alert it's summarizing.
+  // Opt-out of the "motion continued" follow-up after a cooldown, for cameras
+  // where it's just noise.
   bool motionDigestEnabled = true;
 };
 
-// Loads the camera list from NVS, seeding once from CAMERA_SEED in
-// secrets.h on the very first boot.
+// Loads from NVS, seeding from secrets.h's CAMERA_SEED on first boot.
 std::vector<CameraConfig> loadCameras();
 
 // Overwrites the entire persisted camera list.
 bool saveCameras(const std::vector<CameraConfig>& cameras);
 
-// Convenience wrappers used by the web UI - load, mutate, save in one
-// call. addCamera fails if the name already exists (the unique key
-// cameras are matched by); deleteCamera fails if it doesn't.
+// Load-mutate-save helpers. Cameras are keyed by name: add fails on a
+// duplicate, delete on a missing name.
 bool addCamera(const CameraConfig& cam);
 bool deleteCamera(const String& name);
 
-// Replaces the camera named originalName with cam (cam.name need not
-// match, so this also handles renames). Fails if originalName isn't
-// found, or cam.name collides with a different existing camera.
+// Replaces originalName with cam (handles renames). Fails if not found or
+// cam.name collides.
 bool updateCamera(const String& originalName, const CameraConfig& cam);
 
-// Wholesale replace of the entire persisted list (config import - see
-// webserver_security.cpp's applyConfigImport) - unlike calling saveCameras()
-// directly, this takes the same mutex addCamera/updateCamera/deleteCamera
-// do, so an import landing at the same moment as a concurrent dashboard
-// edit can't lose either change to the other.
+// Replaces the whole list under the store mutex (config import), so it can't
+// race a dashboard edit.
 bool replaceAllCameras(const std::vector<CameraConfig>& cameras);
 
-// Atomically loads every camera, applies `mutate` to each one in place
-// (e.g. a bulk field change from the dashboard), and saves the whole list
-// back - all under the same mutex addCamera/updateCamera/deleteCamera/
-// replaceAllCameras use. Unlike calling loadCameras() and then
-// replaceAllCameras() as two separate steps, which only protects the
-// final write, the READ here is inside the same critical section too - a
-// concurrent single-camera edit landing between an unprotected read and a
-// protected write would otherwise get silently discarded when the stale
-// pre-edit list gets written back over it. Returns false (nothing
-// touched) if there are no cameras to begin with, or the save itself fails.
+// Read-modify-write of every camera inside one critical section, so a
+// concurrent single-camera edit isn't overwritten. False if there are no
+// cameras or the save fails.
 bool updateAllCameras(const std::function<void(CameraConfig&)>& mutate);
 
-// One-time recovery path: adds any CAMERA_SEED (secrets.h) entry whose
-// name doesn't already exist in the persisted list - unlike the
-// first-boot seed in loadCameras(), this runs even when the store is
-// already initialized, so it can restore cameras lost to a bug without
-// touching whatever's already there or duplicating by name. Gated by its
-// own NVS flag so it only ever actually does something once, even across
-// reboots - safe to call unconditionally from setup(). Returns how many
-// cameras it added.
+// One-time recovery: adds CAMERA_SEED entries missing by name, even on an
+// initialised store. Gated by an NVS flag, so safe to call every boot. Returns
+// the number added.
 size_t restoreMissingCamerasFromSeed();

@@ -1,10 +1,7 @@
 #include "network_serialize.h"
 #include <vector>
 
-// Same non-printable ASCII separator as camera_serialize.cpp/
-// telegram_user_serialize.cpp - no SSID, hostname, or address field should
-// ever legitimately contain it, so records are just split/joined on it
-// rather than building full field-escaping machinery.
+// Same field separator as the other serializers.
 static const char FIELD_SEP = '\x1F';
 
 static String stripSeparators(const String& s) {
@@ -25,9 +22,7 @@ static std::vector<String> splitFields(const String& record) {
   return fields;
 }
 
-// Always emits NETWORK_SCHEMA_VERSION's layout - one field order, ever. A
-// layout change means bumping the version and writing a new
-// deserializeNetworkConfigV1-style branch, not editing this one in place.
+// One layout per version, never edited.
 String serializeNetworkConfig(const WifiCredentials& creds) {
   String s;
   s += stripSeparators(creds.primary.ssid);   s += FIELD_SEP;
@@ -44,10 +39,7 @@ String serializeNetworkConfig(const WifiCredentials& creds) {
   return s;
 }
 
-// Version 1 (NETWORK_SCHEMA_VERSION): the only layout so far - requires an
-// exact field count, same reasoning as camera_serialize.cpp's
-// deserializeCameraV1/V2 (no historical pre-versioning format to be
-// tolerant of here, unlike cameras/users - this serializer is new).
+// V1: the only layout; exact field count.
 static WifiCredentials deserializeNetworkConfigV1(const std::vector<String>& fields) {
   WifiCredentials creds;
   if (fields.size() != 11) return creds; // malformed - caller treats hostname=="" as "not found"
@@ -71,9 +63,6 @@ WifiCredentials deserializeNetworkConfig(const String& record, uint16_t recordVe
 
   if (recordVersion == NETWORK_SCHEMA_VERSION) return deserializeNetworkConfigV1(fields);
 
-  // Unknown version, newer than anything this firmware knows about (most
-  // likely: downgraded after a later firmware version changed the layout).
-  // Best-effort fall through to the newest known layout, same as
-  // camera_serialize.cpp/telegram_user_serialize.cpp do.
+  // Unknown/newer version: try the newest layout.
   return deserializeNetworkConfigV1(fields);
 }

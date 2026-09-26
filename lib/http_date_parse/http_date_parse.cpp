@@ -4,12 +4,7 @@
 static const char* kMonths[12] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
                                    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
 
-// True if dateHeader[from..from+count) are all ASCII digits - every
-// numeric field below is checked this way before toInt(), since
-// String::toInt() silently returns 0 for non-numeric input rather than
-// signaling failure, which would otherwise let a malformed header parse
-// as a plausible-looking (but wrong) midnight-Jan-1900 time instead of
-// being rejected outright.
+// toInt() returns 0 for garbage, so check digits first.
 static bool allDigits(const String& s, int from, int count) {
   for (int i = from; i < from + count; i++) {
     if (i >= (int)s.length() || !isdigit((unsigned char)s[i])) return false;
@@ -18,13 +13,8 @@ static bool allDigits(const String& s, int from, int count) {
 }
 
 bool parseHttpDate(const String& dateHeader, struct tm& outTm) {
-  // "Sun, 06 Nov 1994 08:49:37 GMT" - IMF-fixdate is always exactly this
-  // shape: 3-letter day name, ", ", 2-digit day, " ", 3-letter month,
-  // " ", 4-digit year, " ", HH:MM:SS, " GMT". Length and delimiter
-  // positions are checked structurally before trusting any field's
-  // content - a header that's merely the right length but garbled
-  // elsewhere (e.g. "Sun; 06/Nov/1994...") must still be rejected, not
-  // misparsed.
+  // IMF-fixdate is exactly 29 chars: "Sun, 06 Nov 1994 08:49:37 GMT". Check
+  // the structure before trusting any field.
   if (dateHeader.length() != 29) return false;
   if (dateHeader[3] != ',' || dateHeader[4] != ' ') return false;
   if (dateHeader[7] != ' ' || dateHeader[11] != ' ' || dateHeader[16] != ' ') return false;
@@ -49,13 +39,7 @@ bool parseHttpDate(const String& dateHeader, struct tm& outTm) {
   int minute = dateHeader.substring(20, 22).toInt();
   int second = dateHeader.substring(23, 25).toInt();
 
-  // Loose range checks, not a full calendar/leap-year validator (e.g. day
-  // 31 in April would pass here) - this is a fallback clock source, not a
-  // date-correctness auditor; timeGmUtc()/settimeofday() tolerate an
-  // out-of-calendar struct tm the same way mktime()'s normalization does,
-  // and a server sending a nonsensical date is already such an unlikely,
-  // low-stakes failure mode that rejecting only the clearly-impossible
-  // values (day 0, hour 24, a 3-digit year typo, ...) is enough.
+  // Loose ranges only (April 31 passes); this is a fallback clock.
   if (day < 1 || day > 31 || hour > 23 || minute > 59 || second > 60) return false; // 60 tolerates a leap second
   if (year < 1970) return false; // never legitimately true for a live server's own clock
 

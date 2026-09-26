@@ -7,7 +7,7 @@
 static EventRingBuffer g_events(EVENT_LOG_CAPACITY);
 static SemaphoreHandle_t g_eventsMutex = xSemaphoreCreateMutex();
 
-// Own wall-clock formatter rather than depending on telegram.cpp's
+// Own wall-clock formatter rather than depending on telegram_transport.cpp's
 // nowTimestampString() - small deliberate duplication instead of a new
 // cross-file dependency for one line. millis() alone would be meaningless
 // across a reboot in a file meant to persist past one.

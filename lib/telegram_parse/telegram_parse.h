@@ -4,155 +4,86 @@
 #include <time.h> // struct tm - parseDurationToken's "now" parameter
 #include "camera_store.h" // CameraConfig
 
-// One entry from a Telegram getUpdates response's "result" array.
-// updateId is always present; hasChatId/text may be empty/default for an
-// update this project doesn't act on (an edited_message/channel_post, or a
-// message with no text). Every update is still returned even when unusable,
-// so the caller can advance its "highest update_id seen" offset - Telegram
-// redelivers anything below that offset forever otherwise.
+// One getUpdates result. Unusable updates (edits, channel posts, no text) are
+// still returned so the caller can advance its offset; Telegram redelivers
+// anything below it.
 struct TelegramUpdate {
   long updateId = 0;
-  // int64_t, not long: `long` is 32-bit here (max ~2.1 billion), and real
-  // Telegram chat IDs for ordinary accounts routinely exceed that - a
-  // 32-bit chatId silently came back as 0 for one in the field, matching
-  // no configured user.
+  // int64_t: real chat IDs exceed 32 bits (one came back as 0 in the field).
   int64_t chatId = 0;
   bool hasChatId = false;
   String text;
 
-  // Set for an inline-keyboard button tap (callback_query) rather than a
-  // typed message - chatId/hasChatId are populated the same way either
-  // way, so pollTelegramCommands' existing sender-lookup needs no changes.
-  // text stays empty for a callback update.
+  // Inline-keyboard tap; chatId is filled the same way, text stays empty.
   bool hasCallbackQuery = false;
   String callbackQueryId; // needed to answer it (clears the button's loading spinner)
-  String callbackData;    // e.g. "off|D01-FrontDoor" - see telegram.cpp's handleTelegramCallbackQuery
+  String callbackData;    // e.g. "off|D01-FrontDoor" - see telegram_commands.cpp's handleTelegramCallbackQuery
 
-  // Set for a document (file) upload - chatId/hasChatId are populated the
-  // same way as a typed message, but the text (if any) the sender typed
-  // alongside the file arrives in Telegram's own "caption" field, not
-  // "text" - captured here as documentCaption, separately, rather than
-  // reusing `text` for it. documentFileId is what the Bot API's getFile
-  // method needs to resolve a downloadable path; documentFileName is the
-  // uploader's own filename, informational only (never used for anything
-  // security-relevant - see telegram.cpp's /restore flow, the only
-  // consumer of this).
+  // File upload (used by /restore). Typed text arrives as documentCaption.
+  // documentFileName is informational only.
   bool hasDocument = false;
   String documentFileId;
   String documentFileName;
   String documentCaption;
 };
 
-// Parses a Telegram getUpdates response body (JSON only - the caller
-// strips HTTP headers first) into one TelegramUpdate per "result" entry,
-// via ArduinoJson. If `error` is non-null, it's set when the body isn't
-// valid JSON or the API reported failure (e.g. an invalid bot token) -
-// both return an empty vector.
-//
-// Handles a typed "message" and a "callback_query" (inline-keyboard tap -
-// populates hasCallbackQuery/callbackQueryId/callbackData). Any other
-// shape (edited_message, channel_post) leaves hasChatId false but still
-// returns updateId so its offset advances.
+// Parses a getUpdates JSON body. On invalid JSON or an API error, sets *error
+// and returns an empty vector.
 std::vector<TelegramUpdate> parseTelegramUpdates(const String& jsonBody, String* error = nullptr);
 
-// Compares a TelegramUser's stored chat ID (persisted as text) against a
-// parsed update's chat ID. Uses strtoll, not String::toInt() (also
-// 32-bit) - same overflow risk as chatId above.
+// strtoll comparison - String::toInt() is 32-bit too.
 bool chatIdMatches(const String& storedChatId, int64_t updateChatId);
 
-// Case-insensitive prefix match of `needle` against every *enabled*
-// camera's name (e.g. "d01" matches "D01-FrontDoor") - shared by /on, /off,
-// /snap's target-camera lookup. Returns every match; the caller decides
-// what to do with 0, 1, or several.
+// Case-insensitive name-prefix match over enabled cameras; returns all
+// matches.
 std::vector<size_t> matchCamerasByPrefix(const CameraConfig cameras[], size_t numCameras, const String& needle);
 
-// The specific command a message's text was recognized as - Unknown means
-// it isn't a recognized command at all.
 enum class TelegramCommand { Unknown, Status, Uptime, Reset, On, Off, Snap, Help, Health, Log, Lang, Backup, Restore };
 
-// Which TelegramUser permission a command requires. The single source of
-// truth handleTelegramCommand's authorization check is built from, instead
-// of each command carrying its own scattered "if (!sender.canX)" check -
-// the exact bug class that caused the /reset reboot loop. Both this
-// switch and requiredPermissionForCommand's own implementation have no
-// default case - a new TelegramCommand added without a case here is a
-// build failure (-Werror=switch, scoped to this module's own
-// library.json, not project-wide - see platformio.ini's comment).
+// Permission each command needs - the single source for the authorization
+// check (scattered checks caused the /reset reboot loop). The switches have no
+// default, so a new command without a case fails the build (-Werror=switch in
+// this lib's library.json).
 enum class TelegramCommandPermission { Unknown, Command, Snap, Reset, Backup, Restore };
 TelegramCommandPermission requiredPermissionForCommand(TelegramCommand command);
 
-// One recognized command, already fully parsed. command is Unknown (and
-// cameraName empty) for anything not recognized.
+// Unknown (and empty cameraName) for anything unrecognized.
 struct ParsedTelegramCommand {
   TelegramCommand command = TelegramCommand::Unknown;
   TelegramCommandPermission requiredPermission = TelegramCommandPermission::Unknown;
   String cameraName;
 
-  // /on and /off only: an optional trailing token, e.g. "/off D01 30" or
-  // "/on D01 23:00" - "" means no timer (permanent on/off). Not yet
-  // interpreted as a duration - see parseDurationToken, which needs the
-  // current local time and so can't live in this time-independent parser.
+  // /on and /off: optional timer token ("30", "23:00"); interpreted later by
+  // parseDurationToken.
   String durationText;
 
-  // /log only: the optional trailing count, e.g. "/log 20" -> "20"; ""
-  // for a bare "/log". Dedicated field rather than reusing durationText -
-  // same one-field-per-command reasoning as above.
+  // /log: optional count.
   String logCountText;
 
-  // /lang only: the optional trailing argument, e.g. "/lang pt" -> "pt";
-  // "" for a bare "/lang" (handleTelegramCommand shows a language picker
-  // instead). Not yet validated against the actual known languages
-  // ("en"/"pt") - that's handleTelegramCommand's job, same as
-  // durationText/logCountText being interpreted downstream rather than here.
+  // /lang: optional language code, validated by the handler.
   String langArgText;
 };
 
-// The single place message text is matched against command syntax -
-// handleTelegramCommand used to parse this twice (once for permission,
-// once to dispatch), which is what let the /reset reboot loop happen.
-// Case-insensitive.
-//
-// Bare "/on"/"/off"/"/snap" (no trailing target) parse with cameraName ==
-// "" - handleTelegramCommand sends an inline-keyboard camera picker for
-// this instead of the usual name/prefix match (which would otherwise
-// wrongly match every camera against ""). /on and /off additionally
-// accept a second, space-separated token as a timer - everything after
-// the camera name's first token goes into durationText verbatim (see
-// parseDurationToken). Not available via the button picker (tap-to-toggle
-// only).
+// The one place command syntax is parsed (parsing twice caused the /reset
+// loop). Case-insensitive. Bare /on, /off, /snap give cameraName "" (the
+// handler shows a picker); for /on and /off, the rest after the camera goes
+// into durationText.
 ParsedTelegramCommand parseTelegramCommand(const String& text);
 
-// Interprets a /on or /off duration token relative to nowLocal (the
-// caller's current local time, passed explicitly so this stays
-// deterministic to test). Two forms:
-//  - A plain non-negative integer: minutes from now, capped at
-//    MAX_DURATION_MINUTES. Doesn't touch nowLocal, so works before NTP
-//    has ever synced.
-//  - "HH:MM" (24h): seconds until the next local occurrence of that time -
-//    today if still ahead of nowLocal, tomorrow otherwise - requires
-//    nowLocal to actually be synced (see `ok` below).
-// Call only when durationText is non-empty - the caller treats "" as "no
-// timer" before reaching this function.
+// Interprets a timer token against nowLocal (passed in for testability):
+//   - plain minutes, capped at MAX_DURATION_MINUTES; works without NTP
+//   - "HH:MM": next occurrence of that local time; needs a synced clock
 struct ParsedDuration {
-  // False if the token was neither form above, an HH:MM value was out of
-  // range, or (HH:MM only) nowLocal isn't synced yet (tm_year <= 2016) -
-  // resolving "at 23:00" against an unsynced clock would silently
-  // schedule against the wrong wall-clock time.
+  // False on a bad token or out-of-range time, or for HH:MM before the clock
+  // is synced.
   bool ok = false;
   unsigned long secondsFromNow = 0; // valid only if ok
 };
 
-// Upper bound for the plain-minutes duration form - 14 days. Real bound,
-// not a sanity number: checkScheduledAlertReverts (telegram.cpp) decides
-// "is this timer due yet" via the standard millis()-wraparound-safe
-// `(long)(millis() - dueMs) < 0` idiom, only correct for a delay under
-// 2^31ms (~24.86 days) - a duration parsed past that would read as
-// already-due the instant it's scheduled, reverting the camera to the
-// opposite of what was requested within one loop() tick.
+// 14 days. A real limit: the due check `(long)(millis() - dueMs) < 0` only
+// works under 2^31 ms (~24.8 days).
 static const long MAX_DURATION_MINUTES = 20160; // 14 days
 ParsedDuration parseDurationToken(const String& token, const struct tm& nowLocal);
 
-// The canonical "/word" text for a recognized command, e.g. for "You're
-// not authorized to use ___." - "" for Unknown. Same no-default-switch
-// reasoning as requiredPermissionForCommand.
+// "/word" for a command ("" for Unknown). No default case, as above.
 String commandDisplayName(TelegramCommand command);

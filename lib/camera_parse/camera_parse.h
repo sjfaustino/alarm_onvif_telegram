@@ -3,105 +3,54 @@
 #include <vector>
 #include "xml_helpers.h"
 
-// Pure parsing of ONVIF Media/Events XML bodies, split out of camera.cpp so
-// it can be unit-tested natively (test/test_camera_parse) without pulling
-// in WiFi/HTTPClient, which only exist on-device.
+// Pure ONVIF XML parsing, split from camera.cpp so it can be tested natively.
 
 struct ProfileInfo {
   String token;
   String name;
-  // This profile's VideoEncoderConfiguration codec ("JPEG", "H264", "H265",
-  // "MPEG4") - "" if the profile has no VideoEncoderConfiguration at all
-  // (audio/metadata-only) or no Encoding element was found within it.
-  // Scoped to THIS profile's own VideoEncoderConfiguration block specifically -
-  // never an AudioEncoderConfiguration's own Encoding element (e.g.
-  // "G711"/"AAC"), which would misreport an H.264-only camera as having an
-  // MJPEG-viewable profile. Used to find a browser-viewable MJPEG profile
-  // for the Cameras dashboard's live-preview link - see
-  // cameraFetchProfileAndSnapshotUri's own comment (camera.cpp).
+  // This profile's video codec ("JPEG", "H264", ...), "" if none. Scoped to
+  // the VideoEncoderConfiguration so an audio codec can't make an H.264-only
+  // camera look MJPEG-capable.
   String encoding;
 };
 
-// Extracts every <trt:Profiles token="..."><tt:Name>...</tt:Name>...
-// element from a GetProfilesResponse body. Restricted to actual
-// "...Profiles " opening tags (":Profiles " or "<Profiles "), not any
-// "token=" in the document - GetProfiles responses also carry tokens on
-// nested VideoEncoderConfiguration/VideoSourceConfiguration elements.
+// Profiles from a GetProfilesResponse. Only real Profiles tags count; nested
+// configurations carry tokens too.
 std::vector<ProfileInfo> parseProfiles(const String& xml);
 
-// Finds the State/IsMotion boolean value inside the NotificationMessage
-// block containing topicKeyword (not the whole response - otherwise a
-// batch with several topics would return whichever State/IsMotion
-// happened to appear first, regardless of which topic was asked for).
-// Recognizes Name="State", Name="state", and Name="IsMotion" - different
-// camera stacks name the boolean differently for the same kind of event.
-// Returns "" if topicKeyword, the block, or a recognized Name isn't found.
+// The State/IsMotion value inside topicKeyword's own NotificationMessage (not
+// the first one in the batch). Accepts "State", "state" and "IsMotion"; "" if
+// not found.
 String extractEventStateValue(const String& xml, const String& topicKeyword);
 
-// Which alarm topics are present in a PullMessages response body, and
-// whether *anything* in the whole body reported Value="true" - anyTrue is
-// NOT scoped to any one topic (PullMessages batches can report changes back
-// to false too, which this distinguishes from "some event in this body
-// actually fired", but not from *which* one). A batch carrying several
-// different topics is normal (MessageLimit=20 in camera.cpp's PullMessages
-// call), so anyTrue can be set entirely by a topic unrelated to
-// motionAlarm/cellMotion - see motionEventFired() below for the check that
-// actually matters for deciding whether to send a motion alert.
+// Topics present in a PullMessages body. anyTrue is body-wide and can be set
+// by an unrelated topic in the same batch - use motionEventFired to decide on
+// a motion alert.
 struct CameraEventClassification {
   bool anyTrue = false;
   bool motionAlarm = false;
   bool cellMotion = false;
-  // ONVIF's RuleEngine person-detection cell (e.g. topic
-  // "tns1:RuleEngine/MyRuleDetector/PeopleDetect") - no single standardized
-  // topic name for this across vendors (see camera.cpp's parseEvents' own
-  // comment on the unrecognized-topic fallback this was added after seeing
-  // in the field), so this one specific vendor topic is matched by name
-  // like MotionAlarm/CellMotionDetector are, not inferred generically.
+  // Vendor RuleEngine topics (".../MyRuleDetector/PeopleDetect",
+  // "VehicleDetect", "DogCatDetect") seen in the field, matched by name.
   bool peopleDetect = false;
-  // Same idea as peopleDetect, for that RuleEngine's vehicle-detection cell
-  // ("tns1:RuleEngine/MyRuleDetector/VehicleDetect") - seen from the same
-  // camera in the field alongside PeopleDetect.
   bool vehicleDetect = false;
-  // Same idea again, for that RuleEngine's pet-detection cell
-  // ("tns1:RuleEngine/MyRuleDetector/DogCatDetect") - seen from the same
-  // camera in the field alongside PeopleDetect/VehicleDetect. Deliberately
-  // NOT included in motionEventFired() below, unlike peopleDetect/
-  // vehicleDetect - a pet event is gated per-camera by
-  // CameraConfig::petAlertsEnabled (camera.cpp's parseEvents checks this
-  // field directly, since motionEventFired has no access to per-camera
-  // config), off by default so a user's own pet doesn't trigger the same
-  // alert a person/vehicle would.
+  // Not part of motionEventFired: pet alerts are opt-in per camera, checked in
+  // parseEvents.
   bool dogCatDetect = false;
   bool signalLoss = false;
   bool tamper = false;
 };
 CameraEventClassification classifyCameraEvent(const String& xml);
 
-// Whether topicKeyword's own NotificationMessage block (via
-// extractEventStateValue's per-block scoping - NOT ev.anyTrue, which is a
-// body-wide flag a same-batch, unrelated topic can set even while this
-// one's own state is actually false) reported State/IsMotion="true". The
-// building block motionEventFired below, and camera.cpp's tamper/signal-
-// loss firing checks, are built from.
+// Whether topicKeyword's own message reported true (unlike the body-wide
+// anyTrue).
 bool topicReportedTrue(const String& xml, const String& topicKeyword);
 
-// Whether a motion-relevant topic (MotionAlarm, CellMotionDetector,
-// PeopleDetect, or VehicleDetect - NOT DogCatDetect, see its own comment
-// above) that classifyCameraEvent found present in
-// this batch *itself* reported State/IsMotion="true" - NOT ev.anyTrue,
-// which is a body-wide flag that a
-// same-batch, unrelated topic (SignalLoss, TamperDetector) can set to true
-// while the motion topic's own state is actually false (e.g. "motion just
-// ended"). Checking ev.anyTrue alone - what camera.cpp's parseEvents used
-// to do - fires a motion alert off an unrelated topic's true value, with
-// the log line for the motion topic itself confusingly showing "State =
-// false" right before it.
+// Whether a motion topic (MotionAlarm, CellMotionDetector, PeopleDetect,
+// VehicleDetect) itself reported true. Checking anyTrue alone fired motion
+// alerts off unrelated topics like SignalLoss.
 bool motionEventFired(const String& xml, const CameraEventClassification& ev);
 
-// Best-effort extraction of the first <tt:Topic>...</tt:Topic> element's
-// content in a PullMessages response - "" if none is found. For logging an
-// event this project doesn't otherwise recognize (camera.cpp's parseEvents
-// unrecognized-topic fallback) - not used for any classification decision,
-// just to tell a human what topic string a camera actually sent so support
-// for it can be added deliberately, rather than the event just vanishing.
+// First <tt:Topic> text, for logging unrecognized events. Never used to
+// classify.
 String firstTopic(const String& xml);

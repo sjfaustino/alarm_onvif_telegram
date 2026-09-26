@@ -13,14 +13,8 @@ static const char* NVS_KEY_ACTIVE_LOW = "activeLow";
 static const char* NVS_KEY_THRESHOLD_MS = "threshMs";
 static const char* NVS_KEY_PULSE_MS = "pulseMs";
 
-// Cloudflare's anycast DNS resolver - fixed, not dashboard-configurable
-// (see net_watchdog.h's own comment on why). A raw IP needs no DNS lookup
-// of its own (DNS itself needs working WAN to resolve anything, so a
-// hostname-based probe would risk conflating "DNS is broken" with "no
-// internet"), and has very high uptime independent of this project's
-// other network dependency (api.telegram.org) - a probe target that only
-// failed because Telegram itself was down would otherwise misattribute a
-// Telegram-side outage as "no internet."
+// 1.1.1.1: a raw IP needs no DNS (which itself needs WAN), and it's
+// independent of Telegram, so a Telegram outage doesn't look like no internet.
 static const IPAddress kProbeAddr(1, 1, 1, 1);
 static const uint16_t kProbePort = 443;
 static const unsigned long kProbeTimeoutMs = 3000;
@@ -29,30 +23,17 @@ static bool g_settingEnabled = false;   // cached at boot, see initNetWatchdog()
 static bool g_available = false;        // see netWatchdogActive()'s comment
 static int g_activePin = -1;
 static bool g_activeLow = true;
-// 0 = no outage currently in progress - a millis() timestamp used purely
-// to pace repeated relay pulses: RESTARTED after every pulse (see the
-// pulse branch below) so a still-ongoing outage isn't pulsed again until
-// another full threshold has passed, without a separate backoff setting.
-// Same "0 is the sentinel for none scheduled" convention
-// CameraState::scheduledRevertDueMs already uses. Same-task-only
-// (main.cpp's loop() is the only caller of
-// checkInternetAndMaybePulseRelay/getNetWatchdogStatus), no lock needed.
+// Start of the current pulse interval (0 = no outage). Restarted after each
+// pulse, so an ongoing outage is pulsed once per threshold. loop() only.
 static unsigned long g_firstFailureMs = 0;
 
-// 0 = no outage currently in progress - a millis() timestamp of when the
-// CURRENT unbroken outage episode truly began, set once and left alone
-// until recovery, deliberately NOT restarted by the pulse branch the way
-// g_firstFailureMs above is. Without this separate variable, an outage
-// that outlives one pulse cycle (the router needs a full power-cycle,
-// reboot, and reacquire before the next probe can even succeed) would
-// report "first detected"/"was down since" as the time of the MOST
-// RECENT pulse instead of when the outage actually started - understating
-// exactly the outages worth reporting accurately.
+// When the current outage really began (0 = none). Not restarted by pulses, so
+// "down since" stays accurate across pulse cycles.
 static unsigned long g_outageEpisodeStartMs = 0;
 
 NetWatchdogSettings loadNetWatchdogSettings() {
   Preferences prefs;
-  // Read-write, not read-only - see auth_store.cpp's loadDashboardAuth for why.
+  // Read-write (see loadDashboardAuth).
   prefs.begin(NVS_NAMESPACE, false);
   NetWatchdogSettings s;
   s.enabled = prefs.getBool(NVS_KEY_ENABLED, false);
@@ -99,8 +80,7 @@ void initNetWatchdog() {
 
   g_activePin = settings.pin;
   pinMode(g_activePin, OUTPUT);
-  // Resting state - relay energized, router powered normally. A pulse
-  // later temporarily drives the opposite level, then returns here.
+  // Resting state: relay energized, router powered.
   digitalWrite(g_activePin, g_activeLow ? LOW : HIGH);
   g_available = true;
   Serial.printf("[net_watchdog] Internet watchdog active on pin %d.\n", g_activePin);
@@ -118,15 +98,8 @@ static bool probeInternetReachable() {
   return ok;
 }
 
-// Clamped here, at the point of use, not just at the dashboard form
-// boundary - same "hand-edited/imported NVS blob bypasses the form
-// entirely" reasoning as every other clamp in this project. The pulse
-// delay runs on loop()'s own task (the only one subscribed to the task
-// watchdog), so the ceiling also keeps it comfortably under the 90s TWDT
-// timeout - esp_task_wdt_reset() right after covers the pulse itself,
-// same single-reset-after-a-bounded-blocking-op pattern checkWifiSignal's
-// own Telegram send already uses (not the per-file reset loop the
-// *unbounded* SD retention sweep needs).
+// Clamped at use; also keeps the blocking pulse under the 90s watchdog, which
+// is reset right after.
 static void pulseRelay(uint32_t pulseDurationMs) {
   uint32_t safePulseMs = pulseDurationMs;
   if (safePulseMs > NET_WATCHDOG_PULSE_MAX_MS) safePulseMs = NET_WATCHDOG_PULSE_MAX_MS;
@@ -138,11 +111,7 @@ static void pulseRelay(uint32_t pulseDurationMs) {
 
 bool netWatchdogManualPulse() {
   if (!netWatchdogActive()) return false;
-  // Deliberately does NOT touch g_firstFailureMs/g_outageEpisodeStartMs -
-  // a manual test pulse (Hardware page "Pulse relay now" button) must not
-  // interfere with a real outage's own timing if one happens to be in
-  // progress. Uses the currently-saved pulse duration, same clamp as the
-  // real detection path.
+  // A manual pulse leaves outage timing alone.
   pulseRelay(loadNetWatchdogSettings().pulseDurationMs);
   logEvent("Internet watchdog: manual test pulse");
   return true;
@@ -174,9 +143,8 @@ NetWatchdogCheckResult checkInternetAndMaybePulseRelay() {
     return result;
   }
 
-  // Re-read settings only while an outage is actually in progress (rare) -
-  // lets the threshold/pulse-duration dials take effect without a reboot,
-  // unlike enabled/pin which need pinMode() freshly applied at boot.
+  // Re-read during an outage so threshold/duration changes apply without a
+  // reboot.
   NetWatchdogSettings settings = loadNetWatchdogSettings();
   uint32_t safeThresholdMs = settings.outageThresholdMs;
   if (safeThresholdMs > NET_WATCHDOG_THRESHOLD_MAX_MS) safeThresholdMs = NET_WATCHDOG_THRESHOLD_MAX_MS;
@@ -185,10 +153,7 @@ NetWatchdogCheckResult checkInternetAndMaybePulseRelay() {
 
   logEvent("Internet watchdog: outage threshold reached - pulsing relay");
   pulseRelay(settings.pulseDurationMs);
-  // Restart the timer rather than clearing it - naturally spaces repeated
-  // pulses by the same configured threshold if the outage outlives one
-  // power-cycle attempt (the router needs real time to reboot and
-  // reacquire 4G), without a separate backoff setting.
+  // Restart rather than clear, so repeated pulses are spaced by the threshold.
   g_firstFailureMs = now;
   result.event = NetWatchdogCheckResult::Event::OutageDetected;
   return result;

@@ -1,12 +1,8 @@
 #include "camera_serialize.h"
 #include <algorithm>
 
-// Non-printable ASCII separator between a single camera's fields - no
-// camera name, URL, credential, or note should ever legitimately contain
-// this, so records are just split/joined on it rather than building full
-// field-escaping machinery. Not the same separator camera_store.cpp uses
-// *between* records (its own RECORD_SEP, private to that file) - this one
-// only needs to be consistent within a single serialize/deserialize pair.
+// Field separator within one record (ASCII unit separator - never in real
+// data, so no escaping). Records are joined by camera_store's RECORD_SEP.
 static const char FIELD_SEP = '\x1F';
 
 static String stripSeparators(const String& s) {
@@ -27,10 +23,7 @@ static std::vector<String> splitFields(const String& record) {
   return fields;
 }
 
-// Always emits CAMERA_SCHEMA_VERSION's layout - this function has exactly
-// one field order, ever. A layout change means bumping the version and
-// writing a new deserializeCamera branch for it, not editing this one in
-// place.
+// One layout, ever. Changing it means a new version and deserialize branch.
 String serializeCamera(const CameraConfig& c) {
   String s;
   s += stripSeparators(c.name);                       s += FIELD_SEP;
@@ -65,13 +58,8 @@ String serializeCamera(const CameraConfig& c) {
   return s;
 }
 
-// Version 0: pre-versioning format, shipped for a while before
-// CAMERA_SCHEMA_VERSION existed. Tolerant of the last three fields being
-// absent (11, 12, or 13 fields, in addition to the full 14) because
-// alertCooldownMs/offlineThresholdMs/snapshotBurstCount were, as a matter
-// of historical fact, only ever appended in that order - never inserted
-// or reordered. That's exactly the assumption a real version number now
-// exists so nothing has to keep relying on it again after this.
+// V0 (before versioning): 11-14 fields, since the last three were only ever
+// appended.
 static CameraConfig deserializeCameraV0(const std::vector<String>& fields) {
   CameraConfig c;
   if (fields.size() < 11) return c; // malformed - caller skips entries with an empty name
@@ -99,12 +87,11 @@ static CameraConfig deserializeCameraV0(const std::vector<String>& fields) {
   return c;
 }
 
-// Version 1: the 14-field layout this project shipped with before quiet
-// hours/motion watchdog/timelapse existed. Superseded by V2 below, but
-// kept as its own permanent branch (never edited) so a record still
-// tagged version 1 (not yet re-saved since upgrading) keeps parsing
-// correctly - camera_store.cpp re-persists everything as the current
-// version on its next save, same as V0 already did.
+// Each version below has its own branch, never edited, so older records keep
+// parsing; loadCameras re-saves in the current version. From V1 on the field
+// count must match exactly.
+//
+// V1: 14 fields.
 static CameraConfig deserializeCameraV1(const std::vector<String>& fields) {
   CameraConfig c;
   if (fields.size() != 14) return c; // malformed - caller skips entries with an empty name
@@ -126,14 +113,7 @@ static CameraConfig deserializeCameraV1(const std::vector<String>& fields) {
   return c;
 }
 
-// Version 2 (CAMERA_SCHEMA_VERSION): V1's 14 fields plus quiet hours (3),
-// motion watchdog (1), and timelapse (1) - 19 fields total, added together
-// in one schema bump rather than one field at a time (see this project's
-// commit history: reshaping a single "current" version's layout more than
-// once is exactly the failure mode this versioning scheme exists to
-// prevent - every existing saved camera would silently fail to parse the
-// moment the field count changed again). Requires an *exact* field count,
-// same reasoning as V1's own comment.
+// V2: + quiet hours (3), motion watchdog, timelapse = 19.
 static CameraConfig deserializeCameraV2(const std::vector<String>& fields) {
   CameraConfig c;
   if (fields.size() != 19) return c; // malformed - caller skips entries with an empty name
@@ -160,9 +140,7 @@ static CameraConfig deserializeCameraV2(const std::vector<String>& fields) {
   return c;
 }
 
-// Version 3 (CAMERA_SCHEMA_VERSION): V2's 19 fields plus pollIntervalMs (1),
-// appended - 20 fields total. Requires an exact field count, same
-// reasoning as V1/V2's own comments.
+// V3: + pollIntervalMs = 20.
 static CameraConfig deserializeCameraV3(const std::vector<String>& fields) {
   CameraConfig c;
   if (fields.size() != 20) return c; // malformed - caller skips entries with an empty name
@@ -190,10 +168,7 @@ static CameraConfig deserializeCameraV3(const std::vector<String>& fields) {
   return c;
 }
 
-// Version 4 (CAMERA_SCHEMA_VERSION): V3's 20 fields plus
-// timelapseSendToTelegram (1) and retentionDays (1), appended - 22 fields
-// total. Requires an exact field count, same reasoning as V1/V2/V3's own
-// comments.
+// V4: + timelapseSendToTelegram, retentionDays = 22.
 static CameraConfig deserializeCameraV4(const std::vector<String>& fields) {
   CameraConfig c;
   if (fields.size() != 22) return c; // malformed - caller skips entries with an empty name
@@ -223,9 +198,7 @@ static CameraConfig deserializeCameraV4(const std::vector<String>& fields) {
   return c;
 }
 
-// Version 5 (CAMERA_SCHEMA_VERSION): V4's 22 fields plus petAlertsEnabled
-// (1) and petAlertsTextOnly (1), appended - 24 fields total. Requires an
-// exact field count, same reasoning as V1-V4's own comments.
+// V5: + petAlertsEnabled, petAlertsTextOnly = 24.
 static CameraConfig deserializeCameraV5(const std::vector<String>& fields) {
   CameraConfig c;
   if (fields.size() != 24) return c; // malformed - caller skips entries with an empty name
@@ -257,9 +230,7 @@ static CameraConfig deserializeCameraV5(const std::vector<String>& fields) {
   return c;
 }
 
-// Version 6 (CAMERA_SCHEMA_VERSION): V5's 24 fields plus snapshotMaxWidth
-// (1) and snapshotMaxHeight (1), appended - 26 fields total. Requires an
-// exact field count, same reasoning as V1-V5's own comments.
+// V6: + snapshotMaxWidth/Height = 26.
 static CameraConfig deserializeCameraV6(const std::vector<String>& fields) {
   CameraConfig c;
   if (fields.size() != 26) return c; // malformed - caller skips entries with an empty name
@@ -293,15 +264,8 @@ static CameraConfig deserializeCameraV6(const std::vector<String>& fields) {
   return c;
 }
 
-// Version 7 (CAMERA_SCHEMA_VERSION): V6's 26 fields plus personAlertsEnabled
-// (1) and vehicleAlertsEnabled (1), appended - 28 fields total. Requires
-// an exact field count, same reasoning as V1-V6's own comments. Unlike
-// every other appended bool in this file, an EMPTY field here still
-// means "true" (CameraConfig's own default), not "false" - see
-// personAlertsEnabled's own comment (camera_store.h) for why this one
-// specifically must default the opposite way; in practice a real V7
-// record always writes an explicit "1"/"0", this only matters for a
-// hand-edited/imported record with a blank field.
+// V7: + personAlertsEnabled, vehicleAlertsEnabled = 28. An empty field means
+// true here (the opt-out default), unlike the other bools.
 static CameraConfig deserializeCameraV7(const std::vector<String>& fields) {
   CameraConfig c;
   if (fields.size() != 28) return c; // malformed - caller skips entries with an empty name
@@ -337,12 +301,7 @@ static CameraConfig deserializeCameraV7(const std::vector<String>& fields) {
   return c;
 }
 
-// Version 8 (CAMERA_SCHEMA_VERSION): V7's 28 fields plus motionDigestEnabled
-// (1), appended - 29 fields total. Requires an exact field count, same
-// reasoning as V1-V7's own comments. Same "an empty field still means
-// true" exception as personAlertsEnabled/vehicleAlertsEnabled above (not
-// petAlertsEnabled's own opt-in default) - see motionDigestEnabled's own
-// comment (camera_store.h) for why this one also defaults on.
+// V8: + motionDigestEnabled = 29 (empty also means true).
 static CameraConfig deserializeCameraV8(const std::vector<String>& fields) {
   CameraConfig c;
   if (fields.size() != 29) return c; // malformed - caller skips entries with an empty name
@@ -392,11 +351,8 @@ CameraConfig deserializeCamera(const String& record, uint16_t recordVersion) {
   if (recordVersion == 7) return deserializeCameraV7(fields);
   if (recordVersion == CAMERA_SCHEMA_VERSION) return deserializeCameraV8(fields);
 
-  // Unknown version, newer than anything this firmware knows about (most
-  // likely: downgraded after a later firmware version changed the layout).
-  // Best-effort fall through to the newest known layout instead of
-  // discarding the record outright - camera_store.cpp logs a clear
-  // warning when this happens so it doesn't go unnoticed.
+  // Newer than we know (likely a downgrade): try the newest layout;
+  // loadCameras logs a warning.
   return deserializeCameraV8(fields);
 }
 

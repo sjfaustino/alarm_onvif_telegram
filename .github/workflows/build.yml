@@ -47,6 +47,10 @@ jobs:
         env: [esp32s3]
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history and tags, so the firmware version comes from
+          # `git describe` (scripts/generate_build_version.py).
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:

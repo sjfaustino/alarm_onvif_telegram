@@ -37,7 +37,7 @@ void test_first_call_past_threshold_alerts(void) {
 
 void test_exactly_at_threshold_alerts(void) {
   // Boundary: >= threshold, not just >, matches checkCameraOnlineStatus's
-  // own offlineNow comparison (camera.cpp/telegram.cpp).
+  // own offlineNow comparison (camera.cpp/telegram_alerts.cpp).
   SubscriptionHealthResult r = evaluateSubscriptionHealth(false, THRESHOLD, THRESHOLD, false);
   TEST_ASSERT_TRUE(r.shouldAlert);
 }

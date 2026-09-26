@@ -210,13 +210,13 @@ Arduino-ESP32/IDF releases.
   Cameras page's 5-entry Preview strip - most useful with SD storage active
   (far more history than the PSRAM ring holds), showing up to 30 thumbnails per
   camera per page load.
-- The running build's exact version - "YYYYMMDD.HHMM" (year-first so two
-  versions sort correctly), the real wall-clock time it was built, computed
-  fresh by `scripts/generate_build_version.py` on every `pio run`/upload,
-  not something anyone has to remember to bump by hand -
-  is shown alongside every "Camera Monitor" label: the dashboard title/
-  sidebar/login prompt, the Telegram heartbeat and boot-online messages, the
-  Firmware page (its own "Version" row, next to the existing build date/time),
+- The running build's exact version, from `git describe` - "1.2.0" for a
+  tagged release, "1.2.0-5-gabc1234" for 5 commits after it, with "-dirty"
+  when built from uncommitted changes (`scripts/generate_build_version.py`;
+  nothing to bump by hand, see [Releases](#releases)) - is shown alongside
+  every "Camera Monitor" label: the dashboard title/sidebar/login prompt, the
+  Telegram heartbeat and boot-online messages, the Firmware page (its own
+  "Version" row, next to the existing build date/time),
   and the config export header. Useful for confirming which exact build is
   actually running, especially after an OTA update.
 - Firmware, Maintenance, and Storage live under a "System" submenu in the sidebar;
@@ -231,7 +231,7 @@ Arduino-ESP32/IDF releases.
   corrupted transfer, though - if a checksum-valid image itself crashes or
   hangs on boot, ESP-IDF's app rollback (enabled in this board's sdkconfig)
   automatically reverts to the previous working partition on the next reset;
-  `main.cpp`'s `setup()` confirms the new image healthy near the end of its
+  `boot_checks.cpp` (called at the end of `setup()`) confirms the new image healthy near the end of its
   own run, not gated on WiFi connecting (a network outage during an update
   shouldn't roll back otherwise-good firmware). The Firmware page also shows
   NVS usage (% of entries used) - this project has silently hit NVS's practical
@@ -299,8 +299,8 @@ Arduino-ESP32/IDF releases.
   to 30 minutes) - HTTP Basic Auth has no throttling of its own, so without this
   a wrong-password guess would otherwise cost an attacker nothing. The Security
   page also has a config export/backup - a plain-text download of every camera,
-  Telegram user, and network setting (no passwords - those still have to be
-  re-entered by hand), for reconstructing the tedious parts of the configuration
+  Telegram user, and network setting (including camera usernames and passwords,
+  so keep the file private; WiFi passwords are never exported), for reconstructing the tedious parts of the configuration
   if NVS is ever erased or a board gets replaced. A matching Import restores from
   a previously exported file - a real file upload (not a size-limited form field,
   so it scales to as many cameras/users as you actually have), REPLACING whichever
@@ -311,11 +311,30 @@ Arduino-ESP32/IDF releases.
   ambiguous pair - the same rule the Add-camera/Add-user forms already enforce
   one at a time. Every import automatically saves a one-slot backup of whatever
   was stored just before it, downloadable from the same page, so importing the
-  wrong file is undoable by importing that backup back. Imported cameras/network
-  always have blank passwords (never in an export) - re-enter them before
-  rebooting, since network settings missing the WiFi password will otherwise
-  strand the board off the network entirely. Takes effect after a reboot, same
+  wrong file is undoable by importing that backup back. Camera passwords are
+  restored from the file; an imported network section has no WiFi password -
+  re-enter it before rebooting, or the board is stranded off the network. Takes effect after a reboot, same
   as any other bulk camera/network change.
+
+## Scope
+
+What this project is for, and what it deliberately leaves out:
+
+- **One ESP32-S3 (with PSRAM) watching ONVIF cameras on a home or small-property
+  LAN**, up to 24 cameras (`MAX_CAMERAS`). It uses ONVIF event PullPoint
+  subscriptions; cameras that only push events some other way aren't
+  supported.
+- **Alerts go to Telegram, and only Telegram.** There is no email, SMS, MQTT or
+  cloud service, and nothing leaves the LAN except Telegram Bot API calls.
+- **Snapshots, not video.** Alerts carry JPEG snapshots, and history keeps
+  snapshots (a small PSRAM ring, or an optional SD card). There is no video
+  recording or NVR function; the dashboard's RTSP/MJPEG links send your
+  player or browser straight to the camera.
+- **The dashboard is for the local network.** It is plain HTTP with optional
+  Basic Auth and rate limiting - never forward port 80 to the internet. Use
+  Telegram commands, or a VPN, for remote access.
+- **Languages:** Telegram messages in English or European Portuguese (per
+  user); the dashboard is English only.
 
 ## Hardware
 
@@ -326,7 +345,7 @@ warning instead of proceeding) if there isn't any, rather than run degraded and 
 partway through a send later.
 
 Tested on an ESP32-S3 with 8MB embedded octal PSRAM — `[env:esp32s3]`. Also needs a
-second core (`src/main.cpp` pins one FreeRTOS task per camera to core 1), which every
+second core (`src/camera_tasks.cpp` pins one FreeRTOS task per camera to core 1), which every
 PSRAM-equipped ESP32-S3 variant has, so this hasn't been a real constraint in
 practice; a single-core PSRAM chip is untested.
 
@@ -505,7 +524,7 @@ include/
   network_store.h    # WiFi credentials, NVS load/save (editable from the dashboard)
   auth_store.h       # dashboard Basic Auth username/password, NVS load/save
   event_log_store.h  # thread-safe global wrapper around lib/event_log's ring buffer
-  camera_tasks.h      # spawnCameraTask() - exposed from main.cpp so a dashboard edit can
+  camera_tasks.h      # g_cameras/g_cameraStates + spawnCameraTask(), so a dashboard edit can
                        # start a camera's task live, without a reboot
   sd_store.h          # optional SD card mechanics (settings, mount, write/list/read/prune,
                        # erase-all, readability check) - thread-safe, hardware-dependent
@@ -521,18 +540,22 @@ include/
   webserver_gallery.h, webserver_firmware.h, webserver_maintenance.h, webserver_storage.h,
   webserver_security.h
                      # each panel's own rendering/form-handling
+  config_backup.h   # config export/import and the one-slot pre-import backup (dashboard + Telegram)
   secrets.h.example # template for secrets.h (copy, fill in, gitignored)
   telegram_ca.h      # Telegram's root CA for TLS pinning (committed, not secret)
-  build_version.h    # extern FIRMWARE_VERSION - its own translation unit (build_version.cpp)
-                      # specifically so the build-timestamp value that changes on every single
-                      # build doesn't force a full rebuild of everything that includes config.h
-  generated_build_version.h # created/rewritten fresh before every build (scripts/generate_build_version.py,
-                             # a pre: extra_script - runs before any compilation) - gitignored, not
-                             # tracked at all; nothing to keep in sync since a build always creates it first
+  build_version.h    # extern FIRMWARE_VERSION (git describe) - own translation unit, so a new
+                      # version recompiles one file
+  generated_build_version.h # written by scripts/generate_build_version.py before each build (gitignored)
+  wifi_connect.h, time_sync.h, boot_checks.h, health_monitor.h
+                     # main.cpp's boot/loop helpers, split out of it
   camera.h, telegram.h, onvif_soap.h
 src/
-  main.cpp          # boot sequence, PSRAM check, WiFi/NTP, per-camera task spawn, heartbeat,
-                      # reboot-reason reporting, OTA rollback confirmation
+  main.cpp          # setup()/loop(): boot sequence, PSRAM check, startMonitoring, periodic-check cadence
+  camera_tasks.cpp  # g_cameras/g_cameraStates, per-camera task spawn, live camera add
+  wifi_connect.cpp  # primary/backup WiFi connect, static IP, reconnect backoff
+  time_sync.cpp     # NTP sync, RTC seed/writeback, router HTTP-Date fallback clock
+  boot_checks.cpp   # task watchdog, reboot-reason text, OTA rollback confirmation/reporting
+  health_monitor.cpp # heartbeat, NVS/SD/WiFi-signal/heap threshold alerts
   camera.cpp        # ONVIF SOAP calls, event parsing, per-camera FreeRTOS task, live config reload
   camera_store.cpp   # NVS-backed camera list (load/save/add/delete, one-time seed)
   telegram_users.cpp # NVS-backed Telegram user list (load/save/add/delete, one-time seed)
@@ -549,14 +572,23 @@ src/
   webserver_security.cpp
                      # each panel's rendering/form-handling, split out of what used to be one
                      # 946-line webserver.cpp
-  telegram.cpp       # photo/message send paths, multi-recipient fan-out, remote commands
-                       # (including timed /on//off), scheduled-revert checking
+  config_backup.cpp  # config export/import/backup - no HTML, shared with Telegram /backup, /restore
+  telegram_transport.cpp # TLS sends to the Bot API (message/photo/document/keyboard), the
+                           # project-wide Telegram send mutex, local-clock helpers
+  snapshot_fetch.cpp     # camera snapshot HTTP GET into a PSRAM buffer
+  telegram_alerts.cpp    # motion/tamper/signal-loss/offline alerts, multi-recipient fan-out,
+                           # digests, health watchdogs, test alerts
+  telegram_commands.cpp  # getUpdates polling, remote commands (including timed /on//off),
+                           # /backup and /restore, scheduled-revert checking
+  telegram_internal.h    # helpers shared between the four files above only
   onvif_soap.cpp     # SOAP envelope building, WS-Security digest
   build_version.cpp  # defines FIRMWARE_VERSION from generated_build_version.h - see build_version.h
 lib/                 # pure-logic modules with no hardware dependencies, split out of the
                       # files above specifically so they're unit-testable - see test/README.md
   xml_helpers/            # ONVIF response substring parsing + XML escaping
   camera_serialize/       # CameraConfig <-> NVS blob (de)serialization, schema-versioned
+  camera_form/            # camera Add/Edit form: rendering and parsing/clamping (golden-tested)
+  user_form/              # Telegram user Add/Edit form: rendering and parsing (golden-tested)
   telegram_user_serialize/ # TelegramUser <-> NVS blob (de)serialization, schema-versioned
   telegram_parse/         # Telegram JSON escaping, /on,/off,/snap camera-name matching, and
                            # /on,/off timer-token parsing (minutes or HH:MM)
@@ -566,13 +598,14 @@ lib/                 # pure-logic modules with no hardware dependencies, split o
                            # never included
   config_import_parse/    # parses the Security page's exported config text back into
                            # CameraConfig/TelegramUser/WifiCredentials/SdSettings for Import
+  config_import_summary/  # import result -> human-readable summary (HTML banner or plain text)
   background_job_state/   # pure start/finish/failed-to-start transition rules behind
                            # BackgroundJob<T> (include/background_job.h)
   subscription_health/    # alert-once/re-arm decision logic behind the stuck-subscription
-                           # alert (telegram.cpp's checkSubscriptionHealth)
+                           # alert (telegram_alerts.cpp's checkSubscriptionHealth)
   heap_health/             # new-record-low/threshold-alert decision logic behind the free-heap
-                           # trail (main.cpp's checkHeapHealth)
-  backoff/                # the doubling-with-a-cap retry delay formula (shared by main.cpp,
+                           # trail (health_monitor.cpp's checkHeapHealth)
+  backoff/                # the doubling-with-a-cap retry delay formula (shared by wifi_connect.cpp,
                            # camera.cpp, and webserver.cpp's login rate-limiter)
   quiet_hours/              # recurring daily do-not-disturb window predicate (start/end minute
                              # of day, handles the overnight-wraparound case)
@@ -586,9 +619,23 @@ lib/                 # pure-logic modules with no hardware dependencies, split o
   format_utils/             # formatUptime/formatElapsedSince, htmlEscape, urlEncode
   camera_parse/             # ONVIF GetProfiles/NotificationMessage parsing - motion/tamper/
                              # signal-loss classification
-  webserver_html/           # shared Edit/Delete row-actions HTML fragment
+  webserver_html/           # shared HTML builders: form inputs, list-row actions, tables
 test/                 # native unit tests for lib/* - `pio test -e native`, no hardware needed
 ```
+
+## Releases
+
+The firmware version comes from git tags (`git describe`), so releasing is:
+
+1. Move the `[Unreleased]` notes in `CHANGELOG.md` under a new version heading
+   and commit.
+2. Tag the commit: `git tag -a v1.1.0 -m "v1.1.0"` and push the tag
+   (`git push origin v1.1.0`).
+3. Build (`pio run -e esp32s3`) or take CI's `firmware-esp32s3` artifact, and
+   upload `firmware.bin` from the dashboard's Firmware page.
+
+The board then reports exactly `1.1.0`. Builds between tags report e.g.
+`1.1.0-3-gabc1234`, and `-dirty` means uncommitted changes were built.
 
 ## Testing
 
@@ -619,7 +666,7 @@ alongside the firmware build.
   see that function's own comment for the full story.
 - The Telegram heartbeat reports liveness but can't detect a fully frozen board on
   its own, since a hung `loop()` can't send anything - that's what the ESP32 task
-  watchdog (`initWatchdog()` in `main.cpp`) covers: a 90s timeout on `loop()`
+  watchdog (`initWatchdog()` in `boot_checks.cpp`) covers: a 90s timeout on `loop()`
   forces a reboot if it stops returning to its top. It only watches `loop()`, not
   the per-camera tasks in `camera.cpp` - those already bound every SOAP call with
   `HTTP_TIMEOUT_MS`, and `cameraSetupSequence` chains several such calls back-to-back

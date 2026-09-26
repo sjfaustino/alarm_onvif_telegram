@@ -2,459 +2,199 @@
 #include <Arduino.h>
 #include "secrets.h"
 
-// WiFi and Telegram credentials live in secrets.h (gitignored). Nothing
-// sensitive belongs in this file, since this one IS meant to be committed.
-//
-// Cameras are managed at runtime - see camera_store.h (CameraConfig, NVS
-// load/save) and webserver.h (the web UI). secrets.h's CAMERA_SEED only
-// seeds NVS on first boot; after that the web UI is the only way to
-// change them.
+// Project-wide constants. Credentials live in secrets.h (gitignored); cameras
+// live in NVS and are edited from the dashboard (secrets.h's CAMERA_SEED only
+// seeds a fresh board).
 
-// FIRMWARE_VERSION lives in build_version.h, not here, even though this
-// is where every other project-wide constant lives - see that header's
-// own comment for why (short version: it changes on every build, and
-// config.h is included by nearly everything in src/, so baking it in
-// here would force a full rebuild on every single `pio run`/upload).
+// FIRMWARE_VERSION is in build_version.h so a per-build value doesn't force a
+// rebuild of everything that includes this file.
 
 // ============================================================
 // Timing (all in ms unless noted)
 // ============================================================
-// Default for CameraConfig::pollIntervalMs (Cameras page) - the per-camera
-// poll cadence, editable per camera since some cameras' embedded HTTP
-// stacks tolerate more frequent polling than others. This value is only
-// CameraConfig's own default member initializer now (an existing camera
-// loaded from a pre-pollIntervalMs schema record - see camera_serialize.h's
-// CAMERA_SCHEMA_VERSION comment - gets this too, so nothing changes for it
-// without an explicit edit); camera.cpp's actual poll-due check reads
-// cfg.pollIntervalMs (clamped - see safePollIntervalMs, camera.cpp), never
-// this constant directly.
+// PULL_INTERVAL_MS is only CameraConfig::pollIntervalMs's default; camera.cpp
+// reads the per-camera value.
 static const unsigned long PULL_INTERVAL_MS         = 2000UL;
 static const unsigned long SUBSCRIPTION_LIFETIME_MS = 4UL * 60UL * 1000UL;
 static const unsigned long RENEW_MARGIN_MS          = 60UL * 1000UL;
 static const unsigned long RETRY_INTERVAL_MS        = 10000UL;
-// See CameraState::pullAmbiguousStreak's own comment - how many
-// consecutive genuinely-unrecognized PullMessages responses in a row
-// force a resubscribe. At the default 2s poll cadence, 5 is ~10s of
-// tolerance for a transient hiccup before treating the pullpoint as dead -
-// proportionally longer in real time for a camera configured with a
-// longer pollIntervalMs, which is an acceptable tradeoff for whoever
-// deliberately chose that.
+// Consecutive unrecognized PullMessages responses before a forced resubscribe
+// (~10s at the default 2s poll).
 static const uint8_t        PULL_MESSAGES_AMBIGUOUS_LIMIT = 5;
-// Clamp for CameraConfig::pollIntervalMs - webserver_cameras.cpp's
-// parseCameraForm clamps user input to this range; camera.cpp's
-// safePollIntervalMs re-clamps at the actual point of use, same
-// "hand-edited/imported NVS blob bypasses the form entirely" reasoning as
-// this project's other per-camera clamps (CAMERA_ALERT_COOLDOWN_MAX_MS
-// etc., above). The floor matters here specifically: every SOAP call in
-// this project sends "Connection: close" (onvif_soap.cpp's soapPost), so
-// an interval near 0 wouldn't just poll aggressively, it would open and
-// tear down a fresh TCP connection to the camera in a tight loop - real
-// hammering, not just "frequent," on a device whose embedded HTTP stack
-// may only tolerate 1-2 connections at all (see camera_tasks.h's own
-// staggered-boot comment for a real incident from exactly that class of
-// overload).
-// Reserved capacity for main.cpp's g_cameras/g_cameraStates - see
-// camera_tasks.h's stagePendingNewCamera for why this is what makes it
-// safe to grow those vectors live (without a reboot) once a brand-new
-// camera is added via the dashboard: main.cpp reserves this many slots
-// once, at boot, before any task exists to hold a pointer into either
-// vector (CameraTaskContext, CameraState::user/pass) - as long as the
-// total camera count never exceeds it, every later push_back is
-// guaranteed not to reallocate, so no already-issued pointer is ever
-// invalidated. Chosen generously for a residential/small-property
-// system - reserving this many empty CameraConfig/CameraState slots
-// upfront costs only a few hundred bytes each, trivial against this
-// board's ~320KB RAM. A board that already has more cameras configured
-// than this (from before this feature existed) is unaffected: the boot-
-// time resize() already sizes exactly to however many really exist,
-// this constant only controls how much SPARE headroom gets reserved on
-// top of that.
+// Reserved up front for g_cameras/g_cameraStates so adding a camera live never
+// reallocates them; tasks hold raw pointers into both (see camera_tasks.h).
 static const size_t MAX_CAMERAS = 24;
 
+// Poll interval clamp. The floor matters: every SOAP call opens a fresh
+// connection ("Connection: close"), and some cameras only accept 1-2 at once.
 static const unsigned long CAMERA_POLL_INTERVAL_MIN_MS = 250UL;
 static const unsigned long CAMERA_POLL_INTERVAL_MAX_MS = 30000UL; // 30s
-// See CameraState::lastSnapshotUriRetryMs's own comment - how often a
-// subscribed camera with a still-unresolved snapshotUri retries
-// GetProfiles/GetSnapshotUri. Not too aggressive: a camera whose Media
-// service is genuinely absent (not just a transient failure) will keep
-// failing this cheaply but pointlessly forever, so this stays well above
-// the poll cadence.
+// Retry cadence for a subscribed camera whose snapshot URI isn't resolved yet.
+// Well above the poll rate: a camera with no Media service fails this forever.
 static const unsigned long SNAPSHOT_URI_RETRY_INTERVAL_MS = 5UL * 60UL * 1000UL; // 5 minutes
 static const uint16_t      HTTP_TIMEOUT_MS          = 10000;
 static const unsigned long HEARTBEAT_INTERVAL_MS    = 6UL * 60UL * 60UL * 1000UL; // liveness ping cadence
-// checkDailyActivityDigest's cadence (telegram.h/main.cpp's loop()) - every
-// N hours from boot, same "fixed interval from whenever the board last
-// rebooted" convention as HEARTBEAT_INTERVAL_MS/NVS_USAGE_CHECK_INTERVAL_MS
-// above, not a specific wall-clock time of day (which would need a synced
-// clock and its own scheduling logic this project doesn't otherwise need).
-// A reboot restarts the count, same as every other interval here.
+// Fixed interval from boot, not a time of day - avoids depending on a synced
+// clock.
 static const unsigned long DAILY_DIGEST_INTERVAL_MS = 24UL * 60UL * 60UL * 1000UL; // 24 hours
 static const unsigned long TELEGRAM_COMMAND_POLL_MS = 5000UL;        // /on, /off, /status polling cadence
-// How long a task waits to acquire telegram.cpp's g_telegramNetMutex
-// before treating a Telegram send/poll as failed rather than blocking
-// indefinitely - see that mutex's own comment for the real incident this
-// fixes (concurrent TLS sessions across cameras exhausting internal RAM
-// during a multi-camera motion burst). Sized to comfortably outlast one
-// queued-behind predecessor's worst-case single send (~35-40s - see
-// TelegramNetLock's own comment) while staying well under RENEW_MARGIN_MS
-// below: a camera task blocked here is also blocked from servicing its
-// own ONVIF subscription renewal.
+// Bounded wait for the Telegram TLS mutex (see telegram_transport.cpp).
+// Outlasts one queued send (~40s) but stays under RENEW_MARGIN_MS, since a
+// camera task waiting here can't renew its subscription.
 static const unsigned long TELEGRAM_NET_MUTEX_TIMEOUT_MS = 45000UL;
 
-// telegram_retry_queue.h - a bounded in-RAM retry queue for text-only,
-// unsolicited Telegram alerts (systemMessages broadcasts) that failed to
-// send, typically because WAN was down at the time. CAPACITY bounds RAM
-// use through a long outage with several distinct alerts (oldest dropped
-// to make room, never grown unbounded); FLUSH_INTERVAL_MS is how often
-// main.cpp's loop() retries everything queued, only while WiFi is
-// connected; MAX_AGE_MS is how long a queued entry stays worth
-// delivering at all before it's dropped regardless of outcome - a
-// watchdog "outage detected" alert delivered a day late is no longer
-// useful information.
+// Retry queue for broadcast alerts that failed (usually a WAN outage). Oldest
+// entries drop when full; entries older than MAX_AGE are no longer worth
+// sending.
 static const size_t TELEGRAM_RETRY_QUEUE_CAPACITY = 20;
 static const unsigned long TELEGRAM_RETRY_FLUSH_INTERVAL_MS = 60UL * 1000UL;      // 1 minute
 static const unsigned long TELEGRAM_RETRY_MAX_AGE_MS = 24UL * 60UL * 60UL * 1000UL; // 24 hours
 
-// /restore command (telegram.cpp) - how long a bare "/restore" stays
-// armed, waiting for the actual file to arrive as a separate message, and
-// the sanity cap on that file's size (a config export is at most a few
-// tens of KB even with many cameras/users - anything wildly larger than
-// this is either the wrong file entirely or an attempted abuse of the
-// board's limited heap, rejected outright before it's ever fully
-// downloaded).
+// /restore: how long a bare "/restore" waits for the file, and a size cap. The
+// file is buffered in internal heap, so the cap stays near a real export's
+// size.
 static const unsigned long RESTORE_PENDING_WINDOW_MS = 5UL * 60UL * 1000UL; // 5 minutes
-// Generous headroom over "a few tens of KB", not a round "big enough"
-// number - this String is buffered fully in internal heap (not PSRAM),
-// which this board has far less of, so the cap stays close to what a
-// real export actually needs rather than as large as the Bot API would
-// technically allow.
 static const size_t RESTORE_MAX_FILE_BYTES = 64UL * 1024UL; // 64KB
-// How often main.cpp's loop() re-checks NVS usage (checkNvsUsage) - see
-// NVS_USAGE_WARN_PERCENT's own comment for why this exists at all.
-// Independent of HEARTBEAT_INTERVAL_MS's much longer cadence: NVS usage
-// only grows from deliberate dashboard edits (adding cameras/users), never
-// silently on its own between checks, so there's no harm in checking more
-// often than the heartbeat - this just gets the warning out sooner than
-// waiting for the next 6-hourly heartbeat to happen to mention it.
+// NVS usage only grows from dashboard edits, so hourly is plenty.
 static const unsigned long NVS_USAGE_CHECK_INTERVAL_MS = 60UL * 60UL * 1000UL; // 1 hour
-// NVS is entry-based (fixed ~32-byte slots), not a raw byte pool - this
-// project has hit a real incident before where camera records silently
-// failed to persist once NVS filled up (see camera_store.cpp's
-// NVS_KEY_LIST_LEGACY comment). Shared by the Firmware page's own hint
-// (webserver_firmware.cpp) and checkNvsUsage's proactive Telegram alert
-// (main.cpp) so both agree on what "getting full" means.
+// NVS is slot-based; camera records have silently failed to save once it
+// filled. Shared by the Firmware page hint and checkNvsUsage.
 static const unsigned NVS_USAGE_WARN_PERCENT = 80;
-// Same "proactive counterpart to a reactive failure alert" reasoning as
-// NVS_USAGE_CHECK_INTERVAL_MS/NVS_USAGE_WARN_PERCENT above, for the SD
-// card's own capacity (main.cpp's checkSdUsage) - sd_store.cpp already
-// alerts once a write actually fails and falls back to the PSRAM ring
-// (trSdFailure), but nothing warns before that point the way NVS's own
-// warning does. Retention (SdSettings::retentionDays) is the usual
-// defense against this, but a burst of motion, a disabled/too-long
-// retention setting, or a card smaller than expected can all still let
-// usage climb toward full despite it. 1 hour matches
-// NVS_USAGE_CHECK_INTERVAL_MS - SD usage only grows from actual snapshot
-// writes, not on its own between checks, so there's no harm checking this
-// infrequently either.
+// Early warning before SD writes start failing and fall back to PSRAM;
+// retention usually prevents this, but not always.
 static const unsigned long SD_USAGE_CHECK_INTERVAL_MS = 60UL * 60UL * 1000UL; // 1 hour
-// Higher than NVS_USAGE_WARN_PERCENT - SD cards are typically orders of
-// magnitude larger than the NVS partition, and SD_FREE_SPACE_RESERVE_BYTES
-// (this file) already reserves a fixed 50MB floor regardless of card
-// size, so there's more natural headroom here before "full" is actually a
-// near-term risk.
+// Higher than the NVS threshold: cards are large and a 50MB reserve is already
+// kept free.
 static const unsigned SD_USAGE_WARN_PERCENT = 90;
-// How often main.cpp's loop() re-checks WiFi.RSSI() (checkWifiSignal) -
-// shorter than NVS_USAGE_CHECK_INTERVAL_MS since signal strength can
-// genuinely drift within minutes (something moved, a neighbor's channel
-// got busier), unlike NVS usage which only ever changes from a deliberate
-// dashboard edit.
 static const unsigned long WIFI_RSSI_CHECK_INTERVAL_MS = 15UL * 60UL * 1000UL; // 15 minutes
-// RSSI (dBm, always negative - closer to 0 is stronger) at or below which
-// checkWifiSignal() proactively alerts. -75dBm is a common "reliable but
-// starting to struggle" line for 2.4GHz WiFi - well before typical
-// disconnect territory (usually past -85 to -90dBm), so this is meant to
-// catch a board drifting toward real connectivity trouble while there's
-// still time to do something about it (move the board/AP, reconsider
-// channel/placement), not just note that it already happened.
+// -75dBm: still reliable on 2.4GHz but well before disconnects (~-85..-90), so
+// there's time to act.
 static const int WIFI_RSSI_WARN_DBM = -75;
-// Free-heap threshold (bytes, ESP.getMinFreeHeap() - internal SRAM, not
-// PSRAM) below which checkHeapHealth() (main.cpp) sends a one-time Telegram
-// alert the first time a new lifetime-low record crosses it. mbedTLS/
-// WiFiClientSecure allocate from this same pool (see g_telegramNetMutex's
-// own comment, telegram.cpp), so a genuinely low reading here is real
-// allocation-failure territory, not a sanity nicety - 20KB is comfortably
-// above a single TLS handshake's typical needs, so crossing it is an early
-// warning, not already-crashed. No re-arm: this is a running minimum
-// (never increases within a boot), so "already alerted" only ever resets
-// on the next reboot.
+// Internal-SRAM low-water mark (ESP.getMinFreeHeap) that triggers a one-time
+// alert. mbedTLS allocates from this pool; 20KB leaves room for one TLS
+// handshake. The minimum never rises within a boot, so there is no re-arm.
 static const uint32_t HEAP_LOW_WARN_BYTES = 20000;
-// How often main.cpp's loop() re-checks ESP.getMinFreeHeap() - cheap (a
-// stored-value read, no computation), checked every loop() tick rather
-// than gated behind an interval like the checks above: this is a running
-// watermark the IDF already tracks continuously, so checking often costs
-// nothing and only improves how closely the resulting Activity log
-// timestamp lines up with whatever actually caused the drop.
 static const size_t        SNAPSHOT_MAX_BYTES       = 100000;        // internal-RAM fallback cap - see note below
 static const size_t        SNAPSHOT_MAX_BYTES_PSRAM = 2000000UL;     // PSRAM buffer cap - generous; real snapshots are far smaller
 static const bool          VERBOSE_SOAP_LOG         = false;         // flip true to debug one camera at a time
-// Hides the routine "[camera] [SOAP] Action HTTP=200 len=N" line for a
-// call that succeeded and wasn't a SOAP fault - most of the serial
-// output during steady-state polling. Faults and non-200/negative codes
-// always print regardless, so nothing actionable gets hidden. Flip to
-// false to see every call again (e.g. while troubleshooting timing).
+// Hide the routine per-call SOAP success line; faults always print.
 static const bool          SUPPRESS_SOAP_SUCCESS_LOG = true;
 
-// PSRAM is a hard requirement - setup() refuses to start if
-// ESP.getPsramSize() is 0, since a snapshot alert going to multiple
-// Telegram users needs the JPEG buffered once in RAM and resent per
-// recipient. SNAPSHOT_MAX_BYTES is only telegram.cpp's fallback cap for
-// the rare case a PSRAM allocation itself fails (fragmentation).
-//
-// camera.cpp's per-camera FreeRTOS tasks are pinned to core 1, requiring a
-// genuine second core - would need plain xTaskCreate if ever flashed to a
-// single-core chip.
+// SNAPSHOT_MAX_BYTES only applies if a PSRAM allocation fails (fragmentation);
+// PSRAM itself is mandatory (setup() halts without it).
 
 // ============================================================
-// Optional SD card storage (sd_store.h/.cpp) - a generic SPI microSD
-// breakout module, entirely optional and off by default (see
-// SdSettings::enabled, dashboard Storage page). When enabled AND a card
-// is actually detected at boot, snapshot history (webserver.cpp's
-// /cameras/snapshot, the Cameras page's preview strip) is stored here
-// instead of the small PSRAM ring, with far more history retained and
-// persisting across reboots. If disabled, or enabled but no module/card
-// responds at boot, monitoring is entirely unaffected - snapshot history
-// just falls back to the existing PSRAM ring, exactly as it already
-// works today.
+// Optional SD card (sd_store.h), off by default. Without it, or if no card
+// responds at boot, snapshot history uses the PSRAM ring.
 //
-// *** VERIFY AND ADJUST these for your actual wiring before flashing ***
-// These are common ESP32-S3 default SPI2 pins, not guaranteed for your
-// specific dev board - check your board's pinout/datasheet. Nothing else
-// in this project uses SPI, so any four free GPIOs work; these are just a
-// reasonable starting point.
+// *** VERIFY these against your board's pinout before flashing ***
+// Nothing else uses SPI, so any four free GPIOs work.
 static const int SD_CS_PIN   = 10;
 static const int SD_SCK_PIN  = 12;
 static const int SD_MISO_PIN = 13;
 static const int SD_MOSI_PIN = 11;
 
-// Safety margin kept free on the card at all times - a write that would
-// drop free space below this triggers pruning first (see sd_store.cpp's
-// writeSnapshot). Not precisely tuned to any card size on purpose: large
-// enough to comfortably fit several more snapshots plus filesystem
-// overhead, small enough not to waste meaningful capacity on any card
-// worth using for this.
+// Kept free at all times; a write that would cross it prunes first.
 static const uint64_t SD_FREE_SPACE_RESERVE_BYTES = 50UL * 1024UL * 1024UL; // 50MB
 
-// Per-camera fairness ceiling, independent of the free-space reserve
-// above - without this, one chatty camera could fill most of the card
-// and crowd out a quiet camera's retained history, since pruning is
-// deliberately per-camera (see sd_store.cpp) rather than a global,
-// cross-directory walk.
+// Per-camera ceiling so one busy camera can't crowd out another's history
+// (pruning is per camera).
 static const size_t SD_MAX_FILES_PER_CAMERA = 300;
 
-// Caps how many files a single write's prune pass deletes, even if that
-// isn't enough to clear the reserve/ceiling above - bounds how long one
-// write can hold the SD mutex (blocking every other camera's own writes)
-// during pruning. If one call's cap isn't enough, the next write's own
-// prune pass continues the job.
+// Bounds how long one write holds the SD mutex while pruning; the next write
+// continues.
 static const size_t SD_PRUNE_MAX_FILES_PER_WRITE = 5;
 
-// How long waitForSdIdle() (sd_store.h) waits for an in-flight SD
-// operation to finish before a deliberate reboot proceeds anyway.
-// Generous enough to cover a legitimately slow erase-all pass across
-// several cameras' worth of files on a slow card, short enough that a
-// genuinely wedged SD operation doesn't leave someone who pressed
-// "reboot" stuck waiting indefinitely.
+// How long a deliberate reboot waits for in-flight SD work before proceeding.
 static const unsigned long SD_IDLE_WAIT_TIMEOUT_MS = 10000UL;
 
-// Clamp for the dashboard's "automatic full storage check" interval
-// (SdSettings::checkIntervalHours, Storage page) - just a sanity bound on
-// the number field, same idea as CameraConfig's snapshotBurstCount clamp.
-// 720h = 30 days.
 static const uint32_t SD_CHECK_INTERVAL_MAX_HOURS = 720;
 
-// Default for SdSettings::retentionDays (Storage page's global snapshot
-// retention setting) and the ceiling both it and CameraConfig::retentionDays
-// (a per-camera override) are clamped to. 30 days out of the box - not an
-// arbitrary number: several jurisdictions' general rule for private CCTV
-// footage (Portugal's data protection guidance among them) is "no longer
-// than necessary, 30 days as the common default absent a specific reason
-// to keep longer" - a sensible default for anyone running this
-// unmodified, not a compliance guarantee for any specific jurisdiction.
-// The per-camera override exists precisely for "a specific reason to keep
-// longer" (e.g. an ongoing concern about one particular camera). 0 (either
-// the global setting or a per-camera override) means "keep forever - never
-// auto-delete," a deliberate opt-out, not the default.
+// Default and ceiling for snapshot retention. 30 days is a common default in
+// data protection guidance for private CCTV (e.g. Portugal) - a sensible
+// default, not a compliance guarantee. 0 means keep forever.
 static const uint16_t SD_RETENTION_DAYS_DEFAULT = 30;
 static const uint16_t SD_RETENTION_MAX_DAYS = 3650; // ~10 years
 
-// How often main.cpp's loop() runs enforceSnapshotRetention() (sd_store.h) -
-// independent of SdSettings::checkIntervalHours (that dial can legitimately
-// be "off" while retention still needs to run on its own schedule). Once a
-// day is plenty for a days-scale setting; no reason to check more often.
+// Independent of the storage-check interval, which may be off.
 static const unsigned long SD_RETENTION_CHECK_INTERVAL_MS = 24UL * 60UL * 60UL * 1000UL;
 
-// Clamp for the dashboard's NTP resync interval (WifiCredentials::
-// ntpSyncIntervalMs, Network page) - webserver_network.cpp's
-// handleSaveNetwork clamps user input to this, and main.cpp's setupTime
-// re-clamps at the actual esp_sntp_set_sync_interval() call (see its own
-// comment for why a form-only clamp isn't enough - same "hand-edited/
-// imported NVS blob bypasses the form entirely" reasoning as
-// SD_CHECK_INTERVAL_MAX_HOURS/telegram.cpp's motionWatchdogHours clamp).
-// 43200min = 30 days.
+// NTP resync ceiling. Clamped both at save and at use, since imported configs
+// bypass the form (30 days).
 static const unsigned long NTP_SYNC_MAX_MINUTES = 43200UL;
 
-// Clamps for CameraConfig's three alert-throttling fields (Cameras page) -
-// same "hand-edited/imported NVS blob bypasses the form entirely" reasoning
-// as the constants above. webserver_cameras.cpp's parseCameraForm clamps
-// user input to these; telegram.cpp re-clamps at each point of use (see
-// its own comments - an unclamped alertCooldownMs/snapshotBurstCount pair
-// is exactly the multi-camera Telegram burst class this project has
-// already been burned by once, see git history around "Serialize Telegram
-// TLS sends to fix multi-camera burst SSL failures").
+// Alert-throttling clamps, applied at save and again at use: an unclamped
+// cooldown/burst pair is how multi-camera Telegram bursts broke TLS before.
 static const unsigned long CAMERA_ALERT_COOLDOWN_MAX_MS = 86400000UL;    // 24h
 static const unsigned long CAMERA_OFFLINE_THRESHOLD_MAX_MS = 604800000UL; // 7 days
 static const unsigned int CAMERA_SNAPSHOT_BURST_MAX = 10;
 
-// Sanity ceiling for CameraConfig::snapshotMaxWidth/snapshotMaxHeight (the
-// {WIDTH}/{HEIGHT} tokens substituted into snapshotUriOverride) - not a
-// real camera resolution limit, just keeps a hand-edited/imported value
-// from being a meaningless arbitrarily large number. Same clamp pattern
-// as CAMERA_SNAPSHOT_BURST_MAX above.
+// Sanity ceiling for the {WIDTH}/{HEIGHT} snapshot URI tokens.
 static const uint16_t CAMERA_SNAPSHOT_DIMENSION_MAX = 4096;
 
-// Cross-camera alert-correlation window (telegram.cpp's
-// checkMultiCameraAlertDigest/noteMultiCameraAlert) - how long after the
-// FIRST camera in a burst to keep watching for other, different cameras
-// also alerting before sending one combined summary message. Fixed-length
-// from that first alert, not extended by each new arrival (a sliding
-// window could in principle never close during a long-lasting event,
-// delaying the summary indefinitely). Long enough to catch a scene-wide
-// event (wind, a storm, a shared false-positive AI trigger) crossing
-// several cameras' own independent polling intervals; short enough that
-// "detected together" still reads as one event once the summary arrives.
-// Purely additive - every camera's own real photo alert still sends
-// immediately and unmodified either way, this never delays or suppresses
-// one.
+// Multi-camera digest window, fixed from the first alert (a sliding window
+// might never close). Only adds a summary; per-camera alerts are never
+// delayed.
 static const unsigned long MULTI_CAMERA_DIGEST_WINDOW_MS = 30UL * 1000UL;
 
-// Clamp for TelegramUser::maxCommandsPerMinute (Telegram Users page) - just
-// a sanity bound on the number field, same idea as CAMERA_SNAPSHOT_BURST_MAX
-// above. Not safety-critical the way the *_MAX_MS constants are (no
-// overflow-prone multiply downstream - see telegram.cpp's
-// allowTelegramCommand, a plain 60000/N division), just keeps the field
-// from holding an arbitrarily large, meaningless number.
 static const uint16_t TELEGRAM_MAX_COMMANDS_PER_MINUTE_MAX = 600;
 
-// Cap on /activity.log (sd_store.cpp's appendActivityLogLine) - the SD-
-// persisted mirror of the in-memory Activity log (event_log_store.h).
-// Once a line's append would push the file past this, it's deleted and
-// the next append starts fresh - bounded, lossy-by-design, same pragmatic
-// "just wipe and restart" precedent eraseAllSnapshots() already set. Kept
-// small enough that reading the whole file back in one shot (the
-// dashboard's download route) stays a simple one-off String, no
-// streaming needed.
+// SD mirror of the Activity log. Past this size the file is wiped and
+// restarted, keeping it small enough to read back in one String.
 static const size_t ACTIVITY_LOG_MAX_BYTES = 65536; // 64KB
 
-// Caps how many thumbnails the Gallery page (webserver_gallery.cpp) shows
-// per camera in one page load - each one independently re-triggers a full
-// SD directory listing (see that file's own comment on the accepted
-// cost), so this also bounds how many times that happens per load.
+// Each thumbnail triggers a directory listing, so this also bounds SD work per
+// page load.
 static const size_t GALLERY_PAGE_SIZE = 30;
 
 // ============================================================
-// Optional external RTC (rtc_store.h/.cpp) - a DS3231 breakout module over
-// I2C, entirely optional and off by default (see RtcSettings::enabled,
-// Network page). This board's only other clock source is NTP, which only
-// runs once WiFi connects - a DS3231 lets the system clock be seeded with
-// a roughly-correct time immediately at boot, before WiFi/NTP have had any
-// chance to run. If disabled, or enabled but the chip doesn't ACK at boot,
-// the board behaves exactly as it already does today (NTP-only).
+// Optional DS3231 RTC (rtc_store.h), off by default. Seeds the clock at boot,
+// before WiFi/NTP can run.
 //
-// *** VERIFY AND ADJUST these for your actual wiring before flashing ***
-// Common ESP32-S3 default I2C pins, not guaranteed for your specific dev
-// board - check your board's pinout/datasheet. This is the only I2C
-// peripheral this project uses, so any two free GPIOs work.
+// *** VERIFY these against your board's pinout before flashing ***
 static const int RTC_SDA_PIN = 8;
 static const int RTC_SCL_PIN = 9;
 static const uint8_t DS3231_I2C_ADDR = 0x68; // fixed by the chip itself, not configurable
 
 // ============================================================
-// Optional internet-connectivity watchdog (net_watchdog.h/.cpp) - for a
-// board sitting behind a 4G/LTE router that sometimes loses its uplink
-// and doesn't recover on its own, while the board's own WiFi-to-router
-// link stays up the whole time (WiFi.status()==WL_CONNECTED never
-// notices). A relay wired in series with the router's own power gets
-// pulsed to force a power-cycle once the outage has lasted longer than a
-// configurable threshold. Entirely optional and off by default (see
-// NetWatchdogSettings::enabled, Hardware > Internet page).
+// Optional internet watchdog (net_watchdog.h), off by default. Power-cycles a
+// 4G router through a relay when WAN is down but local WiFi is still up.
 //
 // *** VERIFY this pin is actually free on your board before enabling ***
-// Just a sane prefill for the Hardware page's pin field - unlike every
-// other pin in this file, this one is meant to be changed from the
-// dashboard (isReservedOrUnsafePin, lib/net_watchdog_logic, rejects an
-// unsafe choice there), not by editing this constant.
+// Only a prefill; the pin is set on the Hardware page, which rejects unsafe
+// pins.
 static const int NET_WATCHDOG_PIN_DEFAULT = 4;
 
-// How often the periodic check actually probes WAN reachability - not
-// dashboard-configurable (the user-facing dial is the outage *threshold*
-// below, which this interval must stay well under to measure with
-// reasonable granularity).
+// Probe cadence; must stay well under the (configurable) outage threshold.
 static const unsigned long NET_WATCHDOG_CHECK_INTERVAL_MS = 30UL * 1000UL;
 
-// Clamp ceilings for NetWatchdogSettings::pulseDurationMs/outageThresholdMs -
-// same "hand-edited/imported NVS blob bypasses the dashboard form
-// entirely" reasoning as every other clamped field in this project.
-// PULSE_MAX in particular keeps the relay-pulse delay (loop()'s own task,
-// the only one subscribed to the task watchdog) comfortably under the 90s
-// TWDT timeout.
+// Clamps for imported configs. PULSE_MAX keeps the relay pulse, which blocks
+// loop(), under the 90s task watchdog.
 static const uint32_t NET_WATCHDOG_PULSE_MAX_MS = 60UL * 1000UL;      // 60s
 static const uint32_t NET_WATCHDOG_THRESHOLD_MAX_MS = 60UL * 60UL * 1000UL; // 1h
 
-// Camera bridge watchdog (bridge_watchdog.h/.cpp) - same relay-power-cycle
-// idea as the Internet Watchdog above, but for a local wireless bridge
-// carrying two specific cameras rather than the board's own WAN link: if
-// BOTH configured cameras have been CameraState::isOffline for longer than
-// a threshold, that's the bridge itself down (a single camera going
-// offline is far more likely to be that one camera's own problem), so a
-// relay wired to the bridge's power gets pulsed. A second, independent,
-// dashboard-configurable pin - see watchdogPinsConflict (lib/
-// net_watchdog_logic) for why the two watchdogs' pins are cross-checked
-// against each other at save time.
+// Bridge watchdog (bridge_watchdog.h): power-cycles a wireless bridge when
+// both of its cameras are offline too long (one camera offline is more likely
+// the camera itself).
 //
 // *** VERIFY this pin is actually free on your board before enabling ***
-// Deliberately a different default than NET_WATCHDOG_PIN_DEFAULT - both
-// can be enabled at once, on two different relays.
+// Different default from NET_WATCHDOG_PIN_DEFAULT so both can run.
 static const int BRIDGE_WATCHDOG_PIN_DEFAULT = 5;
 
 static const unsigned long BRIDGE_WATCHDOG_CHECK_INTERVAL_MS = 30UL * 1000UL;
 
-// Same reasoning as NET_WATCHDOG_PULSE_MAX_MS/THRESHOLD_MAX_MS above.
 static const uint32_t BRIDGE_WATCHDOG_PULSE_MAX_MS = 60UL * 1000UL;      // 60s
 static const uint32_t BRIDGE_WATCHDOG_THRESHOLD_MAX_MS = 60UL * 60UL * 1000UL; // 1h
 
-// 220V mains power monitor (power_monitor.h/.cpp) - the reverse of the two
-// relay watchdogs above: an INPUT, not an output. A relay driven by a
-// 220V-to-5V transformer closes its NO contact onto this pin while mains
-// power is present; losing power de-energizes the relay and opens it.
-// Purely a sensor - there's no corrective action to take (the board and
-// router are themselves on a UPS), just an alert at boot and on every
-// confirmed change. A third independent, dashboard-configurable GPIO -
-// see watchdogPinsConflict (lib/net_watchdog_logic) for why all three of
-// this project's relay/sensor pins are cross-checked against each other,
-// pairwise, at save time.
+// Mains power monitor (power_monitor.h): an input from a relay driven by a
+// 220V-to-5V transformer; NO contact closed = power present. Alert-only.
 //
 // *** VERIFY this pin is actually free on your board before enabling ***
-// Deliberately a third distinct default from NET_WATCHDOG_PIN_DEFAULT/
-// BRIDGE_WATCHDOG_PIN_DEFAULT - all three can be enabled at once.
+// Third distinct default so all three relay/sensor features can run together.
 static const int POWER_MONITOR_PIN_DEFAULT = 6;
 
 static const unsigned long POWER_MONITOR_CHECK_INTERVAL_MS = 10UL * 1000UL;
 
-// How long a raw reading must keep disagreeing with the last CONFIRMED
-// state before it's trusted as a real change, not relay contact chatter
-// or a momentary sag - roughly 3 checks' worth of sustained disagreement
-// at the interval above. No corrective action is gated on this (unlike
-// the two watchdogs' own outage thresholds), just whether to send an
-// alert at all - short on purpose, since a real, sustained mains outage
-// against a UPS-backed board is worth knowing about promptly.
+// Debounce: a reading must disagree with the confirmed state this long (~3
+// checks) before it counts as a change.
 static const unsigned long POWER_MONITOR_DEBOUNCE_MS = 30UL * 1000UL;

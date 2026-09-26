@@ -20,25 +20,16 @@ static bool g_available = false;        // see bridgeWatchdogActive()'s comment
 static int g_activePin = -1;
 static bool g_activeLow = true;
 static bool g_camerasResolved = false;  // updated on each check - see checkBridgeCamerasAndMaybePulseRelay
-// 0 = no outage currently in progress - a millis() timestamp used purely
-// to pace repeated relay pulses: RESTARTED after every pulse (see the
-// pulse branch below), same sentinel convention net_watchdog.cpp's own
-// g_firstFailureMs uses, for the same reason. Same-task-only (main.cpp's
-// loop() is the only caller here), no lock needed.
+// Start of the current pulse interval (0 = none); restarted after each pulse,
+// as in net_watchdog.cpp. loop() only.
 static unsigned long g_firstBothOfflineMs = 0;
 
-// 0 = no outage currently in progress - a millis() timestamp of when the
-// CURRENT unbroken "both offline" episode truly began, set once and left
-// alone until recovery - deliberately NOT restarted by the pulse branch
-// the way g_firstBothOfflineMs above is. See net_watchdog.cpp's own
-// g_outageEpisodeStartMs comment for why: without this, an outage
-// outliving one pulse cycle would report "first detected"/"was down
-// since" as the time of the most recent pulse, not the true start.
+// When the current outage really began; not restarted by pulses.
 static unsigned long g_outageEpisodeStartMs = 0;
 
 BridgeWatchdogSettings loadBridgeWatchdogSettings() {
   Preferences prefs;
-  // Read-write, not read-only - see auth_store.cpp's loadDashboardAuth for why.
+  // Read-write (see loadDashboardAuth).
   prefs.begin(NVS_NAMESPACE, false);
   BridgeWatchdogSettings s;
   s.enabled = prefs.getBool(NVS_KEY_ENABLED, false);
@@ -87,9 +78,8 @@ void initBridgeWatchdog() {
     return;
   }
 
-  // Defense in depth - the dashboard save routes (webserver.cpp) are the
-  // primary guard against both watchdogs sharing a pin; this catches a
-  // hand-edited/imported NVS record that bypassed them.
+  // Backstop for imported configs; the save routes are the main pin-clash
+  // guard.
   NetWatchdogSettings netSettings = loadNetWatchdogSettings();
   if (watchdogPinsConflict(true, settings.pin, netSettings.enabled, netSettings.pin)) {
     Serial.printf("[bridge_watchdog] Camera bridge watchdog is enabled on pin %d, but the Internet "
@@ -100,8 +90,7 @@ void initBridgeWatchdog() {
 
   g_activePin = settings.pin;
   pinMode(g_activePin, OUTPUT);
-  // Resting state - relay energized, bridge powered normally. A pulse
-  // later temporarily drives the opposite level, then returns here.
+  // Resting state: relay energized, bridge powered.
   digitalWrite(g_activePin, g_activeLow ? LOW : HIGH);
   g_available = true;
   Serial.printf("[bridge_watchdog] Camera bridge watchdog active on pin %d.\n", g_activePin);
@@ -111,8 +100,6 @@ bool bridgeWatchdogActive() {
   return g_settingEnabled && g_available;
 }
 
-// Case-insensitive match, same as webserver.cpp's own camera-by-name
-// lookup (the /cameras/snapshot route).
 static int findCameraIndexByName(const CameraConfig cameras[], size_t numCameras, const String& name) {
   if (name.length() == 0) return -1;
   for (size_t i = 0; i < numCameras; i++) {
@@ -121,13 +108,7 @@ static int findCameraIndexByName(const CameraConfig cameras[], size_t numCameras
   return -1;
 }
 
-// Clamped here, at the point of use, not just at the dashboard form
-// boundary - same "hand-edited/imported NVS blob bypasses the form
-// entirely" reasoning as every other clamp in this project. The pulse
-// delay runs on loop()'s own task (the only one subscribed to the task
-// watchdog), so the ceiling also keeps it comfortably under the 90s TWDT
-// timeout - esp_task_wdt_reset() right after covers the pulse itself,
-// same pattern net_watchdog.cpp's own pulseRelay uses.
+// Clamped at use; keeps the blocking pulse under the 90s watchdog.
 static void pulseRelay(uint32_t pulseDurationMs) {
   uint32_t safePulseMs = pulseDurationMs;
   if (safePulseMs > BRIDGE_WATCHDOG_PULSE_MAX_MS) safePulseMs = BRIDGE_WATCHDOG_PULSE_MAX_MS;
@@ -139,9 +120,7 @@ static void pulseRelay(uint32_t pulseDurationMs) {
 
 bool bridgeWatchdogManualPulse() {
   if (!bridgeWatchdogActive()) return false;
-  // Deliberately does NOT touch g_firstBothOfflineMs/g_outageEpisodeStartMs -
-  // see net_watchdog.cpp's bridgeWatchdogManualPulse for the full reasoning (same
-  // pattern, applies identically here).
+  // A manual pulse leaves outage timing alone.
   pulseRelay(loadBridgeWatchdogSettings().pulseDurationMs);
   logEvent("Camera bridge watchdog: manual test pulse");
   return true;
@@ -155,11 +134,8 @@ BridgeWatchdogCheckResult checkBridgeCamerasAndMaybePulseRelay(const CameraConfi
   int idxA = findCameraIndexByName(cameras, numCameras, settings.cameraA);
   int idxB = findCameraIndexByName(cameras, numCameras, settings.cameraB);
 
-  // Fail-safe: a renamed/deleted camera (or a name that never matched)
-  // means the pair can't be evaluated at all - never guess "both down" or
-  // "both up" from incomplete information. Doesn't touch the timer, so a
-  // transient mismatch mid-edit doesn't lose progress toward an
-  // already-in-progress outage.
+  // Can't evaluate the pair (renamed, deleted, disabled): do nothing and keep
+  // the timer, rather than guess.
   if (idxA < 0 || idxB < 0 || !cameras[idxA].enabled || !cameras[idxB].enabled) {
     g_camerasResolved = false;
     return result;
@@ -197,10 +173,7 @@ BridgeWatchdogCheckResult checkBridgeCamerasAndMaybePulseRelay(const CameraConfi
     return result;
   }
 
-  // Re-read settings only while an outage is actually in progress (rare) -
-  // lets the threshold/pulse-duration dials take effect without a reboot,
-  // unlike enabled/pin which need pinMode() freshly applied at boot. Reuse
-  // the settings already loaded above rather than reloading again.
+  // Re-read during an outage so setting changes apply without a reboot.
   uint32_t safeThresholdMs = settings.outageThresholdMs;
   if (safeThresholdMs > BRIDGE_WATCHDOG_THRESHOLD_MAX_MS) safeThresholdMs = BRIDGE_WATCHDOG_THRESHOLD_MAX_MS;
 
@@ -209,10 +182,7 @@ BridgeWatchdogCheckResult checkBridgeCamerasAndMaybePulseRelay(const CameraConfi
   logEvent("Camera bridge watchdog: " + settings.cameraA + " / " + settings.cameraB +
            " both offline past threshold - pulsing relay");
   pulseRelay(settings.pulseDurationMs);
-  // Restart the timer rather than clearing it - naturally spaces repeated
-  // pulses by the same configured threshold if the outage outlives one
-  // power-cycle attempt, without a separate backoff setting - same
-  // reasoning as net_watchdog.cpp's own g_firstFailureMs restart.
+  // Restart rather than clear, spacing repeated pulses by the threshold.
   g_firstBothOfflineMs = now;
   result.event = BridgeWatchdogCheckResult::Event::OutageDetected;
   return result;

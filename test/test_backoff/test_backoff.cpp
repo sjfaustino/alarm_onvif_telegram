@@ -31,7 +31,7 @@ void test_delay_does_not_shrink_on_overflow(void) {
   TEST_ASSERT_EQUAL_UINT32(300000UL, nextBackoffDelayMs(3000000000UL, 10000UL, 300000UL));
 }
 
-// Documents the full sequence both main.cpp (WiFi reconnect) and
+// Documents the full sequence both wifi_connect.cpp (WiFi reconnect) and
 // camera.cpp (subscription retry) actually depend on: start, double,
 // double, ..., cap, cap forever - and instantly back to start the moment
 // the caller resets its stored delay to 0 after a success.

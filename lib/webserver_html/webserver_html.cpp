@@ -45,3 +45,40 @@ String renderDataTable(const std::vector<String>& columnHeaders, const std::vect
   html += "</table>";
   return html;
 }
+
+static String valueInput(const String& label, const char* type, const String& name, const String& value,
+                         const char* attrs) {
+  return "<label>" + label + "<input type=\"" + type + "\" name=\"" + htmlEscape(name) + "\" value=\"" +
+         htmlEscape(value) + "\"" + attrs + "></label>";
+}
+
+String htmlTextInput(const String& label, const String& name, const String& value, const char* attrs) {
+  return valueInput(label, "text", name, value, attrs);
+}
+
+String htmlTimeInput(const String& label, const String& name, const String& value) {
+  return valueInput(label, "time", name, value, "");
+}
+
+String htmlPasswordInput(const String& label, const String& name, const char* attrs) {
+  return "<label>" + label + "<input type=\"password\" name=\"" + htmlEscape(name) + "\"" + attrs + "></label>";
+}
+
+String htmlCheckbox(const String& label, const String& name, bool checked) {
+  return "<label class=\"checkbox\"><input type=\"checkbox\" name=\"" + htmlEscape(name) + "\"" +
+         (checked ? " checked" : "") + "> " + label + "</label>";
+}
+
+String htmlHiddenInput(const String& name, const String& value) {
+  return "<input type=\"hidden\" name=\"" + htmlEscape(name) + "\" value=\"" + htmlEscape(value) + "\">";
+}
+
+String htmlSelect(const String& label, const String& name,
+                  const std::vector<std::pair<String, String>>& options, const String& selected) {
+  String html = "<label>" + label + "<select name=\"" + htmlEscape(name) + "\">";
+  for (auto& o : options) {
+    html += "<option value=\"" + htmlEscape(o.first) + "\"" + (o.first == selected ? " selected" : "") + ">" +
+            o.second + "</option>";
+  }
+  return html + "</select></label>";
+}

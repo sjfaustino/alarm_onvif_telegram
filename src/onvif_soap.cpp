@@ -18,7 +18,7 @@ String makeUUID() {
 // Deliberately gmtime_r, not Arduino's getLocalTime()/localtime_r - this
 // feeds WS-Security's Created timestamp (see makeSecurityHeader below),
 // which ONVIF requires to be true UTC. getLocalTime() would instead return
-// whatever main.cpp's setupTime() set TZ to - a DST-aware local time, if a
+// whatever time_sync.cpp's setupTime() set TZ to - a DST-aware local time, if a
 // POSIX TZ rule is configured there for Telegram caption display (see
 // network_store.h's comment on WifiCredentials::posixTz) - which would
 // silently mislabel a shifted time as "Z" (UTC) and could fail a camera's
