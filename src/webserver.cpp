@@ -31,46 +31,26 @@
 #include <Update.h>
 #include <WiFi.h> // WiFi.localIP() - the startup "listening on" log line
 
-// Routing table, the dashboard shell (sidebar + banner), and OTA
-// upload-in-progress state - the parts that are either genuinely about
-// wiring routes together or too tightly coupled to the PsychicHttpServer
-// instance here to live anywhere else. Each panel's own rendering/form-
-// handling lives in its own webserver_<panel>.h/.cpp - see
-// webserver_network.h's comment for why this used to be one 946-line file.
+// Routing, the dashboard shell and OTA upload state. Each panel's content
+// lives in its own webserver_<panel>.cpp.
 
 static PsychicHttpServer server;
 static std::vector<CameraConfig>* g_liveCameras = nullptr;
 static std::vector<CameraState>*  g_liveStates  = nullptr;
 
-// Global middleware, applied to every request in startWebServer() below -
-// AuthenticationMiddleware::run() only requires a login once both
-// setUsername()/setPassword() are non-empty, so leaving it unconfigured is
-// what makes the board boot with no login required. The Security page's
-// save handler updates it live, taking effect on the very next request.
+// Only enforces a login once username and password are both set, so an
+// unconfigured board is open. Updated live by the Security page.
 static AuthenticationMiddleware g_authMiddleware;
 
 // ============================================================
-// Login rate-limiting - HTTP Basic Auth over plain HTTP has no throttling
-// of its own, so without this a wrong-password guess costs nothing but
-// one more request. Registered BEFORE g_authMiddleware in startWebServer()
-// (PsychicMiddlewareChain runs middleware in registration order, verified
-// against runChain()), so a locked-out IP never reaches the real
-// credential check.
+// Login rate limiting (Basic Auth has none of its own). Registered before
+// g_authMiddleware - middleware runs in registration order - so a locked-out
+// IP never reaches the credential check.
 //
-// Tracks consecutive failed logins per source IP; RATE_LIMIT_MAX_FAILURES
-// in a row locks that IP out for an escalating duration (nextBackoffDelayMs,
-// backoff.h - same helper WiFi reconnect/camera retry use), doubling on
-// reoffense up to RATE_LIMIT_LOCKOUT_MAX_MS. One successful login fully
-// forgives that IP.
-//
-// Applies to every route for that IP during a lockout, not just login -
-// letting known-good credentials bypass it would partially defeat the
-// point, and a legitimate user just waits out a rare, short window.
-//
-// In-RAM only, not persisted - a reboot clears every lockout, same as
-// other per-boot state here. Tracks at most MAX_TRACKED_IPS addresses
-// (a home LAN doesn't need more); the least-recently-seen entry is
-// evicted once full.
+// RATE_LIMIT_MAX_FAILURES consecutive failures lock an IP out for a doubling
+// duration (capped); one success clears it. A lockout blocks every route for
+// that IP, even with good credentials. RAM-only; at most MAX_TRACKED_IPS,
+// least recently seen evicted.
 // ============================================================
 
 static const uint8_t       RATE_LIMIT_MAX_FAILURES     = 5;               // consecutive failures before a lockout
@@ -107,13 +87,8 @@ class RateLimitMiddleware : public PsychicMiddleware {
       return response->send(429, "text/plain", body.c_str());
     }
 
-    // Pre-check credentials directly (isAllowed() is public and side-
-    // effect-free - see AuthenticationMiddleware.cpp) so this middleware
-    // knows whether to count a failure. g_authMiddleware itself still runs
-    // via next() below and issues the real 401 challenge on failure;
-    // duplicating the check here (rather than inspecting its response
-    // afterward) avoids reaching into PsychicResponse internals this
-    // library doesn't expose to a middleware.
+    // Pre-check with isAllowed() (public, side-effect free) to know whether to
+    // count a failure; g_authMiddleware still issues the real 401 via next().
     bool allowed = !auth_ || auth_->isAllowed(request);
 
     xSemaphoreTake(mutex_, portMAX_DELAY);
@@ -140,9 +115,8 @@ class RateLimitMiddleware : public PsychicMiddleware {
   }
 
  private:
-  // Caller must hold mutex_. Exact IP match if tracked; otherwise an
-  // unused slot, or (table full) the least-recently-seen entry, reset and
-  // claimed for this IP.
+  // Caller holds mutex_. Exact match, else a free slot, else the least
+  // recently seen entry (reset).
   RateLimitEntry* findOrCreate(const IPAddress& ip, unsigned long now) {
     for (auto& e : table_) {
       if (e.used && e.ip == ip) { e.lastSeenMs = now; return &e; }
@@ -167,20 +141,13 @@ class RateLimitMiddleware : public PsychicMiddleware {
 static RateLimitMiddleware g_rateLimitMiddleware;
 
 // ============================================================
-// Dashboard shell - sidebar + content panel, plain server-rendered pages
-// with no client-side router/JS framework. Everything's embedded in the
-// firmware binary rather than served from a filesystem, on purpose.
+// Dashboard shell: server-rendered pages, everything embedded in the firmware.
 // ============================================================
 
 enum class Tab { None, Network, Cameras, Users, Activity, Gallery, Firmware, Maintenance, Storage, Security,
                   HardwareInternet, HardwareBridge, HardwarePower, Capabilities };
 
-// Whether the tab currently being rendered has a background job in
-// progress (a camera connection test, a WS-Discovery search, a WiFi scan,
-// an SD storage check/erase, a Telegram test message) - every such job's
-// "in progress" hint used to say "reload this page" with no way to do
-// that automatically. Checked fresh on every render (not cached) so a GET
-// reload picks up a job that just finished, same as the hint text itself.
+// Checked on every render so the page auto-refreshes while a job runs.
 static bool tabHasActiveBackgroundJob(Tab active) {
   switch (active) {
     case Tab::Cameras: return cameraJobsInProgress();
@@ -191,15 +158,9 @@ static bool tabHasActiveBackgroundJob(Tab active) {
   }
 }
 
-// The auto-refresh poll below must land on this tab's own plain GET
-// listing page - NOT location.reload(), which repeats whatever request
-// actually produced the current page. Several of these background jobs
-// are STARTED by a POST (e.g. "/cameras/discover"), and location.reload()
-// on a page that was reached via POST silently resubmits that same POST
-// in most browsers, with no confirmation prompt - which restarted the
-// search from scratch every single poll, forever, for as long as the tab
-// stayed open. Only reachable for the 4 tabs tabHasActiveBackgroundJob
-// above returns true for.
+// Auto-refresh goes to the tab's plain GET page, not location.reload():
+// reloading a page reached by POST silently resubmits it, which restarted a
+// discovery search on every poll.
 static const char* tabListingUrl(Tab active) {
   switch (active) {
     case Tab::Cameras: return "/cameras";
@@ -212,22 +173,14 @@ static const char* tabListingUrl(Tab active) {
 
 static String renderShell(Tab active, const String& banner, const String& contentHtml) {
   String html;
-  // Server-authoritative theme (a persisted config, not the browser's own
-  // OS-level dark-mode preference) - see ui_settings.h. Stamping
-  // data-theme="dark" here is what the [data-theme="dark"] CSS block below
-  // keys off of.
+  // Theme is a saved setting (ui_settings.h), not the OS preference.
   bool darkMode = loadUiSettings().darkMode;
   html += "<!DOCTYPE html><html";
   if (darkMode) html += " data-theme=\"dark\"";
   html += "><head><meta charset=\"utf-8\">";
   html += "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">";
   bool autoRefresh = tabHasActiveBackgroundJob(active);
-  // Inline base64 SVG data URI - a small camera-lens glyph in the same
-  // blue (#2563eb) as the sidebar/buttons, so browser tabs get a real icon
-  // instead of the default blank/globe placeholder. No separate asset file
-  // or route needed - the whole icon lives in this one string, same
-  // "self-contained, no external request" constraint as everything else
-  // on this dashboard.
+  // Inline SVG favicon; no extra route.
   html += "<link rel=\"icon\" type=\"image/svg+xml\" href=\"data:image/svg+xml;base64,"
           "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj48cmVjdCB3aWR0"
           "aD0iMTAwIiBoZWlnaHQ9IjEwMCIgcng9IjIyIiBmaWxsPSIjMjU2M2ViIi8+PGNpcmNsZSBjeD0iNTAiIGN5PSI0NiIgcj0i"
@@ -235,13 +188,8 @@ static String renderShell(Tab active, const String& banner, const String& conten
           "cj0iOSIgZmlsbD0iI2ZmZiIvPjxyZWN0IHg9IjMwIiB5PSIyNCIgd2lkdGg9IjE2IiBoZWlnaHQ9IjkiIHJ4PSIzIiBmaWxs"
           "PSIjZmZmIi8+PC9zdmc+\">";
   html += "<title>Camera Monitor v" + String(FIRMWARE_VERSION) + "</title><style>";
-  // Color as CSS custom properties, not literals, so dark mode (below) is
-  // a second block of the same token names rather than a second copy of
-  // every rule. :root holds today's original light values unchanged (so
-  // light mode looks pixel-identical to before this existed); the sidebar
-  // itself already reads as "dark" by design and is deliberately left the
-  // same in both themes - only the page/content-area tokens actually
-  // change under [data-theme="dark"].
+  // Colours as CSS variables so dark mode just redefines them. The sidebar is
+  // dark in both themes.
   html += ":root{--bg:#fff;--panel:#fff;--text:#222;--border:#ccc;--th-bg:#f0f0f0;--hint:#666;"
           "--sidebar-bg:#1f2937;--sidebar-text:#e5e7eb;--sidebar-link:#cbd5e1;--sidebar-hover:#374151;"
           "--accent:#2563eb;--accent-hover:#1d4ed8;--accent-active:#1e40af;--accent-disabled:#93c5fd;"
@@ -257,11 +205,7 @@ static String renderShell(Tab active, const String& banner, const String& conten
           "--secondary-hover-border:#6b7280;--banner-bg:#3f3512;--banner-border:#a1811f;"
           "--banner-warn-bg:#3f1e1e;--banner-warn-border:#a34343;}";
   html += "*{box-sizing:border-box;}";
-  // System font stack, not the plain "sans-serif" fallback - costs nothing
-  // to serve (no font files, no external request - every name here is
-  // either built into the OS or the browser silently skips to the next),
-  // but reads as considerably less "unstyled default" than the generic
-  // fallback ever does.
+  // System font stack: no font files, less "unstyled" than sans-serif.
   html += "body{font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Roboto,Helvetica,Arial,"
           "sans-serif;margin:0;display:flex;min-height:100vh;background:var(--bg);color:var(--text);}";
   html += ".sidebar{width:200px;flex-shrink:0;background:var(--sidebar-bg);color:var(--sidebar-text);"
@@ -296,23 +240,14 @@ static String renderShell(Tab active, const String& banner, const String& conten
   html += ".flipbook-img{display:none;max-width:160px;max-height:120px;vertical-align:middle;}";
   html += ".sidebar-parent{cursor:pointer;}";
   html += ".sidebar-submenu a{padding-left:36px;font-size:13px;}";
-  // The sidebar is always dark-chrome regardless of page theme (see the
-  // :root/[data-theme] comment above) - its own footer controls (theme
-  // toggle, Logout) get an outlined light-on-dark look that matches, not
-  // the page-content .secondary style (a white/panel-toned button would
-  // look like a stray light box sitting on the dark sidebar).
+  // Sidebar footer controls get an outlined look to suit the dark sidebar.
   html += ".sidebar-footer button,.sidebar-footer a{display:block;width:100%;text-align:left;"
           "font-family:inherit;font-size:13px;padding:8px 12px;border-radius:6px;"
           "background:transparent;color:var(--sidebar-link);border:1px solid var(--sidebar-hover);"
           "cursor:pointer;text-decoration:none;box-sizing:border-box;}";
   html += ".sidebar-footer button:hover,.sidebar-footer a:hover{background:var(--sidebar-hover);color:#fff;}";
-  // Real button styling instead of the browser's own default gray, chunky,
-  // inconsistent-across-browsers rendering. Plain blue "primary" look by
-  // default (most buttons here are ordinary save/run actions); .danger
-  // overrides to red for the specific handful that are actually
-  // destructive or disruptive (delete, erase-all, reboot, firmware flash) -
-  // a visual reinforcement of the confirm() dialogs those already have,
-  // not a replacement for them.
+  // Blue primary buttons; .danger (red) marks destructive actions, alongside
+  // their confirm() dialogs.
   html += "button{font-family:inherit;font-size:14px;padding:7px 14px;border-radius:6px;"
           "border:1px solid var(--accent);background:var(--accent);color:var(--on-accent);cursor:pointer;"
           "transition:background .15s,border-color .15s;}";
@@ -323,47 +258,24 @@ static String renderShell(Tab active, const String& banner, const String& conten
   html += "button.danger{background:var(--danger);border-color:var(--danger);}";
   html += "button.danger:hover{background:var(--danger-hover);border-color:var(--danger-hover);}";
   html += "button.danger:active{background:var(--danger-active);border-color:var(--danger-active);}";
-  // Plain/outlined look for a minor, frequently-clicked toggle (the
-  // Preview flipbook's Play/Stop button) that shouldn't visually compete
-  // with an actual primary action on the same page - replaces that
-  // button's old ad hoc reuse of .hint (which only ever set text color,
-  // fine when buttons were unstyled, not once the base button rule above
-  // gives every button a filled blue background by default).
+  // Outlined style for minor toggles (e.g. flipbook Play).
   html += "button.secondary{background:var(--panel);color:var(--secondary-text);"
           "border-color:var(--secondary-border);}";
   html += "button.secondary:hover{background:var(--secondary-hover);border-color:var(--secondary-hover-border);}";
-  // Same secondary look, carrying its own full chrome instead of relying on
-  // the button{...} element selector above - for the Edit forms' "Cancel"
-  // link (an <a>, not a <button> - it's plain navigation, not a form
-  // submit), which used to be an unstyled plain text link sitting right
-  // next to the now fully-styled "Save changes" button.
+  // Same look for <a> links (Cancel), which don't get the button rule.
   html += "a.secondary{display:inline-block;font-family:inherit;font-size:14px;padding:7px 14px;"
           "border-radius:6px;text-decoration:none;cursor:pointer;background:var(--panel);"
           "color:var(--secondary-text);border:1px solid var(--secondary-border);}";
   html += "a.secondary:hover{background:var(--secondary-hover);border-color:var(--secondary-hover-border);}";
-  // Small colored status pills - .badge-on (healthy/enabled, green),
-  // .badge-warn (needs attention but not a hard failure - e.g. responding
-  // but not subscribed, see telegram_alerts.cpp's checkSubscriptionHealth - amber),
-  // .badge-offline (hard failure, red), .badge-off (a deliberate/intentional
-  // state, not a problem - e.g. muted or disabled - neutral gray). Lets a
-  // multi-camera table be scanned at a glance instead of reading a run-on
-  // status sentence per row. Semantic pill colors, not overridden by
-  // [data-theme="dark"] above - a colored chip with white text stays
-  // readable against either page background, so it's deliberately kept
-  // out of that block rather than given dark-specific values it doesn't need.
+  // Status pills: on (green), warn (amber, e.g. not subscribed), offline
+  // (red), off (grey, deliberate state). Same colours in both themes.
   html += ".badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;"
           "font-weight:600;color:#fff;white-space:nowrap;}";
   html += ".badge-on{background:var(--badge-on);}";
   html += ".badge-warn{background:var(--badge-warn);}";
   html += ".badge-offline{background:var(--badge-offline);}";
   html += ".badge-off{background:var(--badge-off);}";
-  // Compact icon-only variant of the button rules above, for the
-  // Edit/Delete pair every list row (Cameras, Telegram Users) ends with -
-  // a row of "Edit  Delete" text links/buttons repeated down a long table
-  // reads noisier and scans slower than two small glyphs. Works on both
-  // <a> (Edit, a plain navigation link) and <button> (Delete, a form
-  // submit) since it carries its own chrome instead of relying on the
-  // button{...} element selector above.
+  // Compact icon buttons for row Edit/Delete, for both <a> and <button>.
   html += ".icon-btn{display:inline-flex;align-items:center;justify-content:center;"
           "width:30px;height:30px;padding:0;font-size:15px;line-height:1;border-radius:6px;"
           "border:1px solid var(--accent);background:var(--accent);color:var(--on-accent);cursor:pointer;"
@@ -378,18 +290,10 @@ static String renderShell(Tab active, const String& banner, const String& conten
   html += ".row-actions{display:flex;gap:6px;}";
   html += "</style></head><body>";
 
-  // System submenu (Firmware/Maintenance) starts expanded whenever either
-  // of its own pages is the active one, so navigating straight to
-  // /firmware or /maintenance (a bookmark, a link from elsewhere) doesn't
-  // land on a page whose own sidebar entry is hidden inside a collapsed
-  // menu. The onclick toggle below is a plain inline handler, not a
-  // separate <script> block - consistent with this project's "no client-
-  // side framework" stance elsewhere, just enough JS to open/close a menu
-  // on a full-page-reload site.
+  // Submenus start open when one of their pages is active, so the current
+  // page's entry isn't hidden. Inline onclick toggles only.
   bool systemOpen = (active == Tab::Firmware || active == Tab::Maintenance || active == Tab::Storage ||
                       active == Tab::Capabilities);
-  // Same reasoning as systemOpen above, for the three relay/sensor pages
-  // (Internet Watchdog, Camera Bridge Watchdog, 220V Power Monitor).
   bool hardwareOpen = (active == Tab::HardwareInternet || active == Tab::HardwareBridge ||
                         active == Tab::HardwarePower);
 
@@ -451,15 +355,8 @@ static String renderShell(Tab active, const String& banner, const String& conten
   html += "<form method=\"POST\" action=\"/ui/theme/toggle\"><button type=\"submit\">";
   html += darkMode ? "&#9728; Light mode" : "&#127769; Dark mode";
   html += "</button></form>";
-  // Only shown once a password is actually enforced - matches the "no
-  // password set" banner's own condition below (inverted): with no login
-  // required, there's nothing to log out of. HTTP Basic Auth has no
-  // server-side session to invalidate (AuthenticationMiddleware::
-  // isAllowed() is stateless, re-checked per request) - the standard
-  // client-side trick instead: a same-origin fetch carrying deliberately
-  // wrong credentials overwrites what THIS browser has cached for this
-  // origin, so the very next protected request gets a real 401 and the
-  // browser re-prompts.
+  // Only when a login is enforced. Basic Auth has no server session, so logout
+  // sends a fetch with wrong credentials to replace the browser's cached ones.
   if (currentAuth.username.length() > 0 && currentAuth.password.length() > 0) {
     html += "<a href=\"#\" onclick=\""
             "fetch(location.origin,{headers:{Authorization:'Basic eDp4'}})"
@@ -477,16 +374,9 @@ static String renderShell(Tab active, const String& banner, const String& conten
   }
   if (banner.length() > 0) html += "<div class=\"banner\">" + banner + "</div>";
   html += contentHtml;
-  // A background job (started above via tabHasActiveBackgroundJob) is still
-  // running - poll for it to finish instead of leaving the user to manually
-  // reload. A plain <meta http-equiv="refresh"> would fire unconditionally,
-  // wiping out anything being typed into this same page's Add/Edit form
-  // (every tab this applies to - Cameras, Users, Network, Storage - has
-  // one) the instant 2s elapses, even mid-keystroke. This skips the reload
-  // while any input/textarea/select has focus, checking again next tick
-  // instead of losing the poll entirely. Navigates to the tab's own plain
-  // GET listing URL, NOT location.reload() - see tabListingUrl's own
-  // comment for why that silently resubmitted whichever POST got us here.
+  // Poll while a background job runs, but skip the reload while a form field
+  // has focus (a meta refresh would wipe typing). Navigates to the tab's GET
+  // page (see tabListingUrl).
   if (autoRefresh) {
     html += "<script>setInterval(function(){"
             "var t=document.activeElement&&document.activeElement.tagName;"
@@ -498,41 +388,25 @@ static String renderShell(Tab active, const String& banner, const String& conten
   return html;
 }
 
-// esp_restart() inside the still-sending request handler would tear down
-// the connection before the client sees the response - reboot from a
-// short-lived task instead, after send() returns. Shared by the Firmware
-// page's OTA success path and the Maintenance page's manual reboot button
-// below - nothing about the delay-then-restart itself is OTA-specific.
+// Restart from a short task after the response is sent; restarting inside the
+// handler drops the connection first. Used by OTA and Maintenance.
 static void delayedRebootTask(void*) {
   vTaskDelay(pdMS_TO_TICKS(1000));
-  // ESP.restart() doesn't wait for other FreeRTOS tasks to finish
-  // whatever they're doing - if a camera task is mid-write to SD at this
-  // exact moment, an uncoordinated reset could corrupt more than just
-  // that one file (FAT isn't a journaling filesystem). Covers both
-  // callers of this function (OTA and Maintenance) automatically. See
-  // waitForSdIdle's own comment (sd_store.h); no-op if SD isn't active.
+  // Don't restart mid SD write: FAT isn't journaled.
   waitForSdIdle();
   ESP.restart();
 }
 
 // ============================================================
-// Firmware panel routing - upload a .bin over the dashboard instead of a
-// USB reflash. Backed by ESP32's Update library, which writes into the
-// currently-inactive OTA app partition (app0/app1 - see platformio.ini)
-// and only marks it bootable once the checksum verifies, so a failed/
-// aborted upload leaves the running firmware untouched. Kept here (not in
-// webserver_firmware.cpp) since it's routing + upload-in-progress state,
-// not page content.
+// Firmware upload (OTA). Update writes to the inactive app partition and only
+// marks it bootable once verified, so a failed upload changes nothing.
 // ============================================================
 
 static bool   g_otaError = false;
 static String g_otaErrorMsg;
 
-// Picks the right banner for a startXAsync() result - every background-job
-// route below used to hardcode the "started" text unconditionally, even
-// when tryStart() was actually a no-op (already running) or xTaskCreate
-// failed (out of memory) - see BackgroundJobStartOutcome's own comment
-// (background_job.h) for the incident that motivated splitting this out.
+// Banner text matching what actually happened (started, already running, or
+// failed to start).
 static String backgroundJobBanner(BackgroundJobStartOutcome outcome, const String& startedText,
                                    const String& alreadyRunningText, const String& failedText) {
   switch (outcome) {
@@ -552,11 +426,8 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
       .setRealm(("Camera Monitor v" + String(FIRMWARE_VERSION)).c_str())
       .setAuthMethod(BASIC_AUTH);
   g_rateLimitMiddleware.setAuth(&g_authMiddleware);
-  // Rate limiter registered first - PsychicMiddlewareChain runs middleware
-  // in the order added, so a locked-out IP is short-circuited here and
-  // never reaches g_authMiddleware at all. Both apply to every route
-  // registered below, including the Firmware upload - see each
-  // middleware's own declaration comment.
+  // Rate limiter first so locked-out IPs never reach auth. Both cover every
+  // route, including firmware upload.
   server.addMiddleware(&g_rateLimitMiddleware);
   server.addMiddleware(&g_authMiddleware);
 
@@ -566,10 +437,7 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
     return response->send(200, "text/html", renderShell(Tab::None, "", landing).c_str());
   });
 
-  // Flips the persisted dark-mode preference and redirects back to whatever
-  // page the sidebar button was clicked from (the Referer header, when a
-  // browser sends one - "/" otherwise) so toggling the theme doesn't also
-  // navigate away from the page being looked at.
+  // Returns to the referring page ("/" if none).
   server.on("/ui/theme/toggle", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
     UiSettings settings = loadUiSettings();
     settings.darkMode = !settings.darkMode;
@@ -580,10 +448,7 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
   });
 
   server.on("/network", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
-    // prefillSsid arrives from a scanned-network "Add" link
-    // (webserver_network.cpp's renderWifiScanStatus) - PsychicRequest
-    // url-decodes query params automatically, and renderNetworkPanel
-    // htmlEscape()s it before it ever reaches the page.
+    // From a scan result's Add link; escaped when rendered.
     String prefillSsid = request->getParam("prefillSsid", "");
     return response->send(
         200, "text/html", renderShell(Tab::Network, "", renderNetworkPanel(prefillSsid)).c_str());
@@ -605,9 +470,7 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
   });
 
   server.on("/network/scan", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
-    // Kicks off a background task and returns immediately - see
-    // startWifiScanAsync's own comment (webserver_network.h) for why this
-    // must never run synchronously on this request-handling task.
+    // Background task; returns immediately.
     String banner = backgroundJobBanner(
         startWifiScanAsync(), "Scanning for WiFi networks in the background.",
         "A WiFi scan is already running in the background - reload in a moment to see its result.",
@@ -616,25 +479,12 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
   });
 
   server.on("/cameras", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
-    // note carries a one-time status banner across the POST-redirect-GET
-    // from /cameras/save (see that route below) - htmlEscape()d HERE,
-    // the single point it's actually rendered into HTML, not earlier.
-    // This route is reachable directly (a bare GET, not just via the
-    // redirect this project itself issues), so it can never assume `note`
-    // arrived pre-escaped from a trusted caller - a previous version did
-    // assume exactly that, which made a direct request to
-    // /cameras?note=<script>...</script> render completely unescaped
-    // (reflected XSS, since PsychicRequest url-decodes query params
-    // automatically). saveCameraSubmission (webserver_cameras.cpp) now
-    // deliberately builds this value RAW, not pre-escaped, so it isn't
-    // double-escaped here.
+    // One-time banner from /cameras/save. Escaped here, where it's rendered:
+    // this route can be requested directly, and trusting a pre-escaped value
+    // once allowed ?note=<script> (reflected XSS). The save builds it raw.
     String note = htmlEscape(request->getParam("note", ""));
 
-    // prefillName/prefillUrl arrive from a discovered-camera "Add" link
-    // (webserver_cameras.cpp's renderCameraDiscoveryStatus) - PsychicRequest
-    // url-decodes query params automatically, and renderCameraForm below
-    // htmlEscape()s both before they ever reach the page, same as every
-    // other prefill path here (a failed save redisplay, an edit link).
+    // From a discovery result's Add link; escaped when rendered.
     String prefillUrl = request->getParam("prefillUrl", "");
     CameraConfig prefill;
     CameraConfig* prefillPtr = nullptr;
@@ -678,10 +528,8 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
                       renderCamerasPanel(&submitted, originalName.length() > 0, g_liveCameras, g_liveStates))
               .c_str());
     }
-    // Redirect (not render-in-place) even when there's a note to show, to
-    // keep the usual POST-redirect-GET behavior (refreshing /cameras/save
-    // itself would otherwise re-submit the form) - the note rides along
-    // as a query param and the /cameras GET handler above picks it up.
+    // Redirect (POST-redirect-GET) even with a note, so refresh doesn't
+    // resubmit.
     String redirectUrl = "/cameras";
     if (applyNote.length() > 0) redirectUrl += "?note=" + urlEncode(applyNote);
     return response->redirect(redirectUrl.c_str());
@@ -699,12 +547,7 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
         if (existing.name.equalsIgnoreCase(originalName)) { testCfg.pass = existing.pass; break; }
       }
     }
-    // Kicks off a background task and returns immediately - see
-    // startTestConnectionAsync's own comment (webserver_cameras.h) for why
-    // this must never run synchronously on this request-handling task.
-    // testCfg (not submitted - this one has the resolved password) is
-    // heap-copied by startTestConnectionAsync, so it's safe to let it go
-    // out of scope here.
+    // Background task; testCfg (with the resolved password) is copied.
     String banner = backgroundJobBanner(
         startTestConnectionAsync(testCfg),
         "Testing camera connection in the background - reload this page in a moment to see the result.",
@@ -719,9 +562,7 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
   });
 
   server.on("/cameras/discover", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
-    // Kicks off a background task and returns immediately - see
-    // startCameraDiscoveryAsync's own comment (webserver_cameras.h) for why
-    // this must never run synchronously on this request-handling task.
+    // Background task; returns immediately.
     String banner = backgroundJobBanner(
         startCameraDiscoveryAsync(), "Searching the network for cameras in the background.",
         "A network search is already running in the background - reload in a moment to see its result.",
@@ -733,9 +574,7 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
   });
 
   server.on("/cameras/test-all", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
-    // Kicks off a background task and returns immediately - see
-    // startTestAllCamerasAsync's own comment (webserver_cameras.h) for why
-    // this must never run synchronously on this request-handling task.
+    // Background task; returns immediately.
     String banner = backgroundJobBanner(
         startTestAllCamerasAsync(), "Test started in the background.",
         "A test is already running in the background - reload in a moment to see its result.",
@@ -750,11 +589,7 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
     String name = request->getParam("name", "");
     name.trim();
 
-    // Anything unrecognized (including a missing/tampered param) falls
-    // back to Generic - the same "least surprising default" this
-    // project's other free-text-to-enum parses use, not a validation
-    // error. "pet" is a separate isPetEvent flag, not a MotionDetectionKind
-    // value - see sendTestAlert's own comment (telegram.h) for why.
+    // Unknown values fall back to Generic; "pet" sets isPetEvent instead.
     String kindParam = request->getParam("kind", "generic");
     MotionDetectionKind kind = MotionDetectionKind::Generic;
     bool isPetEvent = false;
@@ -777,19 +612,12 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
 
     String banner;
     if (!found || idx < 0 || !g_liveStates || idx >= (int)g_liveStates->size() || !(*g_liveCameras)[idx].enabled) {
-      // Same reasoning findLiveCameraIndex's own comment (webserver_cameras.cpp)
-      // gives for "was added since the last reboot" / "disabled" - there's no
-      // live CameraState to actually send through in either case.
+      // No live CameraState to send through.
       banner = "Camera \"" + htmlEscape(name) + "\" isn't currently running (disabled, or added since "
                "the last reboot) - nothing to test. Not sent.";
     } else {
-      // Kicks off a background task and returns immediately - see
-      // startTestAlertAsync's own comment (webserver_cameras.h) for why this
-      // must never run synchronously on this request-handling task. cfg is
-      // this loop's own local copy (heap-copied again internally by
-      // startTestAlertAsync); (*g_liveStates)[idx] is passed by reference -
-      // it must be the real, live CameraState, not a copy, since
-      // sendTestAlert needs its actually-resolved snapshotUri/credentials.
+      // Background task. Passes the live CameraState (not a copy) for its
+      // resolved snapshot URI and credentials.
       banner = backgroundJobBanner(
           startTestAlertAsync(cfg, (*g_liveStates)[idx], kind, isPetEvent),
           "Sending test alert in the background - reload this page in a moment to see the result.",
@@ -808,15 +636,8 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
     duration.trim();
     String result = setAllCamerasAlertState(g_liveCameras->data(), g_liveStates->data(), g_liveCameras->size(),
                                              false, duration, "the dashboard", TelegramLang::English);
-    // htmlEscape()d here, the one point this ever becomes HTML -
-    // setAllCamerasAlertState's failure message (via resolveAlertTimer,
-    // telegram_commands.cpp) echoes the submitted duration text verbatim, which is
-    // exactly right for its OTHER caller (a plain-text Telegram reply) but
-    // was a raw reflected-XSS hole here: renderShell's banner is inserted
-    // unescaped by design, same as every other banner that's pre-built
-    // safe HTML - this is the one that wasn't. The success-path message
-    // has nothing but fixed text/numbers in it either way, so escaping
-    // unconditionally is a no-op there and doesn't need its own branch.
+    // Escape the result: a failure echoes the submitted duration text, and
+    // banners are inserted unescaped (this was a reflected XSS).
     return response->send(
         200, "text/html",
         renderShell(Tab::Cameras, htmlEscape(result), renderCamerasPanel(nullptr, false, g_liveCameras, g_liveStates))
@@ -824,17 +645,10 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
   });
 
   server.on("/cameras/unmute-all", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
-    // No duration - "Unmute all" is a plain permanent cancel, same as a
-    // bare /on all with no timer. Anyone wanting a timed unmute already has
-    // Mute all's own duration field for the opposite direction, or /on all
-    // <duration> via Telegram.
+    // Unmute all is permanent, like a bare /on all.
     String result = setAllCamerasAlertState(g_liveCameras->data(), g_liveStates->data(), g_liveCameras->size(),
                                              true, "", "the dashboard", TelegramLang::English);
-    // htmlEscape() for consistency with /cameras/mute-all above, even
-    // though this call site always passes a fixed "" duration today (so
-    // there's no actual user text to escape yet) - matching the same
-    // "escape this result unconditionally" rule protects it if that ever
-    // changes, rather than relying on today's call site staying that way.
+    // Escaped for consistency with mute-all, in case a duration is ever added.
     return response->send(
         200, "text/html",
         renderShell(Tab::Cameras, htmlEscape(result), renderCamerasPanel(nullptr, false, g_liveCameras, g_liveStates))
@@ -873,12 +687,9 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
             .c_str());
   });
 
-  // Serves one entry from the camera's snapshot history - SD-backed if
-  // sdActive() (sd_store.h), else the PSRAM ring fallback; see
-  // snapshot_history.h, the single place that decides which. age=0
-  // (default) is the most recent. Goes through the same global middleware
-  // chain as every other route (rate-limit, then auth) - deliberately not
-  // exempted, since it's exposing camera footage.
+  // One history entry (SD or PSRAM ring, per snapshot_history.h); age 0 =
+  // newest. Behind rate limiting and auth like every route - it's camera
+  // footage.
   server.on("/cameras/snapshot", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) -> esp_err_t {
     String name = request->getParam("name", "");
     long age = request->getParam("age", "0").toInt();
@@ -892,9 +703,7 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
       return response->send(404, "text/plain", "No such camera.");
     }
 
-    // readCameraSnapshot copies the bytes out itself (under whichever
-    // lock/mutex its backing store uses) before returning - this route
-    // never holds anything across the blocking network send() below.
+    // The bytes are copied out, so nothing is held during send().
     uint8_t* copy = nullptr;
     size_t len = 0;
     bool ok = readCameraSnapshot((*g_liveCameras)[idx], (*g_liveStates)[idx], (size_t)age, &copy, &len);
@@ -908,20 +717,15 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
 
   server.on("/delete", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
     String name = request->getParam("name", "");
-    // Stop a running task BEFORE removing the NVS record - otherwise the
-    // still-running task's own retry/pull loop would keep monitoring
-    // (and alerting on) a camera the dashboard no longer even lists.
+    // Stop the task before removing the record, or it keeps alerting on a
+    // camera the dashboard no longer lists.
     stopLiveCameraIfRunning(name, g_liveCameras, g_liveStates);
     deleteCamera(name);
     return response->redirect("/cameras");
   });
 
   server.on("/users", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
-    // prefillChatId arrives from an unrecognized-chat-ID "Add" link
-    // (webserver_users.cpp's renderUsersPanel) - PsychicRequest url-decodes
-    // query params automatically, and renderTelegramUserForm's own
-    // htmlEscape() covers it before it ever reaches the page, same as
-    // every other prefill path here.
+    // From an unknown-chat Add link; escaped when rendered.
     String prefillChatId = request->getParam("prefillChatId", "");
     TelegramUser prefill;
     TelegramUser* prefillPtr = nullptr;
@@ -966,9 +770,7 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
   });
 
   server.on("/users/test", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
-    // Kicks off a background task and returns immediately - see
-    // startTestMessageAsync's own comment (webserver_users.h) for why this
-    // must never run synchronously on this request-handling task.
+    // Background task; returns immediately.
     String banner = backgroundJobBanner(
         startTestMessageAsync(), "Sending a test message in the background.",
         "A test message is already being sent in the background - reload in a moment to see its result.",
@@ -983,7 +785,6 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
     return response->send(200, "text/html", renderShell(Tab::Activity, "", renderActivityPanel()).c_str());
   });
 
-  // Same Content-Disposition download pattern as /export below.
   server.on("/activity/download", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) -> esp_err_t {
     String content;
     if (!readActivityLogFile(&content)) {
@@ -1017,15 +818,9 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
       g_otaError = false;
       g_otaErrorMsg = "";
       Serial.printf("[Firmware] Upload started: %s\n", filename.c_str());
-      // A dropped/failed connection mid-upload never delivers last=true
-      // to this callback (the multipart parser never sees a final chunk),
-      // so neither Update.end() nor Update.abort() below would ever run
-      // for that attempt - Update.begin() then refuses every subsequent
-      // attempt (it's still "running" from the abandoned one) with a
-      // generic error, permanently blocking firmware updates until a
-      // physical reboot. index==0 only ever fires once per upload, so
-      // isRunning()==true here can only mean state left over from an
-      // earlier, incomplete attempt - clean it up before starting fresh.
+      // An upload that dropped mid-way never gets its final chunk, leaving
+      // Update "running" and refusing every later attempt until reboot.
+      // index==0 is the start of a new upload, so clear any leftover state.
       if (Update.isRunning()) {
         Serial.println("[Firmware] A previous upload never finished (dropped connection?) - "
                         "aborting it before starting this one.");
@@ -1061,15 +856,9 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
         renderShell(Tab::Firmware, "Firmware accepted - rebooting now, this page will stop responding.",
                     "<p class=\"hint\">Reconnect in about 15 seconds.</p>")
             .c_str());
-    // The response above already promised a reboot is coming, and
-    // Update.end(true) already committed the new image as bootable - if
-    // task creation fails here (out of memory, plausible right after a
-    // multi-hundred-KB firmware upload), nothing else will ever call
-    // ESP.restart() and the new firmware silently never takes effect until
-    // some unrelated later reboot. No user-facing recovery is possible at
-    // this point (the response is already sent) - logging loudly is the
-    // best available: a manual reboot (Maintenance page, once memory frees
-    // up) is what actually applies the update.
+    // The image is committed and the response already promised a reboot; if
+    // the task can't be created, the update won't apply until some later
+    // reboot. All we can do is log it.
     if (xTaskCreate(delayedRebootTask, "otaReboot", 2048, nullptr, 1, nullptr) != pdPASS) {
       Serial.println("[Firmware] ERROR: failed to start the post-update reboot task (out of memory?) - "
                       "the new firmware is flashed but the board will NOT reboot on its own. Reboot "
@@ -1090,9 +879,7 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
         renderShell(Tab::Maintenance, "Rebooting now - reconnect in about 15-20 seconds.",
                     renderMaintenancePanel())
             .c_str());
-    // See the OTA reboot handler's own comment above (/firmware/update) -
-    // same failure mode, no user-facing recovery possible once the
-    // response above is already sent, so just log loudly.
+    // Same as the OTA reboot above: log only.
     if (xTaskCreate(delayedRebootTask, "maintReboot", 2048, nullptr, 1, nullptr) != pdPASS) {
       Serial.println("[Maintenance] ERROR: failed to start the reboot task (out of memory?) - the "
                       "board will NOT reboot. Try again once memory frees up, or power-cycle manually.");
@@ -1110,16 +897,11 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
     settings.enabled = request->hasParam("enabled");
     settings.activeLow = request->hasParam("activeLow");
 
-    // "4" literal (not String(NET_WATCHDOG_PIN_DEFAULT) - getParam's
-    // default overload takes a const char*, not a String) matches
-    // NET_WATCHDOG_PIN_DEFAULT - only reached if the field is missing from
-    // the POST entirely, which the real form never does.
+    // Fallback matches NET_WATCHDOG_PIN_DEFAULT (getParam takes a const
+    // char*).
     settings.pin = request->getParam("pin", "4").toInt();
 
-    // Clamped here at the form boundary; enforceSnapshotRetention-style
-    // point-of-use re-clamp also lives in net_watchdog.cpp itself, since
-    // config Import/a hand-edited NVS blob bypasses this form entirely -
-    // same reasoning as every other clamp in this project.
+    // Clamped here and again at use in net_watchdog.cpp.
     long thresholdMinutes = request->getParam("outageThresholdMinutes", "5").toInt();
     if (thresholdMinutes < 1) thresholdMinutes = 1;
     unsigned long thresholdMs = (unsigned long)thresholdMinutes * 60000UL;
@@ -1174,15 +956,10 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
     settings.cameraA = request->getParam("cameraA", "");
     settings.cameraB = request->getParam("cameraB", "");
 
-    // "5" literal (not String(BRIDGE_WATCHDOG_PIN_DEFAULT) - getParam's
-    // default overload takes a const char*, not a String) matches
-    // BRIDGE_WATCHDOG_PIN_DEFAULT - only reached if the field is missing
-    // from the POST entirely, which the real form never does.
+    // Fallback matches BRIDGE_WATCHDOG_PIN_DEFAULT.
     settings.pin = request->getParam("pin", "5").toInt();
 
-    // Clamped here at the form boundary; enforceSnapshotRetention-style
-    // point-of-use re-clamp also lives in bridge_watchdog.cpp itself -
-    // same reasoning as net_watchdog's own save route.
+    // Clamped here and again at use in bridge_watchdog.cpp.
     long thresholdMinutes = request->getParam("outageThresholdMinutes", "5").toInt();
     if (thresholdMinutes < 1) thresholdMinutes = 1;
     unsigned long thresholdMs = (unsigned long)thresholdMinutes * 60000UL;
@@ -1239,10 +1016,7 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
     settings.enabled = request->hasParam("enabled");
     settings.activeHigh = request->hasParam("activeHigh");
 
-    // "6" literal (not String(POWER_MONITOR_PIN_DEFAULT) - getParam's
-    // default overload takes a const char*, not a String) matches
-    // POWER_MONITOR_PIN_DEFAULT - only reached if the field is missing
-    // from the POST entirely, which the real form never does.
+    // Fallback matches POWER_MONITOR_PIN_DEFAULT.
     settings.pin = request->getParam("pin", "6").toInt();
 
     String banner;
@@ -1284,15 +1058,8 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
     if (intervalHours < 0) intervalHours = 0;
     if (intervalHours > (long)SD_CHECK_INTERVAL_MAX_HOURS) intervalHours = (long)SD_CHECK_INTERVAL_MAX_HOURS;
     settings.checkIntervalHours = (uint32_t)intervalHours;
-    // Clamped here, at the point of use (main.cpp's loop() reads
-    // sdRetentionDays() directly), not just here at the form boundary -
-    // same "hand-edited/imported NVS blob bypasses the form entirely"
-    // reasoning as every other clamp in this project.
-    // "30" literal (not a String(SD_RETENTION_DAYS_DEFAULT) - getParam's
-    // default overload takes a const char*, not a String) matches
-    // SD_RETENTION_DAYS_DEFAULT - only reached if the field is missing from
-    // the POST entirely, which the real form never does (it always renders
-    // a value).
+    // Clamped here and again at use. Fallback matches
+    // SD_RETENTION_DAYS_DEFAULT.
     long retentionDays = request->getParam("retentionDays", "30").toInt();
     if (retentionDays < 0) retentionDays = 0;
     if (retentionDays > (long)SD_RETENTION_MAX_DAYS) retentionDays = (long)SD_RETENTION_MAX_DAYS;
@@ -1305,9 +1072,7 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
   });
 
   server.on("/storage/check", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
-    // Kicks off a background task and returns immediately - see
-    // startStorageCheckAsync's own comment (webserver_storage.h) for why
-    // this must never run synchronously on this request-handling task.
+    // Background task; returns immediately.
     String banner = backgroundJobBanner(
         startStorageCheckAsync(), "Checking storage in the background.",
         "A storage check is already running in the background - reload in a moment to see its result.",
@@ -1317,9 +1082,7 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
 
   server.on("/storage/erase", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
     Serial.println("[Storage] Erase all snapshot history requested via dashboard.");
-    // Kicks off a background task and returns immediately - see
-    // startEraseAllAsync's own comment (webserver_storage.h) for why this
-    // must never run synchronously on this request-handling task.
+    // Background task; returns immediately.
     String banner = backgroundJobBanner(
         startEraseAllAsync(), "Erasing all snapshot history in the background.",
         "An erase is already running in the background - reload in a moment to see its result.",
@@ -1331,26 +1094,16 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
     return response->send(200, "text/html", renderShell(Tab::Security, "", renderSecurityPanel()).c_str());
   });
 
-  // Content-Disposition: attachment makes the browser download this as a
-  // file instead of displaying it inline - buildConfigExport() (see its
-  // own comment) never includes a password, so there's nothing here more
-  // sensitive than what the Cameras/Users pages already show.
+  // Downloads as a file. Note: the machine-readable CAMERAS block includes
+  // camera passwords (WiFi passwords are never exported).
   server.on("/export", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) -> esp_err_t {
     response->addHeader("Content-Disposition", "attachment; filename=\"camera-monitor-config.txt\"");
     return response->send(200, "text/plain", buildConfigExport().c_str());
   });
 
-  // A real multipart file upload, not a form field - see renderSecurityPanel's
-  // own comment (webserver_security.cpp) on the Import fieldset for why: a
-  // plain form field is bounded by PsychicHttp's default 16K
-  // maxRequestBodySize (checked before this project's own route handlers ever
-  // run), and a multi-camera export's newline/\x1F-heavy text can blow past
-  // that once the browser percent-encodes it. importHandler streams in
-  // FILE_CHUNK_SIZE pieces instead, bounded by the much larger maxUploadSize -
-  // same mechanism startWebServer's otaHandler above already uses for the
-  // firmware .bin, just accumulated into a String here (a config export is
-  // KB-sized, not MB, so buffering the whole thing is fine) instead of
-  // streamed straight to flash.
+  // A multipart upload, not a form field: an export can exceed PsychicHttp's
+  // 16K body limit once percent-encoded. Chunks are accumulated into a String
+  // (exports are KB-sized).
   static String g_importText;
   static String g_importBanner;
 
@@ -1371,11 +1124,7 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
   });
   server.on("/import", HTTP_POST, importHandler);
 
-  // Downloads the snapshot applyConfigImport() (config_backup.cpp)
-  // automatically saves of whatever was stored just before the most recent
-  // import - in the exact same format buildConfigExport() produces, so
-  // undoing a bad import is just importing this file back. Same
-  // Content-Disposition pattern as /export.
+  // The automatic pre-import backup, in export format - re-import it to undo.
   server.on("/import/backup", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) -> esp_err_t {
     String backup = loadConfigBackup();
     if (backup.length() == 0) {
@@ -1403,10 +1152,8 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
       newAuth.username = username;
       newAuth.password = password;
       if (!saveDashboardAuth(newAuth)) {
-        // Don't touch the live middleware if the write didn't actually
-        // land - doing so would protect the dashboard for this boot only,
-        // silently reverting to the old (or no) login on the next reboot
-        // with nothing telling the user it happened. See auth_store.cpp.
+        // Leave the live login alone if the save failed; otherwise it would
+        // silently revert on the next reboot.
         banner = "Failed to save - NVS write error (see Serial log). Login was NOT changed.";
       } else {
         g_authMiddleware.setUsername(newAuth.username.c_str()).setPassword(newAuth.password.c_str());

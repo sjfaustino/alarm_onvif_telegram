@@ -18,51 +18,25 @@
 #include <vector>
 
 bool telegramCAConfigured() {
-  // Sanity check that this actually looks like a PEM certificate, not a
-  // placeholder/filename/empty string left behind by mistake.
+  // Catches a placeholder or filename left in place of a PEM certificate.
   return strstr(TELEGRAM_ROOT_CA, "-----BEGIN CERTIFICATE-----") != nullptr &&
          strstr(TELEGRAM_ROOT_CA, "-----END CERTIFICATE-----") != nullptr;
 }
 
-// Serializes every outbound TLS session this file opens to api.telegram.org
-// (photo sends, JSON API calls, getUpdates polling) across every task that
-// calls into this file. Each camera runs its own independent FreeRTOS task
-// (camera_tasks.h's cameraTaskFn) with nothing otherwise stopping two or
-// more from being mid-send at once; WiFiClientSecure's mbedTLS session
-// state is allocated from internal RAM, not PSRAM, and platformio.ini does
-// no MBEDTLS buffer tuning. A real multi-camera motion burst has been
-// observed in the field driving free heap down to ~70KB and failing
-// outright with "writeAllBytes: stalled, no progress for 5s" followed by
-// "SSL - Memory allocation failed" - this bounds concurrent TLS sessions to
-// Telegram to exactly one at a time, project-wide. Deliberately does NOT
-// cover fetchOneSnapshot's HTTP GET to the camera itself below - that's a
-// different, uncontended network resource (plain HTTP to a LAN device),
-// not part of this budget.
+// Allows one TLS session to api.telegram.org at a time, across all tasks.
+// mbedTLS state lives in internal RAM; a multi-camera motion burst once pushed
+// free heap to ~70KB and failed with "SSL - Memory allocation failed". Camera
+// snapshot GETs (plain LAN HTTP) aren't covered.
 static SemaphoreHandle_t g_telegramNetMutex = xSemaphoreCreateMutex();
 
-// RAII wrapper for g_telegramNetMutex - bounded xSemaphoreTake
-// (TELEGRAM_NET_MUTEX_TIMEOUT_MS, config.h) with guaranteed release on
-// every return path. Unlike CameraStateLock (camera.h), the wait here is
-// intentionally bounded, not portMAX_DELAY: a camera task stuck waiting
-// forever for Telegram send capacity would also stop servicing its own
-// ONVIF PullMessages/subscription-renewal loop. A held()==false timeout is
-// treated exactly like any other failed send by every caller below -
-// logged, non-fatal, never an indefinite block.
+// Bounded wait, unlike CameraStateLock: a camera task stuck here would stop
+// renewing its subscription. A timeout counts as a failed send.
 TelegramNetLock::TelegramNetLock()
     : held_(xSemaphoreTake(g_telegramNetMutex, pdMS_TO_TICKS(TELEGRAM_NET_MUTEX_TIMEOUT_MS)) == pdTRUE) {}
 TelegramNetLock::~TelegramNetLock() { if (held_) xSemaphoreGive(g_telegramNetMutex); }
 
-// Non-blocking peek at g_telegramNetMutex - true if some task is currently
-// mid-send (or waiting for its own turn), without waiting or taking a turn
-// itself. For a heavy, memory-hungry, user-triggered, delay-tolerable
-// background job that doesn't itself send anything through Telegram (WS-
-// Discovery's multi-second UDP listen, Test All's per-camera SOAP burst -
-// see webserver_cameras.cpp's startCameraDiscoveryAsync/
-// startTestAllCamerasAsync) to defer starting rather than risk its own
-// buffers/sockets overlapping an in-flight photo send's JPEG+TLS buffers -
-// exactly the class of coincidence g_telegramNetMutex's own comment
-// describes a real field incident from, just between Telegram sends and a
-// DIFFERENT subsystem instead of two Telegram sends against each other.
+// Non-blocking check for jobs that should wait for a send to finish rather
+// than overlap its memory use (discovery, Test all).
 bool telegramSendInProgress() {
   if (xSemaphoreTake(g_telegramNetMutex, 0) == pdTRUE) {
     xSemaphoreGive(g_telegramNetMutex);
@@ -71,9 +45,7 @@ bool telegramSendInProgress() {
   return true;
 }
 
-// WiFiClientSecure::write() can do a partial write under TLS, especially on
-// memory-constrained boards. This loops until every byte is confirmed
-// written, the connection drops, or it stalls for 5s with no progress.
+// TLS writes can be partial; loop until done, disconnected, or stalled for 5s.
 static size_t writeAllBytes(WiFiClientSecure& client, const uint8_t* data, size_t len) {
   size_t written = 0;
   uint32_t stallStart = millis();
@@ -115,12 +87,8 @@ static bool readTelegramResponse(WiFiClientSecure& client) {
 
   int lineEnd = fullResponse.indexOf('\n');
   if (lineEnd < 0) {
-    // No newline at all - a malformed/truncated response, not a real HTTP
-    // status line. String::substring(0, -1) would otherwise clamp to the
-    // WHOLE response and scan the entire body for "200", which could match
-    // incidentally inside body text (e.g. a chat ID or byte count) and
-    // misreport a failed send as successful. Treated as a failure, same as
-    // the "no response within timeout" case above.
+    // No status line: substring(0, -1) would scan the whole body for "200" and
+    // could report success falsely.
     Serial.println("Telegram sendPhoto FAILED: no status line in response.");
     return false;
   }
@@ -130,17 +98,11 @@ static bool readTelegramResponse(WiFiClientSecure& client) {
   return ok;
 }
 
-// Sends a buffer that's already fully in RAM to one chat - called once per
-// subscribed Telegram user, reusing the same PSRAM buffer (see
-// triggerMotionAlert).
+// One chat; called per recipient with the same PSRAM buffer.
 static bool sendTelegramPhotoBuffered(const uint8_t* jpg, size_t jpgLen, const String& caption,
                                        const String& chatId) {
   if (!jpg || jpgLen == 0) return false;
 
-  // See g_telegramNetMutex's own comment - a real incident, not
-  // theoretical: a multi-camera motion burst has driven free heap to
-  // ~70KB and failed outright with SSL alloc errors when more than one
-  // camera's TLS session to Telegram was open at once.
   TelegramNetLock netLock;
   if (!netLock.held()) {
     Serial.println("Telegram sendPhoto: timed out waiting for Telegram send capacity - skipping.");
@@ -182,19 +144,11 @@ static bool sendTelegramPhotoBuffered(const uint8_t* jpg, size_t jpgLen, const S
   return readTelegramResponse(client);
 }
 
-// Same shape as sendTelegramPhotoBuffered above, but for Telegram's
-// sendDocument endpoint (buildDocumentMultipart) - an arbitrary text file
-// already fully in RAM, for the /backup command's config-export
-// attachment. Single attempt, no retry-on-failure counterpart the way
-// photos have (sendTelegramPhotoWithRetry below) - /backup is an
-// explicit, low-frequency admin action the sender can just re-issue by
-// hand if it fails, unlike a motion alert that might never get another
-// chance.
+// sendDocument for /backup. Single attempt - the admin can just resend.
 bool sendTelegramDocumentBuffered(const String& content, const String& filename, const String& caption,
                                           const String& chatId) {
   if (content.length() == 0) return false;
 
-  // See g_telegramNetMutex's own comment.
   TelegramNetLock netLock;
   if (!netLock.held()) {
     Serial.println("Telegram sendDocument: timed out waiting for Telegram send capacity - skipping.");
@@ -232,12 +186,8 @@ bool sendTelegramDocumentBuffered(const String& content, const String& filename,
   return readTelegramResponse(client);
 }
 
-// Retries once (fresh TLS connection) on failure. A failed/stalled write
-// (see writeAllBytes' comment) doesn't necessarily mean the network is
-// unusable - concurrent camera polling contending for the one WiFi radio
-// has been observed to stall a large photo upload until mbedTLS gives up
-// and closes the connection; a second attempt often lands in a quieter
-// moment.
+// Retries once on a fresh connection: camera polling sharing the radio has
+// stalled large uploads, and a second try often lands in a quieter moment.
 bool sendTelegramPhotoWithRetry(const uint8_t* jpg, size_t jpgLen, const String& caption,
                                         const String& chatId) {
   static const int MAX_ATTEMPTS = 2;
@@ -251,11 +201,7 @@ bool sendTelegramPhotoWithRetry(const uint8_t* jpg, size_t jpgLen, const String&
   return false;
 }
 
-// localtime_r, not gmtime_r - honors whatever POSIX TZ rule time_sync.cpp's
-// setupTime() applied at boot (WifiCredentials::posixTz), or plain UTC if
-// none configured. The system clock itself always stays true UTC either
-// way - only this *display* value is affected; WS-Security's timestamp
-// reads UTC directly via gmtime_r() and is unaffected by TZ.
+// Local time per the configured TZ (UTC if none), for display only.
 String nowTimestampString() {
   time_t now; time(&now);
   struct tm tmStruct; localtime_r(&now, &tmStruct);
@@ -264,11 +210,7 @@ String nowTimestampString() {
   return String(buf);
 }
 
-// Same "has NTP actually set the clock at least once" check
-// parseDurationToken (telegram_parse.h) already uses for its own HH:MM
-// resolution - quiet hours must fail OPEN (alerts still send normally)
-// against an unsynced, near-epoch clock, not silently misjudge the
-// window on a security-relevant feature.
+// Quiet hours fail open (alerts still send) when the clock was never synced.
 bool localClockSynced() {
   time_t now; time(&now);
   struct tm tmStruct; localtime_r(&now, &tmStruct);
@@ -283,10 +225,7 @@ int currentLocalMinuteOfDay() {
 
 String formatLocalClockTime(unsigned long dueMs) {
   if (!localClockSynced()) return "";
-  // dueMs and millis() share the same monotonic clock, so their
-  // difference is a real elapsed duration regardless of what wall-clock
-  // time happens to be right now - added onto the current epoch time to
-  // get the epoch dueMs actually corresponds to.
+  // millis() difference is real elapsed time; add it to the current epoch.
   long offsetSec = (long)(dueMs - millis()) / 1000;
   time_t now; time(&now);
   time_t due = now + offsetSec;
@@ -296,18 +235,9 @@ String formatLocalClockTime(unsigned long dueMs) {
   return hh + ":" + mm;
 }
 
-// Shared outbound JSON-POST mechanics for every Telegram Bot API method
-// this project calls with a JSON body - sendMessage (plain or with an
-// inline keyboard) and answerCallbackQuery. `method` is the API method
-// name; `doc` is the caller's already-built request body.
-//
-// Uses HTTPClient, not a raw WiFiClientSecure + hand-built request line
-// (unlike sendTelegramPhotoBuffered, which streams a multipart body
-// HTTPClient can't) - HTTPClient correctly handles chunked
-// transfer-encoding on the response, which api.telegram.org has been
-// observed to send and a manual parser wouldn't.
+// JSON-body Bot API calls (sendMessage, answerCallbackQuery). HTTPClient
+// handles chunked responses, which Telegram sends.
 static bool sendTelegramApiCall(const String& method, JsonDocument& doc) {
-  // See g_telegramNetMutex's own comment.
   TelegramNetLock netLock;
   if (!netLock.held()) {
     Serial.printf("sendTelegramApiCall(%s): timed out waiting for Telegram send capacity - skipping.\n",
@@ -359,14 +289,8 @@ bool sendTelegramMessageToChatId(const String& chatId, const String& text) {
   return sendTelegramMessageTo(chatId, text);
 }
 
-// Sends text with an inline keyboard, one button per row - `buttons` is
-// (label, callback_data) pairs. handleTelegramCallbackQuery (below)
-// receives a tapped button's callback_data back on the next poll. Skips
-// (and logs) any button whose callback_data would exceed Telegram's
-// 64-byte limit rather than sending a broken button - not expected to
-// trigger with this project's camera names, but if `outSkipped` is
-// non-null it's set to how many were dropped, so the caller can still
-// tell the user instead of the gap being silent past the Serial log.
+// One button per row; `buttons` are (label, callback_data). Buttons whose data
+// exceeds Telegram's 64-byte limit are skipped and counted in *outSkipped.
 bool sendTelegramKeyboardTo(const String& chatId, const String& text,
                                     const std::vector<std::pair<String, String>>& buttons,
                                     size_t* outSkipped) {
@@ -391,10 +315,7 @@ bool sendTelegramKeyboardTo(const String& chatId, const String& text,
   return sendTelegramApiCall("sendMessage", doc);
 }
 
-// Acknowledges a button tap - clears its client-side loading spinner.
-// `text` (optional, "" for none) shows as a brief toast, not a chat
-// message - handleTelegramCallbackQuery still sends a real confirmation
-// message separately for anything worth keeping in the chat history.
+// Clears the tapped button's spinner; `text` shows as a toast.
 bool answerTelegramCallback(const String& callbackQueryId, const String& text) {
   JsonDocument doc;
   doc["callback_query_id"] = callbackQueryId;
@@ -402,9 +323,7 @@ bool answerTelegramCallback(const String& callbackQueryId, const String& text) {
   return sendTelegramApiCall("answerCallbackQuery", doc);
 }
 
-// Broadcasts to every Telegram user with systemMessages enabled - used for
-// the heartbeat, the boot-online notice, and the "no credentials" fatal
-// alert. Returns true if it reached at least one recipient.
+// True if at least one recipient got it.
 bool sendTelegramMessage(std::function<String(TelegramLang)> compose) {
   std::vector<TelegramUser> users = loadTelegramUsers();
   bool anyRecipient = false;
@@ -416,24 +335,11 @@ bool sendTelegramMessage(std::function<String(TelegramLang)> compose) {
     if (sendTelegramMessageTo(u.chatId, text)) {
       anyOk = true;
     } else {
-      // Most likely WAN was down at the exact moment this broadcast went
-      // out (e.g. a watchdog's own OutageDetected alert - the worst
-      // possible moment to try sending) - queue it for a retry once
-      // connectivity is back instead of losing it silently. See
-      // telegram_retry_queue.h's own comment for what this deliberately
-      // does NOT cover (command replies, photos).
+      // Probably a WAN outage; queue for retry instead of losing it.
       enqueueFailedTelegramMessage(u.chatId, text);
     }
-    // Each recipient can independently block on g_telegramNetMutex for up
-    // to TELEGRAM_NET_MUTEX_TIMEOUT_MS (45s) before a send is even
-    // attempted - with several systemMessages recipients configured, this
-    // loop alone can exceed the 90s task watchdog timeout on loop()'s task
-    // (main.cpp), before the caller (sendHeartbeat, checkScheduledAlertReverts,
-    // checkCameraOnlineStatus, ...) ever gets a chance to return and feed
-    // it itself. A no-op (harmless ESP_ERR_NOT_FOUND, ignored like every
-    // other reset call in this project) when called from a camera task,
-    // which was never subscribed to this watchdog in the first place - see
-    // initWatchdog()'s own comment (boot_checks.cpp).
+    // Each recipient can wait 45s for the mutex, so several could exceed the
+    // 90s loop() watchdog. Harmless on camera tasks, which aren't subscribed.
     esp_task_wdt_reset();
   }
   if (!anyRecipient) {

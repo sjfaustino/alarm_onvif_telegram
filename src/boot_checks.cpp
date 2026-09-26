@@ -7,27 +7,21 @@
 #include "ota_history.h"
 #include "telegram.h"
 
-// TWDT timeout for the Arduino loop() task - see initWatchdog(). Comfortably
-// outlasts the longest stretch loop() can go without returning to its top
-// (connectWiFi() trying primary then backup, 30s each); tryConnectWiFi also
-// feeds the watchdog every 500ms while polling, so this is belt-and-suspenders.
+// Outlasts loop()'s longest blocking stretch (connectWiFi: 30s per network,
+// which also feeds the watchdog).
 static const uint32_t WATCHDOG_TIMEOUT_MS = 90000UL;
 
-// Arms the TWDT against loop() so a genuinely frozen main loop reboots the
-// board instead of hanging forever - the gap the Telegram heartbeat can't
-// cover on its own. Deliberately not armed against the per-camera tasks:
-// every SOAP call already has its own HTTP_TIMEOUT_MS bound, and
-// cameraSetupSequence chains several back-to-back with no safe point to
-// feed a per-task watchdog without risking a false positive on a slow camera.
+// Catches a frozen loop(), which the heartbeat can't. Camera tasks aren't
+// watched: their SOAP calls are timeout-bounded, and back-to-back setup calls
+// would give slow cameras false positives.
 void initWatchdog() {
   esp_task_wdt_config_t wdtConfig = {
     .timeout_ms = WATCHDOG_TIMEOUT_MS,
     .idle_core_mask = (1 << portNUM_PROCESSORS) - 1, // keep watching both cores' idle tasks too
     .trigger_panic = true,
   };
-  // Recent cores already init the TWDT by default (idle tasks only), which
-  // makes esp_task_wdt_init() fail with ESP_ERR_INVALID_STATE - reconfigure
-  // the running one instead of treating that as an error.
+  // Newer cores pre-initialise the TWDT, so init fails with INVALID_STATE;
+  // reconfigure instead.
   esp_err_t err = esp_task_wdt_init(&wdtConfig);
   if (err == ESP_ERR_INVALID_STATE) {
     err = esp_task_wdt_reconfigure(&wdtConfig);
@@ -43,15 +37,9 @@ void initWatchdog() {
                 (unsigned long)(WATCHDOG_TIMEOUT_MS / 1000UL));
 }
 
-// Human text for esp_reset_reason() - folded into the boot Telegram message
-// and an early Serial line, so "why did it reboot" doesn't need Serial
-// watched at the exact moment. Not a lib/ pure function like this
-// project's other testable logic: esp_reset_reason_t is an ESP-IDF type
-// unavailable under the native test environment, and this is a plain
-// enum->string table. Deliberately has a `default:` (unlike this
-// project's own TelegramCommand switches) - esp_reset_reason_t belongs to
-// the framework, so a future IDF enumerator should fall through to
-// "unknown", not force a rebuild-breaking change here.
+// Reboot reason in English, for Serial, the Activity log and the boot notice.
+// Kept out of lib/ because esp_reset_reason_t isn't available natively. Has a
+// default so new IDF values read "unknown".
 String describeResetReason() {
   switch (esp_reset_reason()) {
     case ESP_RST_POWERON:   return "power-on";
@@ -69,10 +57,7 @@ String describeResetReason() {
   }
 }
 
-// European Portuguese (pt-PT) counterpart of describeResetReason() above,
-// used only for the boot Telegram message (Serial always stays English -
-// see that function's own comment on why this table isn't in
-// lib/telegram_i18n).
+// Portuguese version for the boot notice.
 static String describeResetReasonPt() {
   switch (esp_reset_reason()) {
     case ESP_RST_POWERON:   return "liga\xC3\xA7\xC3\xA3o";
@@ -94,12 +79,8 @@ static String describeResetReasonLocalized(TelegramLang lang) {
   return lang == TelegramLang::Portuguese ? describeResetReasonPt() : describeResetReason();
 }
 
-// Simplified two-way split of describeResetReason() above, for the
-// Telegram boot notice specifically (trRebootReasonLine) - the full
-// detail (which watchdog, brownout, etc.) stays in the Activity log via
-// logEvent("Booted: " + describeResetReason()) below; someone reading a
-// phone notification just needs "expected" vs "something crashed," not
-// the full esp_reset_reason_t taxonomy.
+// The boot notice just says expected vs. crash; the full reason goes to the
+// Activity log.
 static bool isCrashResetReason() {
   switch (esp_reset_reason()) {
     case ESP_RST_POWERON:
@@ -120,25 +101,13 @@ String describeResetReasonShort(TelegramLang lang) {
 }
 
 void confirmFirmwareAndReportRollback() {
-  // Confirms this firmware image is healthy, canceling ESP-IDF's OTA
-  // rollback safety net (CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE is set).
-  // Without this, firmware flashed via /firmware/update that boot-loops
-  // gets auto-reverted to the previous working partition on the next
-  // reset - otherwise a bad OTA upload would permanently strand the board
-  // until someone gets a USB cable to it.
+  // Marks this image valid, cancelling OTA rollback; otherwise a working
+  // update would still revert on the next reset. Runs at the end of setup(),
+  // regardless of WiFi - getting here means init survived.
   //
-  // Placed at the end of setup(), not gated on WiFi connecting above - a
-  // network outage during an update shouldn't roll back otherwise-good
-  // firmware, and reaching this line already means every crash-prone init
-  // step survived without a panic or watchdog reset.
-  //
-  // wasPendingVerify is captured BEFORE the mark-valid call below, which
-  // is exactly what changes it - PENDING_VERIFY is the state ONLY the
-  // very first boot after a fresh OTA flash starts in; every ordinary
-  // boot after that already reads VALID. esp_ota_mark_app_valid_cancel_rollback()
-  // returning ESP_OK on its own can't tell those apart - it succeeds on
-  // literally every boot, not just a just-flashed one - so logging/
-  // alerting on ESP_OK alone would fire forever, not just once per update.
+  // wasPendingVerify is read before marking valid: only the first boot after
+  // an update is PENDING_VERIFY, whereas the mark-valid call succeeds on every
+  // boot.
   const esp_partition_t* runningPartition = esp_ota_get_running_partition();
   esp_ota_img_states_t otaState = ESP_OTA_IMG_UNDEFINED;
   bool wasPendingVerify = runningPartition &&
@@ -149,41 +118,19 @@ void confirmFirmwareAndReportRollback() {
   if (rollbackErr == ESP_OK) {
     Serial.println("OTA rollback: this firmware confirmed healthy - won't auto-revert on the next reboot.");
   }
-  // Any other result (e.g. no rollback pending - the normal case except
-  // right after a firmware update) is expected, not logged as an error.
+  // Any other result is the normal no-rollback-pending case.
 
-  // Only on the one boot that actually just cleared a pending OTA
-  // validation (see wasPendingVerify above) - a durable Activity-log line
-  // plus a Telegram push, since previously the only confirmation this
-  // ever happened was the Serial.println above, invisible unless someone
-  // had a cable plugged in at that exact reboot. Sent as its own message,
-  // not folded into startMonitoring()'s earlier boot notice - this call
-  // is deliberately AFTER that one runs (see this whole block's own
-  // comment on why), so that message has already gone out by the time
-  // this is known.
+  // First boot after an update: log, alert and persist it. A separate message,
+  // since the boot notice has already gone out.
   if (rollbackErr == ESP_OK && wasPendingVerify) {
     logEvent("OTA update confirmed healthy - rollback canceled");
     sendTelegramMessage([](TelegramLang lang) { return trOtaConfirmedHealthy(lang); });
-    // Persisted (ota_history.h) so the Firmware page can show this
-    // outcome from then on, not just the one-time push above - otherwise
-    // the only record of it ever having happened is whatever's left in
-    // the Activity log's own bounded/rotating history.
     recordOtaOutcome(OtaOutcome::Healthy, runningPartition ? String(runningPartition->label) : "");
   }
 
-  // The counterpart the block above never had: a firmware update that
-  // boot-looped and got auto-reverted by the bootloader's own rollback
-  // safety net was previously invisible - the board would just quietly
-  // come back up on the old, previously-good partition with no record
-  // anything had gone wrong. esp_ota_get_last_invalid_partition() is
-  // ESP-IDF's own record of which partition (if any) most recently failed
-  // validation - unlike wasPendingVerify above, this stays set across
-  // every later boot until that same slot gets overwritten by another OTA
-  // attempt, so alerting on it unconditionally would repeat forever;
-  // ota_history.h's dedup marker remembers which failure this board
-  // already reported, and is cleared again once the slot stops being
-  // invalid (a fresh, successful OTA overwrote it), so a FUTURE rollback
-  // onto that same slot is still caught fresh.
+  // An update the bootloader rolled back. The invalid partition stays reported
+  // until another OTA overwrites that slot, so ota_history dedups it (and
+  // forgets once the slot is valid again).
   const esp_partition_t* invalidPartition = esp_ota_get_last_invalid_partition();
   String invalidLabel = invalidPartition ? String(invalidPartition->label) : "";
   if (invalidLabel.length() > 0 && !alreadyReportedInvalidPartition(invalidLabel)) {

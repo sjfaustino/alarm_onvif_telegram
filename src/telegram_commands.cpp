@@ -26,27 +26,12 @@
 #include <algorithm>
 
 // ============================================================
-// Remote on/off control (Telegram commands)
+// Telegram commands (short getUpdates polls from loop())
 //
-// pollTelegramCommands() runs periodically from loop() (short getUpdates,
-// not long-poll). lastUpdateId is persisted in NVS - it used not to be, on
-// the theory that redelivering a couple of already-applied idempotent
-// commands after a reboot is harmless. /reset broke that: redelivering it
-// after the reboot it caused re-executes /reset again, forever - a real
-// infinite reboot loop hit the first time /reset was used.
-//
-// Persisting on every update closed that loop but opened a smaller one:
-// Telegram delivers every inbound message regardless of sender, so an
-// unauthenticated flood would force an NVS write per message. Persisting
-// once per poll instead (below) bounds that while keeping the original
-// redelivery assumption for everything except /reset.
-//
-// /reset can't wait for that end-of-poll persist - ESP.restart() never
-// returns - so it's persisted inside handleTelegramCommand's own /reset
-// branch, immediately before the restart, rather than pollTelegramCommands
-// pre-guessing which commands are "dangerous" (an earlier version did
-// exactly that, checking canReset/the command text in two places that
-// drifted out of sync with each other).
+// lastUpdateId is persisted so a reboot doesn't redeliver commands: a
+// redelivered /reset once caused an endless reboot loop. It's saved once per
+// poll (not per update, which would let any stranger force NVS writes), and
+// /reset saves it itself just before restarting.
 // ============================================================
 
 static const char* TELEGRAM_STATE_NAMESPACE = "tgstate";
@@ -54,7 +39,7 @@ static const char* TELEGRAM_STATE_KEY_LAST_UPDATE_ID = "lastUpdateId";
 
 static long loadLastUpdateId() {
   Preferences prefs;
-  // Read-write, not read-only - see auth_store.cpp's loadDashboardAuth for why.
+  // Read-write (see loadDashboardAuth).
   prefs.begin(TELEGRAM_STATE_NAMESPACE, false);
   long id = prefs.getLong(TELEGRAM_STATE_KEY_LAST_UPDATE_ID, 0);
   prefs.end();
@@ -70,18 +55,11 @@ static void saveLastUpdateId(long id) {
 }
 
 // ============================================================
-// Recent unrecognized chat IDs - RAM-only, small fixed table (not NVS/a
-// growable log): purely a convenience so adding a new Telegram user can be
-// copy-paste from the Users page instead of a side trip to @userinfobot or
-// the raw getUpdates URL, for whoever most recently actually messaged this
-// bot. Not a security log - deliberately doesn't grow, persist, or record
-// anything about WHO/WHAT was sent, just "this chat ID messaged the bot
-// recently" for the one specific case (!sender in pollTelegramCommands)
-// where the sender isn't a configured user at all.
+// Recent unknown chat IDs, so the Users page can offer them for copy-paste.
+// RAM-only fixed table; not a security log.
 // ============================================================
 
-// Internal-only add-on to the header's own UnknownChatSighting - `used`
-// marks a still-empty slot, never exposed outside this file.
+// `used` marks an occupied slot.
 struct UnknownChatSlot {
   int64_t chatId = 0;
   unsigned long lastSeenMs = 0;
@@ -90,9 +68,7 @@ struct UnknownChatSlot {
 static UnknownChatSlot g_unknownChats[UNKNOWN_CHAT_TRACK_MAX];
 static SemaphoreHandle_t g_unknownChatsMutex = xSemaphoreCreateMutex();
 
-// Same exact-match-or-least-recently-seen-eviction shape as webserver.cpp's
-// RateLimitMiddleware::findOrCreate - unrelated tables, same small-fixed-
-// size-tracking problem.
+// Exact match, else evict the least recently seen.
 static void recordUnknownChat(int64_t chatId) {
   xSemaphoreTake(g_unknownChatsMutex, portMAX_DELAY);
   UnknownChatSlot* slot = nullptr;
@@ -125,14 +101,8 @@ std::vector<UnknownChatSighting> recentUnknownChats() {
 }
 
 // ============================================================
-// Per-user Telegram command rate limiting - see TelegramUser::
-// maxCommandsPerMinute's own comment (telegram_users.h) for why this is
-// enforced as a minimum gap between commands rather than a true rolling-
-// window count: O(1) state per user (just a last-command timestamp), no
-// ring buffer. RAM-only, small fixed table, same exact-match-or-least-
-// recently-seen-eviction shape as g_unknownChats above and webserver.cpp's
-// RateLimitMiddleware::findOrCreate (unrelated tables, same small-fixed-
-// size-tracking problem).
+// Per-user command rate limit: a minimum gap between commands (one timestamp
+// per chat). Same fixed-table eviction as above.
 // ============================================================
 
 static const size_t COMMAND_RATE_TRACK_MAX = 16; // generous for any realistic configured-user count
@@ -145,11 +115,8 @@ struct CommandRateSlot {
 static CommandRateSlot g_commandRateTable[COMMAND_RATE_TRACK_MAX];
 static SemaphoreHandle_t g_commandRateMutex = xSemaphoreCreateMutex();
 
-// Only meaningful when maxCommandsPerMinute > 0 - callers gate on that
-// themselves rather than this function treating 0 as "unlimited", so it
-// stays a plain "check and record" primitive. Returns true (and records
-// this command's timestamp) if chatId may send a command right now; a
-// chat seen for the very first time is always allowed.
+// Callers skip this when the limit is 0 (unlimited). Records and allows the
+// command if the gap has passed; a new chat is always allowed.
 static bool allowTelegramCommand(const String& chatId, uint16_t maxCommandsPerMinute) {
   unsigned long minIntervalMs = 60000UL / maxCommandsPerMinute;
   unsigned long now = millis();
@@ -167,9 +134,6 @@ static bool allowTelegramCommand(const String& chatId, uint16_t maxCommandsPerMi
     }
   }
 
-  // Same unsigned-subtraction wraparound-safe shape as beginCameraAlert's
-  // own cooldown check above - a never-before-seen slot has nothing to
-  // compare against, so it's always allowed.
   bool allowed = !slot->used || (now - slot->lastCommandMs) >= minIntervalMs;
   if (allowed) {
     slot->chatId = chatId;
@@ -184,7 +148,7 @@ static const char* ALERT_PREF_NAMESPACE = "camctl";
 
 bool loadAlertEnabledPref(size_t index) {
   Preferences prefs;
-  // Read-write, not read-only - see auth_store.cpp's loadDashboardAuth for why.
+  // Read-write (see loadDashboardAuth).
   prefs.begin(ALERT_PREF_NAMESPACE, false);
   char key[8];
   snprintf(key, sizeof(key), "c%u", (unsigned)index);
@@ -202,13 +166,9 @@ static void saveAlertEnabledPref(size_t index, bool enabled) {
   prefs.end();
 }
 
-// Fetches a fresh snapshot from cfg/st right now and sends it only to
-// chatId (whoever asked) - unlike triggerMotionAlert, this is an explicit
-// one-off request, not a motion alert, so it ignores st.alertsEnabled and
-// doesn't touch st.lastAlert/hasAlerted or spend the alert cooldown.
+// One snapshot to whoever asked, ignoring mute and cooldown.
 static void sendOnDemandSnapshot(const CameraConfig& cfg, CameraState& st, const String& chatId, TelegramLang lang) {
-  // This runs on loop()'s task, snapshotUri is written by the camera's own
-  // task - cross-task read, needs CameraStateLock. See CameraState::stateMutex.
+  // snapshotUri is written by the camera task, so read under the lock.
   bool hasSnapshotUri;
   { CameraStateLock lock(st); hasSnapshotUri = st.snapshotUri.length() > 0; }
   if (!hasSnapshotUri) {
@@ -230,11 +190,8 @@ static void sendOnDemandSnapshot(const CameraConfig& cfg, CameraState& st, const
   pushCameraSnapshot(cfg, st, jpg, jpgLen, SnapshotSource::Manual); // takes ownership
 }
 
-// Result of resolveAlertTimer below - shared by the single-camera and
-// all-cameras /on//off paths in handleTelegramCommand/handleAllCamerasCommand
-// so the duration-parsing logic (and its error handling) can't drift
-// between the two copies the way independently-duplicated parsing already
-// caused a real bug once in this project (the /reset reboot loop).
+// Shared by single-camera and "all" /on|/off so timer parsing can't drift
+// between them (duplicated parsing caused the /reset loop).
 struct AlertTimer {
   bool ok = true;               // false only if durationText was non-empty and unparseable
   bool hasTimer = false;        // true if durationText was non-empty and DID parse
@@ -243,10 +200,7 @@ struct AlertTimer {
   String errorMsg;               // set only if !ok - what to reply with
 };
 
-// durationText is parsed.durationText ("" means no timer, permanent
-// on/off - the original behavior). Resolving "HH:MM" needs the actual
-// current local time, which parseDurationToken (telegram_parse.h)
-// deliberately doesn't read for itself - see its own comment.
+// "" = no timer. HH:MM needs the local time, read here.
 static AlertTimer resolveAlertTimer(const String& durationText, bool turnOn, TelegramLang lang) {
   AlertTimer result;
   if (durationText.length() == 0) return result;
@@ -265,14 +219,8 @@ static AlertTimer resolveAlertTimer(const String& durationText, bool turnOn, Tel
   return result;
 }
 
-// Persists a user's own /lang switch (text command or the inline-keyboard
-// picker tap both funnel through here) and replies with confirmation IN
-// THE NEW language - the whole point of switching is to see the very next
-// message in it, not the one that's about to become stale. `sender` is a
-// const& into loadTelegramUsers()'s own temporary from this poll
-// (pollTelegramCommands), so this never mutates it in place - a fresh
-// TelegramUser copy is written back to NVS by name (the unique key),
-// which the NEXT poll's loadTelegramUsers() picks up.
+// Persists a /lang change (typed or tapped) and confirms in the new language.
+// sender belongs to this poll's user list, so a copy is saved by name.
 static void applyLanguageChange(const TelegramUser& sender, TelegramLang newLang) {
   TelegramUser updated = sender;
   updated.language = newLang;
@@ -286,25 +234,15 @@ static void applyLanguageChange(const TelegramUser& sender, TelegramLang newLang
   sendTelegramMessageTo(sender.chatId, trLanguageChanged(newLang));
 }
 
-// Sets one camera's alerts on/off, persists it (NVS), logs it, and
-// replies with confirmation - the single-camera state-mutation tail
-// shared by the text-command path (/on|/off <camera> [duration], see
-// handleTelegramCommand's own tail below) and the inline-keyboard button
-// path (handleTelegramCallbackQuery, always a default-constructed
-// AlertTimer - permanent, no duration support via buttons). Sharing this
-// one implementation is what keeps the button path from silently
-// diverging from the text-command path on reboot-persistence (a change
-// here or a forgotten saveAlertEnabledPref call would otherwise only be
-// caught in one of the two places).
+// Sets, persists, logs and confirms one camera's on/off - shared by the typed
+// command and the picker button so both persist the same way.
 static void applyOnOffToCamera(const CameraConfig& cfg, CameraState& st, size_t index, bool turnOn,
                                 const AlertTimer& timer, const String& viaWho, const String& replyChatId,
                                 TelegramLang lang) {
   {
     CameraStateLock lock(st); // read cross-task by camera.cpp/webserver.cpp
     st.alertsEnabled = turnOn;
-    // A plain (no-timer) /on or /off cancels whatever timer was pending
-    // before - issuing a new command always replaces the old schedule,
-    // never stacks with it.
+    // A new command replaces any pending timer.
     st.scheduledRevertDueMs = timer.hasTimer ? timer.revertDueMs : 0;
     st.scheduledRevertToOn = !turnOn;
   }
@@ -315,17 +253,8 @@ static void applyOnOffToCamera(const CameraConfig& cfg, CameraState& st, size_t 
   sendTelegramMessageTo(replyChatId, trAlertsState(lang, cfg.name, turnOn, timer.suffix));
 }
 
-// Shared by /on all, /off all [duration] (via handleAllCamerasCommand
-// below) and the Cameras page's own "Mute all"/"Unmute all" buttons
-// (webserver.cpp) - the actual state-mutation logic can't drift between
-// the two front-ends the way applyOnOffToCamera already prevents for the
-// single-camera case. durationText is parsed the same way /on's own timer
-// token is ("" = permanent, a plain number of minutes, or "HH:MM" - see
-// parseDurationToken, telegram_parse.h); viaWho is a short human label for
-// the Serial/Activity log ("Telegram (name)", "the dashboard"). Returns a
-// plain-text result - success or the specific reason nothing happened
-// (no enabled cameras, or an unparseable duration) - for the caller to
-// relay however it likes (a Telegram reply, a web banner).
+// Shared by /on|/off all and the dashboard's Mute/Unmute all. Returns the
+// result text for the caller to show.
 String setAllCamerasAlertState(const CameraConfig cameras[], CameraState states[], size_t numCameras,
                                 bool turnOn, const String& durationText, const String& viaWho,
                                 TelegramLang lang) {
@@ -350,12 +279,7 @@ String setAllCamerasAlertState(const CameraConfig cameras[], CameraState states[
   return trAlertsState(lang, trAllCamerasSubject(lang, targets.size()), turnOn, timer.suffix);
 }
 
-// Applies /on all, /off all [duration], or /snap all to every currently-
-// enabled camera - see pollTelegramCommands' (telegram.h) comment on the
-// "all" keyword for the (extremely narrow) trade-off it makes against a
-// real camera named starting with "all". Caller (handleTelegramCommand)
-// has already matched parsed.cameraName == "all" case-insensitively
-// before reaching here.
+// /on all, /off all [duration], /snap all over every enabled camera.
 static void handleAllCamerasCommand(const TelegramUser& sender, const ParsedTelegramCommand& parsed,
                                      const CameraConfig cameras[], CameraState states[], size_t numCameras) {
   if (parsed.command == TelegramCommand::Snap) {
@@ -371,12 +295,7 @@ static void handleAllCamerasCommand(const TelegramUser& sender, const ParsedTele
                   (unsigned)targets.size(), sender.name.c_str());
     for (size_t i : targets) {
       sendOnDemandSnapshot(cameras[i], states[i], sender.chatId, sender.language);
-      // A fetch+send per camera, synchronously, all within this one
-      // loop() tick - main.cpp's loop() only resets the task watchdog at
-      // its own top, so enough slow/unresponsive cameras in one "/snap
-      // all" could otherwise add up toward WATCHDOG_TIMEOUT_MS (90s) and
-      // panic-reboot the board over a Telegram command. Same reasoning,
-      // same fix, as camera_store.cpp's restoreMissingCamerasFromSeed().
+      // Many slow cameras could add up past the 90s watchdog within one tick.
       esp_task_wdt_reset();
     }
     return;
@@ -388,13 +307,8 @@ static void handleAllCamerasCommand(const TelegramUser& sender, const ParsedTele
   sendTelegramMessageTo(sender.chatId, result);
 }
 
-// Sent when /on, /off, or /snap arrives with no camera name at all (see
-// parseTelegramCommand's own comment on the bare-command case) - one
-// button per enabled camera plus "All", each carrying
-// "<verb>|<cameraNameOrAll>" as its callback_data for
-// handleTelegramCallbackQuery (below) to act on when tapped. No
-// duration-timer support via buttons - tap-to-toggle/snap only, permanent
-// on/off.
+// Picker for a bare /on, /off or /snap: one button per enabled camera plus
+// "All", with callback_data "<verb>|<name or all>". Permanent on/off only.
 static void sendCameraPickerKeyboard(const TelegramUser& sender, TelegramCommand command,
                                       const CameraConfig cameras[], size_t numCameras) {
   String verb = commandDisplayName(command).substring(1); // "on"/"off"/"snap" - drop the leading "/"
@@ -408,50 +322,30 @@ static void sendCameraPickerKeyboard(const TelegramUser& sender, TelegramCommand
     sendTelegramMessageTo(sender.chatId, trNoCamerasToChoose(sender.language));
     return;
   }
-  // Label is translated; the "all" callback_data token itself must not be -
-  // it's a protocol identifier handleTelegramCallbackQuery matches
-  // case-insensitively, not display text.
+  // The "all" token is protocol and stays untranslated.
   buttons.push_back({trAllButtonLabel(sender.language), verb + "|all"});
 
   size_t skipped = 0;
   sendTelegramKeyboardTo(sender.chatId, trCameraPickerPrompt(sender.language, commandDisplayName(command)),
                           buttons, &skipped);
   if (skipped > 0) {
-    // Not expected to trigger with this project's camera names (see
-    // sendTelegramKeyboardTo's own comment) - but if it ever does, the
-    // camera(s) missing from the keyboard above shouldn't be a silent gap
-    // only visible in the Serial log.
+    // Tell the user if any camera didn't fit, rather than leaving a silent
+    // gap.
     sendTelegramMessageTo(sender.chatId,
                            trCallbackDataTooLong(sender.language, skipped, commandDisplayName(command)));
   }
 }
 
-// /restore's own pending-arm state - a bare "/restore" (see the
-// TelegramCommand::Restore case below) sets this so the NEXT document
-// upload from the SAME chat, within RESTORE_PENDING_WINDOW_MS
-// (config.h), is treated as the file to restore from - see
-// handleTelegramDocument's own comment for the full two-step (or
-// one-step, caption="/restore") design. Single-slot, not a per-chat map -
-// same "one at a time, not a queue" simplicity as this project's
-// BackgroundJob<T> elsewhere; only one admin is ever expected to be
-// mid-restore at once, and a second /restore from a different chat while
-// one is already pending simply replaces it. Same-task-only:
-// pollTelegramCommands (the sole caller of both handleTelegramCommand and
-// handleTelegramDocument) only ever runs from loop()'s own task, so no
-// lock is needed.
+// Chat that armed a bare /restore; its next document within
+// RESTORE_PENDING_WINDOW_MS is the restore file. One slot (a second /restore
+// replaces it). loop() task only, so no lock.
 static String g_pendingRestoreChatId; // "" = none armed
 static unsigned long g_pendingRestoreExpiresAtMs = 0;
 
-// lastUpdateId is this poll's running highest update_id, already advanced
-// past `text`'s own update - passed through so the Reset case can persist
-// it immediately, before ESP.restart() (see this section's top comment).
+// lastUpdateId is already past this update, so /reset can persist it.
 //
-// text is parsed exactly once, by parseTelegramCommand (telegram_parse.h) -
-// command identity, permission, and camera name are decided there and
-// used as-is below, not re-derived here. The switch below has no default
-// case (-Werror=switch, telegram_parse's library.json) so a new
-// TelegramCommand added without a case here is a build failure, not a
-// silent "unrecognized, ignored".
+// text is parsed once, by parseTelegramCommand. The switch has no default
+// (-Werror=switch), so a new command without a case won't build.
 static void handleTelegramCommand(const TelegramUser& sender, const String& text, const CameraConfig cameras[],
                                    CameraState states[], size_t numCameras, long lastUpdateId) {
   Serial.printf("[Telegram] Command from user \"%s\": \"%s\"\n", sender.name.c_str(), text.c_str());
@@ -467,11 +361,7 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
     case TelegramCommandPermission::Restore: authorized = sender.canRestore; break;
     case TelegramCommandPermission::Unknown: authorized = false;             break;
   }
-  // Logged here for every command now, including /status/uptime/reset -
-  // an earlier version of this check only logged rejected /on//off/snap
-  // attempts, silently replying with no server-side trace for the others.
-  // Calling that out explicitly since it wasn't when this unification
-  // first landed.
+  // Every rejected command is logged.
   if (parsed.requiredPermission != TelegramCommandPermission::Unknown && !authorized) {
     String name = commandDisplayName(parsed.command);
     Serial.printf("[Telegram] User \"%s\" not authorized for %s.\n", sender.name.c_str(), name.c_str());
@@ -488,13 +378,8 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
 
   switch (parsed.command) {
     case TelegramCommand::Status: {
-      // isOffline and the timer fields are written by other tasks
-      // (camera.cpp's own task, and loop()'s task via handleTelegramCommand
-      // /checkScheduledAlertReverts - this read runs on loop()'s task too,
-      // but isOffline specifically crosses from the camera's own task, so
-      // the whole group is read under one lock for simplicity rather than
-      // splitting into a locked and an unlocked half. See
-      // CameraState::stateMutex.
+      // isOffline is written by camera tasks; read the whole group under one
+      // lock.
       String msg = trStatusHeader(sender.language) + "\n";
       for (size_t i = 0; i < numCameras; i++) {
         if (!cameras[i].enabled) continue;
@@ -532,20 +417,12 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
 
     case TelegramCommand::Reset:
       Serial.printf("[Telegram] Reboot requested by user \"%s\" via /reset.\n", sender.name.c_str());
-      // Persisted here, immediately before the irreversible action - see
-      // this function's own top comment for why it's decided here and not
-      // by pollTelegramCommands ahead of time.
+      // Persist before restarting (see the section comment above).
       saveLastUpdateId(lastUpdateId);
-      // Reply before restarting - ESP.restart() never returns, so this is
-      // the last chance to confirm the command was actually received.
+      // Reply first - ESP.restart() never returns.
       sendTelegramMessageTo(sender.chatId, trRebootingNow(sender.language));
       delay(500); // let the TLS send above finish flushing before the reboot tears down WiFi
-      // ESP.restart() doesn't wait for other FreeRTOS tasks to finish
-      // whatever they're doing - if a camera task is mid-write to SD at
-      // this exact moment, an uncoordinated reset could corrupt more than
-      // just that one file (FAT isn't a journaling filesystem). See
-      // waitForSdIdle's own comment (sd_store.h) for the full reasoning;
-      // no-op if SD isn't active.
+      // Don't restart mid SD write: FAT isn't journaled.
       waitForSdIdle();
       ESP.restart();
       return; // unreachable - ESP.restart() doesn't return - kept for a tidy switch
@@ -625,11 +502,8 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
       if (events.empty()) {
         msg += trLogEmpty(sender.language);
       } else {
-        // Newest first, same as webserver_activity.cpp's render - reverse
-        // iterate, capped at `count`. Only the elapsed-time prefix is
-        // translated - it->text is the Activity Log's own stored text,
-        // which stays English everywhere (see lib/telegram_i18n.h's own
-        // comment on why).
+        // Newest first. Entry text stays English; only the prefix is
+        // translated.
         long shown = 0;
         for (auto it = events.rbegin(); it != events.rend() && shown < count; ++it, ++shown) {
           msg += trElapsedSince(sender.language, it->ms, millis()) + " - " + it->text + "\n";
@@ -666,21 +540,13 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
       return;
   }
 
-  // Bare /on, /off, or /snap (no target at all) - see parseTelegramCommand's
-  // own comment on why this reaches here with an empty cameraName instead
-  // of Unknown. Offer an inline-keyboard picker instead of falling through
-  // to the "all"/prefix-matching logic below, which would otherwise wrongly
-  // treat "" as matching every camera (matchCamerasByPrefix's
-  // startsWith("") is unconditionally true).
+  // Bare command: show the picker (an empty prefix would match every camera).
   if (parsed.cameraName.length() == 0) {
     sendCameraPickerKeyboard(sender, parsed.command, cameras, numCameras);
     return;
   }
 
-  // "all" (case-insensitive) is a special target meaning every enabled
-  // camera at once, matched here rather than by matchCamerasByPrefix below
-  // - see pollTelegramCommands' (telegram.h) comment on the trade-off that
-  // makes for a real camera named starting with "all".
+  // "all" = every enabled camera.
   String cameraNameLower = parsed.cameraName;
   cameraNameLower.toLowerCase();
   if (cameraNameLower == "all") {
@@ -688,8 +554,7 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
     return;
   }
 
-  // Matched by prefix ("D01" matches "D01-FDir") - ambiguous matches get
-  // nothing applied and a reply listing what matched, rather than guessing.
+  // Prefix match; ambiguous matches are listed, not applied.
   std::vector<size_t> matches = matchCamerasByPrefix(cameras, numCameras, parsed.cameraName);
   String verb = commandDisplayName(parsed.command).substring(1); // drop the leading "/" for mid-sentence use
 
@@ -720,11 +585,6 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
 
   bool turnOn = (parsed.command == TelegramCommand::On);
 
-  // parsed.durationText is "" for a plain /on or /off (permanent, the
-  // original behavior) - only non-empty when a timer token followed the
-  // camera name (see parseTelegramCommand's comment). See resolveAlertTimer's
-  // own comment for why the actual parsing lives there, shared with the
-  // "/on all"/"/off all" path (handleAllCamerasCommand) above.
   AlertTimer timer = resolveAlertTimer(parsed.durationText, turnOn, sender.language);
   if (!timer.ok) {
     Serial.printf("[Telegram] /%s target \"%s\" from user \"%s\" has an unparseable duration \"%s\".\n",
@@ -736,23 +596,15 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
   applyOnOffToCamera(cameras[i], states[i], i, turnOn, timer, sender.name, sender.chatId, sender.language);
 }
 
-// Handles an inline-keyboard button tap (sendCameraPickerKeyboard above) -
-// upd.callbackData is "<verb>|<cameraNameOrAll>", e.g. "off|D01-FrontDoor".
-// `sender` has already passed pollTelegramCommands' general permission
-// gate, but this still re-checks the SPECIFIC permission the tapped verb
-// needs (canCommand for on/off, canSnap for snap) - callback_data is
-// client-supplied and never trusted alone.
+// Button tap: callbackData is "<verb>|<name or all>". Re-checks the verb's own
+// permission, since callback_data comes from the client.
 static void handleTelegramCallbackQuery(const TelegramUser& sender, const TelegramUpdate& upd,
                                          const CameraConfig cameras[], CameraState states[], size_t numCameras) {
   int sep = upd.callbackData.indexOf('|');
   String verb = sep >= 0 ? upd.callbackData.substring(0, sep) : upd.callbackData;
   String target = sep >= 0 ? upd.callbackData.substring(sep + 1) : "";
 
-  // Handled separately from the on/off/snap camera-verb dispatch below -
-  // this isn't a camera command at all (no cameras[]/states[] involved),
-  // and needs no canCommand/canSnap check: a user's own display language
-  // is available unconditionally, same as /lang's own text-command
-  // counterpart (requiredPermissionForCommand(Lang) == Unknown).
+  // Not a camera command, and needs no permission (like /lang).
   if (verb == "lang") {
     String targetLower = target;
     targetLower.toLowerCase();
@@ -792,10 +644,8 @@ static void handleTelegramCallbackQuery(const TelegramUser& sender, const Telegr
   String targetLower = target;
   targetLower.toLowerCase();
   if (targetLower == "all") {
-    // Reuses handleAllCamerasCommand as-is - it only reads parsed.command
-    // (and parsed.durationText, always "" here - buttons are permanent
-    // only), never parsed.cameraName, so a synthetic ParsedTelegramCommand
-    // built just for this call is safe.
+    // handleAllCamerasCommand only reads command and durationText, so a
+    // synthetic parse is safe.
     ParsedTelegramCommand parsed;
     parsed.command = command;
     parsed.requiredPermission = requiredPermissionForCommand(command);
@@ -804,22 +654,13 @@ static void handleTelegramCallbackQuery(const TelegramUser& sender, const Telegr
     return;
   }
 
-  // Exact match, not matchCamerasByPrefix - the button's label was this
-  // camera's real name, generated by sendCameraPickerKeyboard itself, not
-  // typed by hand, so there's no prefix-ambiguity case to handle here.
-  // Still requires cameras[i].enabled, same as matchCamerasByPrefix does
-  // for the text-command path - the camera list can change between the
-  // picker being sent and a button being tapped, and a stale button for a
-  // camera that's since been disabled must not silently still apply.
+  // Exact name (the button carries the real name), and still enabled - the
+  // list may have changed since the picker was sent.
   int idx = -1;
   for (size_t i = 0; i < numCameras; i++) {
     if (cameras[i].enabled && cameras[i].name.equalsIgnoreCase(target)) { idx = (int)i; break; }
   }
   if (idx < 0) {
-    // The camera list can change between the picker being sent and a
-    // button being tapped (renamed/deleted/disabled, reboot required to
-    // apply - see webserver_cameras.cpp) - handled as a clean "no longer
-    // available" reply, not a crash.
     Serial.printf("[Telegram] Callback target camera \"%s\" no longer available (user \"%s\").\n",
                   target.c_str(), sender.name.c_str());
     answerTelegramCallback(upd.callbackQueryId, trCallbackCameraGone(sender.language));
@@ -842,21 +683,9 @@ static void handleTelegramCallbackQuery(const TelegramUser& sender, const Telegr
   answerTelegramCallback(upd.callbackQueryId, "");
 }
 
-// Called once per loop() tick (main.cpp), unconditionally - unlike
-// sendHeartbeat/checkNvsUsage/checkWifiSignal there, not gated behind an
-// interval of its own. Cheap when nothing's due: just a millis()
-// comparison per camera. Overflow-safe comparison (see CameraState::
-// scheduledRevertDueMs's comment) matches wifi_connect.cpp's own g_wifiRetryDueMs
-// pattern. NOT cheap once something IS due, though - sendTelegramMessage
-// below fans out to every systemMessages recipient (each up to a 45s
-// g_telegramNetMutex wait - see that function's own comment) and is
-// called separately for EVERY camera whose timer expires in the same
-// tick, so several cameras timing out together (e.g. several muted with
-// the same duration via the Cameras page's Mute all) is a real nested
-// worst case for loop()'s 90s task watchdog. sendTelegramMessage now
-// resets it per recipient internally, but this loop also resets after
-// each camera's own revert completes, matching the same per-iteration
-// feeding handleAllCamerasCommand's "/snap all" loop already does.
+// Every loop() tick. Cheap unless something is due; then each revert
+// broadcasts (up to 45s per recipient), so reset the watchdog after each
+// camera.
 void checkScheduledAlertReverts(const CameraConfig cameras[], CameraState states[], size_t numCameras) {
   for (size_t i = 0; i < numCameras; i++) {
     unsigned long dueMs;
@@ -882,20 +711,9 @@ void checkScheduledAlertReverts(const CameraConfig cameras[], CameraState states
   }
 }
 
-// Bot API's own two-step file download (https://core.telegram.org/bots/api#getfile):
-// getFile resolves fileId to a short-lived file_path, then a second GET
-// to a different URL path (same host, so the same TELEGRAM_ROOT_CA
-// applies) actually returns the bytes - two separate HTTPS round trips,
-// not something this project chose, that's just how the Bot API works.
-// Bounded by RESTORE_MAX_FILE_BYTES (config.h), checked against getFile's
-// own reported file_size before ever starting the download, and again
-// against the download response's own Content-Length before buffering
-// it - a config export is at most a few tens of KB even with many
-// cameras/users, so anything wildly larger is rejected outright rather
-// than risking a large heap allocation from an oversized upload. Returns
-// "" (Serial-only, no user-facing alert here - handleTelegramDocument
-// composes that) on any failure: getFile itself failing, an oversized
-// file, or the download failing.
+// Bot API two-step download: getFile gives a short-lived path, then a second
+// GET fetches the bytes. Size is checked against RESTORE_MAX_FILE_BYTES before
+// and during the download. Returns "" on failure (the caller replies).
 static String downloadTelegramDocument(const String& fileId) {
   TelegramNetLock netLock;
   if (!netLock.held()) {
@@ -926,8 +744,7 @@ static String downloadTelegramDocument(const String& fileId) {
     http.end();
 
     JsonDocument doc;
-    // .c_str(), not body directly - same ArduinoJson/ArduinoFake reasoning
-    // as parseTelegramUpdates (lib/telegram_parse).
+    // .c_str(): see parseTelegramUpdates.
     if (deserializeJson(doc, body.c_str()) != DeserializationError::Ok || !(doc["ok"] | false)) {
       Serial.println("[Telegram] downloadTelegramDocument: getFile response wasn't valid/ok.");
       return "";
@@ -971,24 +788,9 @@ static String downloadTelegramDocument(const String& fileId) {
   return content;
 }
 
-// The /restore flow's second step - a document (file) upload. Two ways to
-// trigger an actual restore attempt, both requiring sender.canRestore
-// (checked here explicitly, not just by the coarse "has at least one
-// permission" gate pollTelegramCommands already applied before ever
-// calling this):
-//   - One-step: the document's own caption is exactly "/restore" - no
-//     prior arming needed, for a sender who attaches the file and types
-//     the command in the same message.
-//   - Two-step: a bare "/restore" (TelegramCommand::Restore, above) armed
-//     g_pendingRestoreChatId for this exact chat, and this document
-//     arrived within RESTORE_PENDING_WINDOW_MS of that.
-// Any OTHER document (no matching caption, no valid pending arm) is
-// silently ignored - same "not something we act on" treatment
-// pollTelegramCommands already gives a captionless sticker/photo -
-// EXCEPT when this chat had armed a restore that has since expired, which
-// gets an explicit trRestoreExpired reply instead of silence, since that
-// is specifically the "I was following the flow but took too long" case
-// worth explaining rather than leaving a confused sender guessing.
+// Second step of /restore. Requires canRestore, and either a caption of
+// exactly "/restore" (one step) or a live arm from this chat (two steps).
+// Other documents are ignored, except that an expired arm gets an explanation.
 static void handleTelegramDocument(const TelegramUser& sender, const TelegramUpdate& update) {
   String caption = update.documentCaption;
   caption.trim();
@@ -1006,8 +808,7 @@ static void handleTelegramDocument(const TelegramUser& sender, const TelegramUpd
     return; // not a restore request at all - e.g. an unrelated file upload
   }
 
-  // Consumed regardless of outcome below - a stale arm must never survive
-  // to (mis)match a LATER, unrelated document from the same chat.
+  // Consumed either way, so a stale arm can't match a later document.
   if (pendingMatchesThisChat) g_pendingRestoreChatId = "";
 
   if (!sender.canRestore) {
@@ -1033,28 +834,16 @@ static void handleTelegramDocument(const TelegramUser& sender, const TelegramUpd
 }
 
 void pollTelegramCommands(const CameraConfig cameras[], CameraState states[], size_t numCameras) {
-  // -1 sentinel: load the real value from NVS on this function's first
-  // call only, rather than starting at 0 every boot - see this section's
-  // top comment for why a reboot redelivering old updates is dangerous
-  // now that /reset exists. Real Telegram update_ids are always >= 0.
+  // -1: load from NVS on first call (see the section comment above).
   static long lastUpdateId = -1;
   if (lastUpdateId < 0) lastUpdateId = loadLastUpdateId();
   long startingUpdateId = lastUpdateId; // so the end-of-poll persist below is skipped when nothing advanced
 
-  // HTTPClient rather than a raw socket + hand-rolled "\r\n\r\n" body split
-  // (see sendTelegramMessageTo's comment) - that split silently mis-parses
-  // if Telegram ever sends a chunked response, since it doesn't decode
-  // chunk-size markers before handing the body to parseTelegramUpdates.
+  // HTTPClient handles chunked responses.
   String body;
   {
-    // Scoped tightly to the network fetch only, released BEFORE the
-    // update-dispatch loop below - that loop calls handleTelegramCommand/
-    // handleTelegramCallbackQuery, which can themselves call back into
-    // sendTelegramMessageTo/sendOnDemandSnapshot and so re-acquire
-    // g_telegramNetMutex. xSemaphoreCreateMutex() is non-recursive -
-    // holding the lock across that loop would have this same task block
-    // trying to re-take a mutex it already owns. See g_telegramNetMutex's
-    // own comment for the mutex's overall purpose.
+    // Released before dispatch: handlers send replies, which take this
+    // (non-recursive) mutex again.
     TelegramNetLock netLock;
     if (!netLock.held()) {
       Serial.println("[Telegram] pollTelegramCommands: timed out waiting for Telegram send capacity - "
@@ -1094,27 +883,12 @@ void pollTelegramCommands(const CameraConfig cameras[], CameraState states[], si
 
   std::vector<TelegramUser> users = loadTelegramUsers();
   for (auto& upd : updates) {
-    // Unlike sendHeartbeat/checkNvsUsage/checkWifiSignal/
-    // checkScheduledAlertReverts (main.cpp/telegram_commands.cpp - each fires at
-    // most once per loop() tick), `updates` can genuinely hold more than
-    // one entry - several commands sent in a burst, several users
-    // messaging around the same time, or the bot catching up after being
-    // briefly offline. handleTelegramCommand/handleTelegramCallbackQuery
-    // below can each independently block on g_telegramNetMutex for up to
-    // 45s sending a reply, so this is the one loop in the file where
-    // several such waits stacking up in a single call is the ordinary
-    // case, not a rare timing coincidence. Reset unconditionally at the
-    // top of every iteration (not just after a branch that sends
-    // something) so it can't be skipped by one of this loop's several
-    // `continue`s.
+    // A batch can hold several commands, each reply able to wait 45s for the
+    // mutex, so reset the watchdog at the top of every iteration (before any
+    // `continue`).
     esp_task_wdt_reset();
 
-    // Advanced in RAM for every update (so the same batch isn't refetched
-    // next poll), but NOT persisted to NVS here - Telegram delivers every
-    // inbound message regardless of sender, so persisting per-update would
-    // let anyone who finds this bot force an NVS write with no permission
-    // required. Persisted once at the end of this loop instead (see this
-    // section's top comment).
+    // Advanced in RAM per update; persisted once after the loop.
     if (upd.updateId > lastUpdateId) lastUpdateId = upd.updateId;
     if (!upd.hasChatId) continue; // no message on this update (edited_message, channel_post, ...)
 
@@ -1122,11 +896,7 @@ void pollTelegramCommands(const CameraConfig cameras[], CameraState states[], si
     for (auto& u : users) {
       if (chatIdMatches(u.chatId, upd.chatId)) { sender = &u; break; }
     }
-    // canCommand, canSnap, canReset, canBackup, and canRestore are
-    // independent permissions (see TelegramUser) - a sender needs at
-    // least one of them to reach handleTelegramCommand/
-    // handleTelegramDocument at all; which specific commands that
-    // actually unlocks is decided there, per-command.
+    // Needs at least one permission; each command checks its own.
     if (!sender || !(sender->canCommand || sender->canSnap || sender->canReset || sender->canBackup ||
                       sender->canRestore)) {
       if (sender) {
@@ -1144,10 +914,7 @@ void pollTelegramCommands(const CameraConfig cameras[], CameraState states[], si
       continue;
     }
 
-    // Checked before the text-length short-circuit below - a document
-    // upload legitimately has an empty upd.text (its own accompanying
-    // text arrives as documentCaption instead, see TelegramUpdate's own
-    // comment), so this would otherwise never be reached.
+    // Before the empty-text check: a document's text arrives as its caption.
     if (upd.hasDocument) {
       handleTelegramDocument(*sender, upd);
       continue;
@@ -1155,9 +922,6 @@ void pollTelegramCommands(const CameraConfig cameras[], CameraState states[], si
 
     if (upd.text.length() == 0) continue; // e.g. a sticker or photo with no caption - nothing to act on
 
-    // lastUpdateId passed through so handleTelegramCommand's /reset branch
-    // can persist it immediately, before doing anything irreversible - see
-    // that function's own top comment for why this isn't decided here.
     handleTelegramCommand(*sender, upd.text, cameras, states, numCameras, lastUpdateId);
   }
   if (lastUpdateId != startingUpdateId) saveLastUpdateId(lastUpdateId);

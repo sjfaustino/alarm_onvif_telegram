@@ -31,25 +31,10 @@ void requestCameraStop(CameraState& st) {
   st.stopRequested = true;
 }
 
-// Applies a staged pendingConfig, if any, to cfg/st - shared by
-// cameraTaskFn's startup (for a task spawned straight into an already-
-// enabled camera - see webserver_cameras.cpp's live-spawn path, which
-// stages the real config here rather than writing g_cameras[idx] directly
-// from the webserver task) and its main loop (for an edit applied while
-// the task is already running). Returns whether one was applied - the
-// loop uses that to know whether to also reset subscription/retry state,
-// which the startup path doesn't need (nothing's been set up yet there).
-//
-// See requestLiveConfigReload's comment (camera.h) for why only this
-// owning task may ever perform cfg's assignment - and just as
-// importantly, why nothing else may ever write cfg unlocked either: a
-// camera spawned live starts this function with cfg still holding
-// whatever g_cameras[idx] held before (a stale, previously-disabled
-// snapshot) until this runs, rather than main.cpp/webserver_cameras.cpp
-// writing the real values into g_cameras[idx] directly and racing any
-// other task that reads cameras[i].enabled/.name for that slot without a
-// lock (CameraConfig itself has no locking of its own - only the fields
-// listed on CameraState::stateMutex do).
+// Applies a staged pendingConfig to cfg/st; returns whether one was applied
+// (the loop then resets subscription state). Also used at startup: a camera
+// enabled live gets its real config this way, because only the owning task may
+// write its CameraConfig (see requestLiveConfigReload).
 static bool applyPendingConfigIfAny(CameraConfig& cfg, CameraState& st) {
   CameraConfig* pending = nullptr;
   { CameraStateLock lock(st); pending = st.pendingConfig; st.pendingConfig = nullptr; }
@@ -58,12 +43,8 @@ static bool applyPendingConfigIfAny(CameraConfig& cfg, CameraState& st) {
   cfg = *pending; // safe: this task is the sole writer of its own cfg - see requestLiveConfigReload's comment
   delete pending;
 
-  // Unconditional, regardless of whether the new credentials turn out to
-  // be valid - st.user/st.pass are raw pointers into cfg.user/cfg.pass's
-  // buffers, and the assignment above may have just freed/reallocated the
-  // old ones. Leaving them stale even briefly, gated behind a validity
-  // check, would be a use-after-free the instant anything reads through
-  // them again.
+  // Always re-point, valid or not: the assignment above may have freed the old
+  // buffers.
   { CameraStateLock lock(st); st.user = cfg.user.c_str(); st.pass = cfg.pass.c_str(); }
   return true;
 }
@@ -80,16 +61,10 @@ bool resolveCameraCredentials(const CameraConfig& cfg, CameraState& st) {
   return true;
 }
 
-// Builds the envelope and posts it, honoring cfg.useWSSecurity (WSSE header
-// vs. plain HTTP Basic Auth, for stacks that choke on WSSE). Every SOAP
-// call funnels through here, so this is also where st.lastContactMs gets
-// updated - a non-empty response (even a SOAP fault) means the camera's
-// stack answered, which is what checkCameraOnlineStatus (telegram_alerts.cpp)
-// uses to tell a genuinely offline camera from one merely failing a call.
-// lastContactMs is lock-guarded (CameraState::stateMutex), not same-task-
-// only: pushCameraSnapshot (snapshot_history.cpp) also adjusts it, and
-// that function is reachable from loop()'s task too (sendOnDemandSnapshot,
-// via /snap or handleAllCamerasCommand), not just this camera's own task.
+// Every SOAP call goes through here, honouring useWSSecurity. Any non-empty
+// response (even a fault) refreshes lastContactMs, which separates offline
+// from failing. Locked because pushCameraSnapshot also adjusts it from other
+// tasks.
 static String cameraSoapCall(const CameraConfig& cfg, CameraState& st, const String& url,
                               const String& to, const String& action, const String& body) {
   const char* user; const char* pass;
@@ -154,29 +129,16 @@ bool cameraGetEventServiceCapabilities(const CameraConfig& cfg, CameraState& st)
   return true;
 }
 
-// The seven topic keywords this project actually acts on anywhere
-// (camera_parse.cpp's topicReportedTrue/motionEventFired match live event
-// XML against these exact same substrings) - kept in one place so a scan
-// of a camera's advertised topics and a scan of its live events can never
-// silently drift apart.
+// The topic keywords acted on anywhere; one list so advertised-topic scans and
+// live-event matching can't drift.
 static const char* const kKnownEventTopics[] = {
     "PeopleDetect", "VehicleDetect", "DogCatDetect", "MotionAlarm", "CellMotionDetector",
     "TamperDetector", "SignalLoss",
 };
 
-// Comma-joined list of which of kKnownEventTopics above actually appear
-// anywhere in response. Deliberately a raw substring scan, not a real
-// ONVIF TopicSet tree parse: a TopicSet is a nested-element tree whose TAG
-// NAMES are the topic path segments themselves, arbitrarily deep and
-// vendor-prefixed (e.g. "tns1:RuleEngine/MyRuleDetector/PeopleDetect" or a
-// vendor's own "tnsaxis:PeopleDetect") - see camera_parse.h's own comment
-// on why this project already gave up on fully standardizing that and
-// matches by keyword instead. Reusing the exact same approach here (rather
-// than writing a one-off XML tree walker just for this) means "does this
-// camera advertise PeopleDetect" and "did this event report PeopleDetect"
-// can never disagree about what counts as a match. Returns "" if none of
-// the known keywords appear anywhere - the camera may still report plain
-// motion via a topic this project doesn't recognize by name yet.
+// Which known keywords appear in the response - a substring scan, the same
+// matching live events use (topic paths are vendor-prefixed and nested, so no
+// tree parse). "" if none.
 static String scanKnownEventTopics(const String& response) {
   String found;
   for (const char* topic : kKnownEventTopics) {
@@ -187,18 +149,9 @@ static String scanKnownEventTopics(const String& response) {
   return found;
 }
 
-// Every element in xml carrying the WS-Topics topic="true" attribute
-// (ONVIF's own standard way of marking a TopicSet leaf as a real,
-// subscribable topic, not just a grouping node above it - e.g.
-// <tnsaxis:FireDetection wstop:topic="true">) - just its own local
-// (unprefixed) tag name, e.g. "FireDetection". Doesn't need to understand
-// the tree's nesting/namespaces to do that: for each topic="true" marker
-// found, it only reads backward to that ONE element's own opening tag -
-// see scanKnownEventTopics' own comment for why this project stops short
-// of a full TopicSet parse otherwise. Best-effort like everything else in
-// this file - a vendor that doesn't set this attribute at all simply
-// yields nothing extra here, same as if this function didn't exist.
-// Unique names only, in order of first appearance.
+// Local names of elements marked wstop:topic="true" (real subscribable
+// topics), in first-seen order. Reads back only to each marker's own tag - no
+// tree parse.
 static std::vector<String> findAllTopicElementNames(const String& xml) {
   std::vector<String> names;
   int searchFrom = 0;
@@ -246,13 +199,8 @@ bool cameraGetEventProperties(const CameraConfig& cfg, CameraState& st, String* 
   }
   if (outTopics) *outTopics = scanKnownEventTopics(response);
 
-  // Surfaced both live (CameraState::unusedEventTopics, via outUnusedTopics -
-  // the Cameras/Capabilities pages) and logged once here, so a topic this
-  // project doesn't act on yet - "FireDetection", a line-crossing detector,
-  // whatever a given camera's own AI happens to support - shows up
-  // somewhere a maintainer would actually see it when deciding what to add
-  // next, instead of silently being ignored forever. Only the ones NOT
-  // already in kKnownEventTopics are worth mentioning.
+  // Topics we don't act on yet, shown on the dashboard and logged once so new
+  // capabilities get noticed.
   std::vector<String> allTopicNames = findAllTopicElementNames(response);
   String unusedTopics;
   for (auto& name : allTopicNames) {
@@ -272,11 +220,7 @@ bool cameraGetEventProperties(const CameraConfig& cfg, CameraState& st, String* 
   return true;
 }
 
-// Re-clamped here, at the point of use, not just at the dashboard form
-// boundary - same "hand-edited/imported NVS blob bypasses the form
-// entirely" reasoning as every other clamp in this project (e.g.
-// telegram_alerts.cpp's safeSnapshotBurstCount). 0 passes through unclamped -
-// it means "unset", not "zero pixels".
+// Clamped at use; 0 means unset.
 static uint16_t safeSnapshotDimension(uint16_t value) {
   if (value == 0) return 0;
   if (value > CAMERA_SNAPSHOT_DIMENSION_MAX) return CAMERA_SNAPSHOT_DIMENSION_MAX;
@@ -287,12 +231,9 @@ bool cameraFetchProfileAndSnapshotUri(const CameraConfig& cfg, CameraState& st) 
   Serial.printf("\n[%s] Resolving snapshot URI\n", cfg.name.c_str());
 
   if (cfg.snapshotUriOverride.length() > 0) {
-    // {USER}/{PASS} let an override embed query-string auth (some Vstarcam
-    // firmwares want ?loginuse=...&loginpas=...) without a credential
-    // landing in a committed file. {WIDTH}/{HEIGHT} are the same idea for
-    // a camera whose snapshot URL accepts a resolution query param - a
-    // no-op substitution when the override doesn't reference either
-    // token, so this stays purely opt-in.
+    // {USER}/{PASS} allow query-string auth (e.g. Vstarcam's
+    // loginuse/loginpas) without credentials in a file; {WIDTH}/{HEIGHT}
+    // request a size. No-op if the override doesn't use them.
     String resolved = cfg.snapshotUriOverride;
     String user;
     {
@@ -304,10 +245,7 @@ bool cameraFetchProfileAndSnapshotUri(const CameraConfig& cfg, CameraState& st) 
       resolved.replace("{HEIGHT}", String(safeSnapshotDimension(cfg.snapshotMaxHeight)));
       st.snapshotUri = resolved;
     }
-    // {USER} substituted for real (a username isn't sensitive, and showing
-    // it makes this line actually useful for confirming what URL gets
-    // requested) - {PASS} stays masked, the whole reason this doesn't just
-    // log `resolved` directly.
+    // Log with the password masked.
     String logUri = cfg.snapshotUriOverride;
     logUri.replace("{USER}", user);
     logUri.replace("{PASS}", "***");
@@ -373,9 +311,7 @@ bool cameraFetchProfileAndSnapshotUri(const CameraConfig& cfg, CameraState& st) 
   Serial.println("  ^ if this looks wrong (bad IP/port), that's the same GetSnapshotUri "
                   "quirk seen on the XM530 - you may need a snapshotUriOverride for this camera too.");
 
-  // Best-effort, non-fatal - see CameraState::streamUri's own comment.
-  // Reuses the profile token already chosen above, so this is one extra
-  // SOAP call, not a second GetProfiles round trip.
+  // Best-effort RTSP URI, reusing the chosen profile.
   String streamAction = "http://www.onvif.org/ver10/media/wsdl/GetStreamUri";
   String streamBody = "<trt:GetStreamUri><trt:StreamSetup><tt:Stream>RTP-Unicast</tt:Stream>"
                        "<tt:Transport><tt:Protocol>RTSP</tt:Protocol></tt:Transport></trt:StreamSetup>"
@@ -394,21 +330,14 @@ bool cameraFetchProfileAndSnapshotUri(const CameraConfig& cfg, CameraState& st) 
     Serial.printf("[%s] Stream URI: %s\n", cfg.name.c_str(), resolvedStreamUri.c_str());
   }
 
-  // Best-effort, non-fatal - see CameraState::mjpegUri's own comment. Only
-  // attempted at all if some profile actually reports a JPEG encoder -
-  // most modern H.264/H.265-only cameras don't, so this is skipped
-  // entirely (no wasted round trip) far more often than it runs.
+  // Best-effort MJPEG URI, only if some profile is JPEG (rare).
   ProfileInfo* jpegProfile = nullptr;
   for (auto& p : profiles) {
     if (p.encoding.equalsIgnoreCase("JPEG")) { jpegProfile = &p; break; }
   }
   if (jpegProfile) {
-    // HTTP transport, not RTSP - a plain <img> tag can stream MJPEG-over-
-    // HTTP directly, unlike RTSP which needs an external player. This is a
-    // separate, vendor-optional capability from the JPEG encoder itself -
-    // plenty of cameras support HTTP transport only for their RTSP-format
-    // profiles and refuse it for this one, or vice versa, so failure here
-    // is common and not logged as a warning, just a plain trace.
+    // HTTP transport (an <img> can show MJPEG-over-HTTP). Often unsupported,
+    // so failure is only traced.
     String mjpegAction = "http://www.onvif.org/ver10/media/wsdl/GetStreamUri";
     String mjpegBody = "<trt:GetStreamUri><trt:StreamSetup><tt:Stream>RTP-Unicast</tt:Stream>"
                         "<tt:Transport><tt:Protocol>HTTP</tt:Protocol></tt:Transport></trt:StreamSetup>"
@@ -466,9 +395,6 @@ bool cameraCreatePullPoint(const CameraConfig& cfg, CameraState& st) {
   return true;
 }
 
-// Logs extractEventStateValue's result for topicKeyword (camera_parse.h) -
-// the actual search logic is there and unit-tested; this is just the
-// Serial-log wrapper camera.cpp needs.
 static void printEventState(const CameraConfig& cfg, const String& xml, const String& topicKeyword) {
   String state = extractEventStateValue(xml, topicKeyword);
   if (state.length() > 0) Serial.printf("[%s] State = %s\n", cfg.name.c_str(), state.c_str());
@@ -479,13 +405,7 @@ static void parseEvents(const CameraConfig& cfg, CameraState& st, const String& 
   if (!ev.anyTrue && !VERBOSE_SOAP_LOG) return;
   if (!ev.motionAlarm && !ev.cellMotion && !ev.peopleDetect && !ev.vehicleDetect && !ev.dogCatDetect &&
       !ev.signalLoss && !ev.tamper) {
-    // A real notification arrived (not just an empty/heartbeat-ish
-    // PullMessagesResponse - see the anyTrue/VERBOSE_SOAP_LOG guard above)
-    // but none of the topics this project knows about were in it - e.g. a
-    // person/vehicle-detection topic, which has no single standardized
-    // name across vendors (see firstTopic's comment). Logged instead of
-    // silently dropped, so it's possible to discover what a given camera
-    // actually sends and add support for it deliberately.
+    // A real notification with no known topic: log it so support can be added.
     if (xml.indexOf("NotificationMessage") >= 0) {
       String topic = firstTopic(xml);
       Serial.printf("[%s] UNRECOGNIZED EVENT - topic: %s (enable VERBOSE_SOAP_LOG to see the full response)\n",
@@ -503,28 +423,12 @@ static void parseEvents(const CameraConfig& cfg, CameraState& st, const String& 
   if (ev.signalLoss)    { Serial.printf("[%s] SIGNAL LOSS EVENT\n", cfg.name.c_str());    printEventState(cfg, xml, "SignalLoss"); }
   if (ev.tamper)       { Serial.printf("[%s] TAMPER EVENT\n", cfg.name.c_str());        printEventState(cfg, xml, "TamperDetector"); }
 
-  // Each check below uses topicReportedTrue's per-NotificationMessage
-  // scoping, not ev.anyTrue/ev.signalLoss/ev.tamper alone - a body-wide
-  // flag or "this topic string is present somewhere" doesn't mean *this*
-  // topic's own state is true (see motionEventFired's comment in
-  // camera_parse.h for the full reasoning and the field-hit bug this
-  // pattern already fixed once for motion).
+  // Every check below uses the topic's own state, not the body-wide flags.
   if (motionEventFired(xml, ev)) {
     st.lastMotionMs = millis(); // real motion signal, independent of mute/cooldown/quiet hours - see checkMotionWatchdog
-    // Checked independently, not collapsed into one "kind" up front - a
-    // single PullMessages batch can legitimately report MORE than one of
-    // these true at once (e.g. a person getting out of a car fires both
-    // PeopleDetect and VehicleDetect together), and each has its own
-    // separate opt-out (CameraConfig::personAlertsEnabled/
-    // vehicleAlertsEnabled). Collapsing to one kind before checking
-    // enablement - an earlier version of this code did exactly that -
-    // meant muting person alerts could silently swallow an ALSO-present
-    // vehicle detection the user still wanted, just because person won an
-    // arbitrary tie-break first. Scoped the same topicReportedTrue way as
-    // every other check in this function - ev.peopleDetect/ev.vehicleDetect/
-    // ev.motionAlarm/ev.cellMotion alone only say the topic string
-    // appeared somewhere in this batch, not that THIS specific topic
-    // reported true.
+    // Checked separately: one batch can report person and vehicle together,
+    // and each has its own opt-out. Collapsing to one kind first once let a
+    // muted person alert swallow a wanted vehicle alert.
     bool personDetected = ev.peopleDetect && topicReportedTrue(xml, "PeopleDetect");
     bool vehicleDetected = ev.vehicleDetect && topicReportedTrue(xml, "VehicleDetect");
     bool plainMotionDetected = (ev.motionAlarm && topicReportedTrue(xml, "MotionAlarm")) ||
@@ -534,32 +438,19 @@ static void parseEvents(const CameraConfig& cfg, CameraState& st, const String& 
     bool vehicleWantsAlert = vehicleDetected && cfg.vehicleAlertsEnabled;
 
     if (personWantsAlert || vehicleWantsAlert || plainMotionDetected) {
-      // Person takes priority over Vehicle for the CAPTION only when both
-      // separately qualify for an alert - not a meaningful ordering
-      // otherwise, just a tie-break (see MotionDetectionKind's own
-      // comment, telegram_i18n.h). Plain motion (no classification
-      // available, or the only thing that fired/qualified) gets Generic,
-      // same wording as before either of these features existed.
+      // Person wins the caption when both qualify; plain motion is Generic.
       MotionDetectionKind kind = personWantsAlert ? MotionDetectionKind::Person
                                  : vehicleWantsAlert ? MotionDetectionKind::Vehicle
                                                       : MotionDetectionKind::Generic;
       triggerMotionAlert(cfg, st, false, kind);
     } else {
-      // Every topic that fired this batch was a muted classified type -
-      // log each one that applies (both, if both did) rather than picking
-      // just one, since either log line alone would hide that the other
-      // also fired.
+      // All fired topics were muted types; log each.
       if (personDetected) logEvent(cfg.name + ": person detected (alerts off)");
       if (vehicleDetected) logEvent(cfg.name + ": vehicle detected (alerts off)");
     }
   } else if (ev.dogCatDetect && topicReportedTrue(xml, "DogCatDetect")) {
-    // Pet-only event (no person/vehicle/motion topic also fired in this
-    // same batch - motionEventFired above would have already handled it
-    // if one had) - gated per-camera via CameraConfig::petAlertsEnabled,
-    // unlike person/vehicle detection, since many users' own pets would
-    // otherwise trigger the same alert a real intruder would. Still a real
-    // motion signal for the watchdog either way - a pet event proves the
-    // detection pipeline is alive even when its alert is switched off.
+    // Pet-only event (opt-in per camera). Always counts as motion for the
+    // watchdog - it proves detection works.
     st.lastMotionMs = millis();
     if (cfg.petAlertsEnabled) {
       triggerMotionAlert(cfg, st, true);
@@ -579,8 +470,7 @@ bool cameraPullMessages(const CameraConfig& cfg, CameraState& st) {
   if (!st.subscriptionActive || st.pullPointUrl.length() == 0) return false; // same-task read, no lock needed
 
   String action = "http://www.onvif.org/ver10/events/wsdl/PullPointSubscription/PullMessagesRequest";
-  // PT1S long-poll; PT5S (fewer, longer polls) would cut request volume
-  // per camera if that's ever worth trading off against latency.
+  // PT1S long-poll. PT5S would cut request volume at the cost of latency.
   String body = "<tev:PullMessages><tev:Timeout>PT1S</tev:Timeout>"
                 "<tev:MessageLimit>20</tev:MessageLimit></tev:PullMessages>";
   String response = cameraSoapCall(cfg, st, st.pullPointUrl, st.pullPointUrl, action, body);
@@ -601,13 +491,9 @@ bool cameraPullMessages(const CameraConfig& cfg, CameraState& st) {
     return false;
   }
 
-  // Neither a recognized success nor a recognized fault - a genuinely
-  // malformed/unexpected response body (response.length()==0, the
-  // transient network-issue case, is already handled above and never
-  // reaches here). See pullAmbiguousStreak's own comment (camera.h):
-  // without this counter, this camera's task would just keep retrying
-  // the same possibly-dead pullPointUrl every PULL_INTERVAL_MS forever,
-  // with no path back to a working subscription.
+  // Unrecognized response (neither success nor fault). Resubscribe after
+  // PULL_MESSAGES_AMBIGUOUS_LIMIT in a row instead of polling a dead pull
+  // point forever.
   if (++st.pullAmbiguousStreak >= PULL_MESSAGES_AMBIGUOUS_LIMIT) {
     Serial.printf("[%s] PullMessages returned an unrecognized response %u time(s) in a row - "
                   "treating the subscription as dead, will resubscribe.\n",
@@ -643,42 +529,24 @@ bool cameraSetupSequence(const CameraConfig& cfg, CameraState& st) {
   if (!cameraFetchProfileAndSnapshotUri(cfg, st)) {
     Serial.printf("[%s] Snapshot URI not resolved - motion will still be detected "
                   "and logged, but photo alerts won't work until this is fixed.\n", cfg.name.c_str());
-    // deliberately not returning false: detection/logging still has value
+    // not returning false: detection/logging still work without it
   }
   if (!cameraGetEventServiceCapabilities(cfg, st)) return false;
   String topics, unusedTopics;
   if (!cameraGetEventProperties(cfg, st, &topics, &unusedTopics)) return false;
-  // Cross-task fields (dashboard render reads them) - see CameraState's
-  // own mutex comment. Written once here per setup, same as streamUri/
-  // mjpegUri just above in this same sequence.
+  // Read by the dashboard, so written under the lock.
   { CameraStateLock lock(st); st.supportedEventTopics = topics; st.unusedEventTopics = unusedTopics; }
   if (!cameraCreatePullPoint(cfg, st)) return false;
   return true;
 }
 
-// Cap for the per-camera subscription retry backoff below - see
-// CameraState::retryDelayMs's comment in camera.h. Also never allowed to
-// exceed half of this camera's own offlineThresholdMs (see the retry loop
-// below) - a SOAP fault still counts as "contact" (cameraSoapCall's
-// comment), so a camera stuck failing subscription retries keeps
-// refreshing lastContactMs, but only as often as it's actually retried.
-// Hit in the field: with this fixed at 5 minutes and offlineThresholdMs
-// defaulting to the same 5 minutes, a camera whose retries had backed off
-// to the ceiling could go quiet for just long enough between retries -
-// each of which still would have answered - to trip a false OFFLINE
-// alert on its own, with nothing actually wrong.
+// Resubscribe backoff cap, further limited to half the camera's offline
+// threshold. A fault still counts as contact, but only once per retry: with
+// both at 5 minutes, backed-off cameras false-alarmed as OFFLINE.
 static const unsigned long RETRY_BACKOFF_MAX_MS = 300000UL; // 5 minutes between retries
 
-// Clamped here, at the point of use, not just at the dashboard save
-// (webserver_cameras.cpp's parseCameraForm clamps user input to
-// [CAMERA_POLL_INTERVAL_MIN_MS, CAMERA_POLL_INTERVAL_MAX_MS]) - same
-// "hand-edited/imported NVS blob bypasses the form entirely" reasoning as
-// this project's other per-camera clamps (telegram_alerts.cpp's
-// safeAlertCooldownMs and siblings). A value near 0 here wouldn't just
-// poll aggressively - every SOAP call sends "Connection: close"
-// (onvif_soap.cpp), so it would open and tear down a fresh TCP connection
-// to the camera in a tight loop, real hammering on a device whose
-// embedded HTTP stack may only tolerate one or two connections at all.
+// Clamped at use. Near 0 would open a new connection ("Connection: close") in
+// a tight loop.
 static unsigned long safePollIntervalMs(const CameraConfig& cfg) {
   unsigned long ms = cfg.pollIntervalMs;
   if (ms < CAMERA_POLL_INTERVAL_MIN_MS) ms = CAMERA_POLL_INTERVAL_MIN_MS;
@@ -687,11 +555,8 @@ static unsigned long safePollIntervalMs(const CameraConfig& cfg) {
 }
 
 // ============================================================
-// Per-camera FreeRTOS task - one per enabled camera, created once in
-// setup() and pinned to core 1. Runs forever; never returns. Pinning to
-// core 1 gives true parallel execution: one camera's slow SOAP call or
-// Telegram TLS upload doesn't steal core 1 time from another's task, and
-// neither competes with the WiFi/BT stack or loopTask on core 0.
+// Per-camera task, pinned to core 1 (away from WiFi and loopTask on core 0).
+// Never returns except on a stop request or missing credentials.
 // ============================================================
 void cameraTaskFn(void* pvParameters) {
   CameraTaskContext* ctx = static_cast<CameraTaskContext*>(pvParameters);
@@ -699,19 +564,14 @@ void cameraTaskFn(void* pvParameters) {
   CameraState& st = *ctx->st;
   delete ctx; // context struct's job is done once we've unpacked it
 
-  // A camera spawned live (webserver_cameras.cpp enabling a previously-
-  // disabled one) stages its real configuration via pendingConfig instead
-  // of it being written into g_cameras[idx] directly by the webserver
-  // task - see applyPendingConfigIfAny's comment for why. No-op (cfg is
-  // used as-is) for the normal boot-time spawn path, which never stages one.
+  // A live-enabled camera's real config arrives via pendingConfig; no-op at
+  // boot.
   applyPendingConfigIfAny(cfg, st);
 
   Serial.printf("[%s] Task started.\n", cfg.name.c_str());
 
-  // Resolve credentials once, before anything else. A mismatch here is a
-  // config mistake, not a flaky network condition - retrying it forever
-  // would just spam the log, so this camera's task exits instead. The
-  // Telegram alert doesn't need this camera's credentials to send.
+  // Missing credentials are a config mistake, not a network problem, so exit
+  // rather than retry forever.
   if (!resolveCameraCredentials(cfg, st)) {
     Serial.printf("[%s] FATAL: no credentials resolved - task exiting, camera will NOT be monitored "
                   "until this is fixed via the web UI and the board is rebooted.\n", cfg.name.c_str());
@@ -727,30 +587,16 @@ void cameraTaskFn(void* pvParameters) {
     }
   }
 
-  // Baseline for checkMotionWatchdog - task-start time, not 0, so a camera
-  // that never fires within cfg.motionWatchdogHours after boot still
-  // trips (see CameraState::lastMotionMs's own comment).
+  // Task-start baselines for the motion watchdog, timelapse and subscription
+  // health, so none of them fires just because the task is new.
   st.lastMotionMs = millis();
 
-  // Same reasoning, same fix, for the timelapse interval check below - a
-  // 0 baseline would make millis()-0 already exceed a short configured
-  // interval for any task whose subscription took longer than that
-  // interval to come up (retries, discovery, or a camera enabled live via
-  // the dashboard hours after boot), firing an unwanted capture the
-  // instant it subscribes instead of waiting a full interval first.
   st.lastTimelapseMs = millis();
 
-  // Same reasoning again for checkSubscriptionHealth (telegram_alerts.cpp) - a 0
-  // baseline would make this camera look like it's been unsubscribed since
-  // the epoch, tripping the alert immediately instead of giving the retry
-  // loop below a fair chance first.
   st.lastSubscribedMs = millis();
 
   for (;;) {
-    // Live teardown (webserver_cameras.cpp, disable/delete of an already-
-    // running camera via requestCameraStop) - checked before the pending-
-    // config reload below, so a stop wins even if an edit was staged in
-    // the same brief window (e.g. edit-then-immediately-delete).
+    // Checked before a pending edit, so a stop wins.
     bool stopNow;
     { CameraStateLock lock(st); stopNow = st.stopRequested; st.stopRequested = false; }
     if (stopNow) {
@@ -763,37 +609,21 @@ void cameraTaskFn(void* pvParameters) {
       return;
     }
 
-    // Live-reload from a dashboard edit (webserver_cameras.cpp's save
-    // handler, via requestLiveConfigReload) - checked first, every pass,
-    // so it takes effect within one ~10ms loop tick of being staged.
+    // Live edit: applied within one loop pass.
     if (applyPendingConfigIfAny(cfg, st)) {
       Serial.printf("[%s] Configuration changed via dashboard - reconnecting with the new settings.\n",
                     cfg.name.c_str());
       logEvent(cfg.name + ": configuration updated live, reconnecting");
-      // Every discovered URL/token is potentially stale once the device
-      // URL, credentials, or WS-Security mode change - full rediscovery
-      // (via the "not subscribed" retry path below, same one a fresh boot
-      // or a lost subscription already takes) is the only safe path, not
-      // a partial patch-up.
-      // snapshotUri specifically needs the lock (unlike eventServiceUrl/
-      // mediaServiceUrl/pullPointUrl/profileToken below, which - like
-      // every other field this task touches unlocked elsewhere in this
-      // file - are read only by this same task): a Telegram /snap
-      // command on loop()'s task reads it cross-task via
-      // fetchOneSnapshot/sendOnDemandSnapshot (telegram_commands.cpp), under this
-      // same lock, and could otherwise race a plain String assignment
-      // here mid-read.
+      // Any URL/token may be stale after an edit, so rediscover everything via
+      // the normal resubscribe path. snapshotUri is locked because /snap reads
+      // it from loop()'s task.
       { CameraStateLock lock(st); st.subscriptionActive = false; st.snapshotUri = ""; }
       st.eventServiceUrl = ""; st.mediaServiceUrl = ""; st.pullPointUrl = ""; st.profileToken = "";
       st.retryDelayMs = 0; st.retryStreak = 0; st.lastRetry = 0; // retry immediately, not after a stale backoff
 
       if (cfg.user.length() == 0 || cfg.pass.length() == 0) {
-        // Unlike the same check at task startup above, this does NOT exit
-        // the task - a task that's already been happily monitoring a
-        // camera for weeks shouldn't die outright over one bad edit. It
-        // just stays not-subscribed (every SOAP call below will cleanly
-        // fail and retry, same as an unreachable camera) until fixed via
-        // another edit.
+        // Unlike at startup, don't exit over a bad edit; stay unsubscribed
+        // until fixed.
         Serial.printf("[%s] ERROR: no username/password after this edit - camera will NOT be monitored "
                       "until this is fixed via the web UI.\n", cfg.name.c_str());
         String cameraName = cfg.name;
@@ -802,9 +632,8 @@ void cameraTaskFn(void* pvParameters) {
     }
 
     if (WiFi.status() != WL_CONNECTED) {
-      // main.cpp's loop() owns reconnecting; this task just waits and, once
-      // back, treats itself as needing a fresh subscription (the old one
-      // almost certainly timed out server-side during the outage anyway).
+      // loop() reconnects WiFi; afterwards this task resubscribes (the old one
+      // has likely expired).
       if (st.subscriptionActive) { // same-task read, no lock needed
         { CameraStateLock lock(st); st.subscriptionActive = false; }
         st.pullPointUrl = "";
@@ -813,39 +642,21 @@ void cameraTaskFn(void* pvParameters) {
       continue;
     }
 
-    // Confirmed subscribed as of the top of this pass - refreshed every
-    // iteration while subscribed, same "continuously refreshed while
-    // healthy" shape as cameraSoapCall's lastContactMs. Deliberately
-    // decoupled from the snapshotBusy skip below: we already KNOW the
-    // subscription is active here regardless of whether this particular
-    // pass's own poll/renew gets skipped, so checkSubscriptionHealth
-    // (which reads this unconditionally, skip or not) shouldn't see a
-    // camera that's actually fine start looking stale just because
-    // snapshot fetches happened to keep landing on consecutive passes.
+    // Refreshed every pass while subscribed, even when polling is skipped
+    // below, so subscription health doesn't go stale while snapshots are busy.
     if (st.subscriptionActive) st.lastSubscribedMs = millis();
 
-    // A snapshot fetch (motion/tamper alert or timelapse capture on this
-    // same task, or an on-demand /snap from loop()'s task) has an HTTP GET
-    // in flight to this camera right now - skip this iteration's
-    // poll/renew/resubscribe entirely rather than risk a second concurrent
-    // connection to a camera whose embedded HTTP stack may only tolerate
-    // one or two at all. Retried next loop pass (10ms later), same as any
-    // other "not due yet" gate below - see CameraState::snapshotInFlight's
-    // own comment (camera.h). checkCameraOnlineStatus/checkSubscriptionHealth/
-    // checkMotionWatchdog/checkPendingMotionDigest below still run either
-    // way - none of them open a connection to the camera.
+    // A snapshot GET is in flight to this camera; skip SOAP this pass rather
+    // than open a second connection. The health checks below still run.
     bool snapshotBusy;
     { CameraStateLock lock(st); snapshotBusy = st.snapshotInFlight; }
 
     if (snapshotBusy) {
-      // Nothing to do this pass - see the comment above.
     } else if (!st.subscriptionActive) {
       unsigned long dueInterval = (st.retryDelayMs > 0) ? st.retryDelayMs : RETRY_INTERVAL_MS;
       if (millis() - st.lastRetry >= dueInterval) {
-        // Jitter the retry timer (+/- up to 2s) so cameras that failed
-        // together at boot or during a WiFi outage don't stay locked in
-        // lockstep, all retrying (and all failing again, if the network's
-        // still overwhelmed) on the same tick forever.
+        // +/-2s jitter so cameras that failed together don't retry in
+        // lockstep.
         st.lastRetry = millis() - (unsigned long)random(0, 2001);
         Serial.printf("[%s] Retrying subscription...\n", cfg.name.c_str());
         if (st.eventServiceUrl.length() == 0) {
@@ -854,16 +665,12 @@ void cameraTaskFn(void* pvParameters) {
           cameraGetEventServiceCapabilities(cfg, st) && cameraCreatePullPoint(cfg, st);
         }
 
-        // Both calls above set st.subscriptionActive=true on success (see
-        // cameraCreatePullPoint) as a side effect, so it's the signal here
-        // regardless of which branch ran. Same-task read, no lock needed.
+        // Both paths set subscriptionActive on success.
         if (st.subscriptionActive) {
           Serial.printf("[%s] Subscription recovered.\n", cfg.name.c_str());
           st.retryStreak = 0;
           st.retryDelayMs = 0;
-          // Lock-guarded write, unlike retryStreak/retryDelayMs above -
-          // totalReconnects/reconnectHistory are read cross-task by the
-          // dashboard (see their own comments, camera.h).
+          // Read by the dashboard, so locked.
           {
             CameraStateLock lock(st);
             st.totalReconnects++;
@@ -872,9 +679,7 @@ void cameraTaskFn(void* pvParameters) {
             if (st.reconnectHistoryCount < EVENT_HISTORY_RING_SIZE) st.reconnectHistoryCount++;
           }
         } else {
-          // Never let the retry cadence alone go slower than half this
-          // camera's offline threshold - see RETRY_BACKOFF_MAX_MS's and
-          // detectorSafeBackoffCapMs's (backoff.h) comments for why.
+          // See RETRY_BACKOFF_MAX_MS.
           unsigned long retryBackoffCap =
               detectorSafeBackoffCapMs(RETRY_BACKOFF_MAX_MS, cfg.offlineThresholdMs, RETRY_INTERVAL_MS);
           st.retryDelayMs = nextBackoffDelayMs(st.retryDelayMs, RETRY_INTERVAL_MS, retryBackoffCap);
@@ -884,9 +689,6 @@ void cameraTaskFn(void* pvParameters) {
         }
       }
     } else {
-      // Confirmed subscribed as of the top of this pass - refreshed every
-      // lastSubscribedMs is already refreshed above (unconditionally,
-      // decoupled from the snapshotBusy skip) - nothing to do here for it.
       if (millis() - st.lastPull >= safePollIntervalMs(cfg)) {
         st.lastPull = millis();
         cameraPullMessages(cfg, st);
@@ -894,22 +696,13 @@ void cameraTaskFn(void* pvParameters) {
       if (millis() - st.lastRenew >= (SUBSCRIPTION_LIFETIME_MS - RENEW_MARGIN_MS)) {
         cameraRenewSubscription(cfg, st);
       }
-      // Only once actually subscribed - same reasoning as lastPull/
-      // lastRenew above, no point capturing before a snapshot URI even
-      // exists (triggerTimelapseCapture no-ops on that anyway, but no
-      // reason to even try before subscription succeeds once).
       if (cfg.timelapseIntervalMin > 0 &&
           millis() - st.lastTimelapseMs >= (unsigned long)cfg.timelapseIntervalMin * 60000UL) {
         st.lastTimelapseMs = millis();
         triggerTimelapseCapture(cfg, st);
       }
-      // Subscribed and polling fine, but the very first
-      // cameraFetchProfileAndSnapshotUri call (cameraSetupSequence) failed
-      // and nothing else ever retries it once eventServiceUrl is set (see
-      // CameraState::lastSnapshotUriRetryMs's own comment) - without this,
-      // a single transient GetProfiles/GetSnapshotUri failure permanently
-      // breaks photo alerts/timelapse for this camera while motion
-      // detection keeps working normally, masking the problem.
+      // The first profile/snapshot URI fetch failed and nothing else retries
+      // it; without this, photos stay broken while motion keeps working.
       if (st.snapshotUri.length() == 0 &&
           millis() - st.lastSnapshotUriRetryMs >= SNAPSHOT_URI_RETRY_INTERVAL_MS) {
         st.lastSnapshotUriRetryMs = millis();
@@ -924,10 +717,7 @@ void cameraTaskFn(void* pvParameters) {
     checkSubscriptionHealth(cfg, st); // after checkCameraOnlineStatus - reads its just-updated st.isOffline
     checkMotionWatchdog(cfg, st);
     checkPendingMotionDigest(cfg, st);
-    // Global cross-camera state, not specific to this camera - piggybacks
-    // on every camera task's own poll cadence purely for a regular "is a
-    // digest due yet" heartbeat, same reasoning checkPendingMotionDigest
-    // above already established for this exact call site.
+    // Global check; any camera's loop serves as its clock.
     checkMultiCameraAlertDigest();
 
     vTaskDelay(pdMS_TO_TICKS(10));

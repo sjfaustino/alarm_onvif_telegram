@@ -10,17 +10,14 @@ WifiCredentials g_wifiCredentials;
 
 static const unsigned long WIFI_CONNECT_TIMEOUT_MS = 30000UL;
 
-// Extra idle time between reconnect attempts, on top of connectWiFi()'s own
-// ~60s (30s primary + 30s backup). Doubles per consecutive failure up to
-// WIFI_RETRY_BACKOFF_MAX_MS; resets to 0 on success - avoids retrying both
-// networks at a fixed cadence for the whole length of a multi-hour outage.
+// Extra wait between reconnect attempts, on top of connectWiFi's ~60s; doubles
+// per failure up to the cap and resets on success.
 static const unsigned long WIFI_RETRY_BACKOFF_START_MS = 10000UL;  // extra wait after the 1st consecutive failure
 static const unsigned long WIFI_RETRY_BACKOFF_MAX_MS   = 300000UL; // cap: 5 minutes between attempts
 static uint8_t g_wifiFailureStreak = 0;
 static unsigned long g_wifiRetryDelayMs = 0;
 static unsigned long g_wifiRetryDueMs = 0; // millis() timestamp; next connectWiFi() attempt is due once reached
 
-// Attempts one network, blocking up to timeoutMs. Returns whether it connected.
 static bool tryConnectWiFi(const WifiNetwork& net, unsigned long timeoutMs) {
   if (net.ssid.length() == 0) return false;
   Serial.printf("\nConnecting to WiFi \"%s\"...\n", net.ssid.c_str());
@@ -36,11 +33,8 @@ static bool tryConnectWiFi(const WifiNetwork& net, unsigned long timeoutMs) {
   return WiFi.status() == WL_CONNECTED;
 }
 
-// Applies the stored static IP config, if enabled - must run after
-// WiFi.mode(WIFI_STA) but before WiFi.begin(). Same config applies
-// regardless of which network (primary/backup) ends up connecting. Falls
-// back to DHCP if the stored values don't parse, rather than failing to
-// connect at all over a config typo.
+// Call after WiFi.mode() and before WiFi.begin(). Falls back to DHCP if the
+// stored values don't parse.
 static void applyStaticIpConfig() {
   if (!g_wifiCredentials.useStaticIP) return;
 
@@ -62,9 +56,7 @@ static void applyStaticIpConfig() {
                 subnet.toString().c_str(), dns.toString().c_str());
 }
 
-// Tries primary, then backup (if configured) on failure. If backup is what
-// worked, it's promoted to primary and persisted, so future boots try
-// whichever network is actually reachable first.
+// Primary, then backup. If only backup works, it becomes primary (persisted).
 void connectWiFi() {
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
