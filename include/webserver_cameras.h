@@ -8,143 +8,65 @@
 #include "background_job.h" // BackgroundJobStartOutcome
 #include "telegram_i18n.h" // MotionDetectionKind - startTestAlertAsync
 
-// Cameras panel: live status table, Add/Edit form, Test Connection. Split
-// out of webserver.cpp - see webserver_network.h's comment for why.
+// Cameras panel: status table, Add/Edit form, bulk actions, background tests.
 
-// prefill/isEdit repopulate the form after an edit link, a failed save, or
-// a Test Connection round trip - null prefill is the blank "Add" state.
-// liveCameras/liveStates are startWebServer()'s live vectors, read only to
-// show current subscription/alert status alongside the persisted config.
+// prefill/isEdit repopulate the form (null prefill = blank Add form).
+// liveCameras/liveStates supply live status next to the stored config.
 String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
                            std::vector<CameraConfig>* liveCameras, std::vector<CameraState>* liveStates);
 
-// Reads the Add/Edit camera form into a CameraConfig - used both to save
-// (saveCameraSubmission) and to test a connection without saving.
+// Add/Edit form -> CameraConfig, for both saving and Test Connection.
 CameraConfig parseCameraForm(PsychicRequest* request);
 
-// originalName is "" for a new camera, non-empty for an edit (cam.name may
-// differ - a rename). A blank password on an edit keeps the current one.
-//
-// liveCameras/liveStates (startWebServer()'s live vectors, same ones
-// renderCamerasPanel reads) let a save apply immediately to a camera
-// that's already running, instead of always requiring a reboot:
-//   - editing a camera whose task is already running (still enabled
-//     before and after) stages the new config via requestLiveConfigReload
-//     (camera.h) - the owning task picks it up and reconnects within
-//     ~10ms, no reboot needed.
-//   - flipping a previously-disabled camera to enabled spawns its task
-//     live (camera_tasks.h) - same as it would get at the next boot.
-//   - disabling a camera whose task is already running stops it live too
-//     (requestCameraStop, camera.h) - the task exits on its own next loop
-//     pass, no reboot needed.
-//   - a brand new camera (not yet in liveCameras - added after this
-//     board's current boot) still needs a reboot: liveCameras/liveStates
-//     are sized once at boot and never grow, so there's no slot to spawn
-//     a task into yet. applyNote explains which case just happened, in
-//     plain English, for the caller to show as a banner after redirecting
-//     back to /cameras - "" if nothing live happened (the ordinary
-//     reboot-required case, unchanged from before this).
+// originalName is "" for a new camera (cam.name differs on a rename). A blank
+// password on edit keeps the current one. Applies live where possible: a
+// running camera reloads its config, a newly enabled one gets a task, a newly
+// disabled one stops, and a new camera is staged for loop() to add
+// (stagePendingNewCamera). applyNote says which happened ("" = reboot needed).
 bool saveCameraSubmission(CameraConfig cam, const String& originalName, String& banner, String& applyNote,
                            std::vector<CameraConfig>* liveCameras, std::vector<CameraState>* liveStates);
 
-// Stops name's live task (requestCameraStop) if it's currently running,
-// returning whether it was. Call this from the /delete route BEFORE (or
-// after - order doesn't matter, they touch different stores) removing the
-// camera from NVS, so a deleted camera's task doesn't keep monitoring and
-// alerting on a camera the dashboard no longer lists.
+// Stops name's running task, if any; call from /delete so a deleted camera
+// stops alerting.
 bool stopLiveCameraIfRunning(const String& name, std::vector<CameraConfig>* liveCameras,
                               std::vector<CameraState>* liveStates);
 
-// Reads the same quietHoursEnabled/quietStart/quietEnd fields the
-// per-camera Add/Edit form uses and overwrites EVERY camera's quiet hours
-// with them at once (wholesale, via replaceAllCameras - see the .cpp for
-// why this doesn't skip disabled cameras). Live-reloads every already-
-// running enabled camera the same way a single-camera edit would; returns
-// a result string for the caller to show as a banner. Call this from the
-// /cameras/quiet-hours-all route handler.
+// Overwrites every camera's quiet hours from the form and live-reloads the
+// running ones. Returns banner text.
 String applyQuietHoursToAllCameras(PsychicRequest* request, std::vector<CameraConfig>* liveCameras,
                                     std::vector<CameraState>* liveStates);
 
-// Same shape as applyQuietHoursToAllCameras above (reads ONE checkbox
-// field the per-camera Add/Edit form uses, overwrites EVERY camera's
-// personAlertsEnabled at once via updateAllCameras, live-reloads every
-// already-running enabled camera, returns a result string for the caller
-// to show as a banner) - added once the per-camera toggle existed and
-// turned out tedious to set property-wide one camera at a time.
-// Deliberately separate from applyVehicleAlertsToAllCameras below (an
-// earlier combined version wrote both fields from one form with both
-// checkboxes defaulting to checked - bulk-setting just one axis silently
-// overwrote the other back to enabled too, undoing e.g. a busy-street
-// camera's deliberately-disabled vehicle alerts) - each button here only
-// ever touches its own field, the other is left exactly as each camera
-// already has it. Call this from the /cameras/person-alerts-all route
-// handler.
+// Sets personAlertsEnabled on every camera (live-reloading running ones).
+// Person, vehicle and pet each get their own button: a combined form once
+// silently re-enabled a camera's deliberately-disabled vehicle alerts.
 String applyPersonAlertsToAllCameras(PsychicRequest* request, std::vector<CameraConfig>* liveCameras,
                                       std::vector<CameraState>* liveStates);
 
-// Same as applyPersonAlertsToAllCameras above, for vehicleAlertsEnabled -
-// see its comment for why this is a separate function/button/route rather
-// than one combined form. Call this from the /cameras/vehicle-alerts-all
-// route handler.
 String applyVehicleAlertsToAllCameras(PsychicRequest* request, std::vector<CameraConfig>* liveCameras,
                                        std::vector<CameraState>* liveStates);
 
-// Same as applyPersonAlertsToAllCameras above, for petAlertsEnabled - see
-// its comment for why this is a separate function/button/route rather
-// than one combined form. Call this from the /cameras/pet-alerts-all
-// route handler.
 String applyPetAlertsToAllCameras(PsychicRequest* request, std::vector<CameraConfig>* liveCameras,
                                    std::vector<CameraState>* liveStates);
 
-// Runs a live GetCapabilities -> GetServiceCapabilities/GetEventProperties
-// -> GetProfiles/GetSnapshotUri -> CreatePullPointSubscription sequence
-// against cfg without touching NVS - see the .cpp for the full rationale.
-// The actual (slow, up to ~60s against an unresponsive camera - 6
-// sequential SOAP calls each bounded by HTTP_TIMEOUT_MS) work - see
-// startTestConnectionAsync below for why nothing calls this directly from
-// a request handler.
+// Full live connection test against cfg without saving: capabilities, events,
+// profiles/snapshot URI, a test subscription. Up to ~60s, so it's always run
+// via startTestConnectionAsync.
 String testCameraConnection(CameraConfig cfg);
 
 // ============================================================
-// Test Connection background wrapper - same reasoning as
-// startTestAllCamerasAsync below (PsychicHttp here services one request
-// at a time), but this one needs the just-submitted, not-yet-saved form
-// data carried into the task, unlike testAllCameraConnections/
-// startCameraDiscoveryAsync which read everything they need from NVS
-// themselves. cfg is heap-copied by startTestConnectionAsync and freed by
-// the task, the same ownership pattern camera_tasks.h's CameraTaskContext
-// already uses for the same reason.
+// Background jobs. PsychicHttp serves one request at a time, so slow work runs
+// on its own task and the page polls for the result.
 // ============================================================
 
-// Starts testCameraConnection(cfg) on a background FreeRTOS task instead
-// of the calling task. A no-op (doesn't start a second overlapping run,
-// same "one at a time" rule test-all/discovery already follow) if a test
-// is already in progress - the return value tells the caller which of the
-// three outcomes happened, for the /cameras/test route handler to show an
-// accurate banner instead of always assuming success.
+// Starts testCameraConnection on a task (cfg is copied). Returns whether it
+// started or one was already running.
 BackgroundJobStartOutcome startTestConnectionAsync(const CameraConfig& cfg);
 
-// Renders the current Test Connection status: "testing in the background"
-// while one is in progress, the last completed run's result (already
-// htmlEscape()d internally by testCameraConnection - see its own comment)
-// once one exists, or "" if no test has ever run this boot. Safe to call
-// from any task (internally locked) - renderCamerasPanel calls this
-// itself, so it shows up on a normal page load too, not just right after
-// clicking the button.
+// Test Connection status HTML: running, last result, or "".
 String renderTestConnectionStatus();
 
-// One camera's result from testAllCameraConnections below - a condensed
-// version of what testCameraConnection's own prose paragraph says, sized
-// for a one-row-per-camera summary table instead of a full paragraph per
-// camera. Deliberately does NOT include a CreatePullPointSubscription
-// check the way testCameraConnection's single-camera test does - see
-// testAllCameraConnections' own comment for why: an already-monitored
-// camera (the common case "test all" runs against) already has a real,
-// live subscription from its own running task, and creating a second one
-// per click risks disrupting it on a camera firmware that only supports
-// one active subscription at a time. reachable/eventServiceOk are a
-// strong enough "did my network change break this camera" signal without
-// that risk.
+// One camera's Test-all result. No test subscription, unlike the single test:
+// the camera's own task already holds one, and some firmware allows only one.
 struct CameraTestResult {
   String name;
   bool skipped = false;        // true only for a disabled camera - nothing was actually tested
@@ -153,107 +75,44 @@ struct CameraTestResult {
   String detail;               // short human reason for the first failure, "" if fully OK
 };
 
-// Tests every ENABLED camera currently in NVS (not whatever's typed into
-// the Add/Edit form) - a disabled camera is reported as skipped, not
-// probed. This is the actual (slow) work - see startTestAllCamerasAsync
-// below for why nothing calls this directly from a request handler.
+// Tests every enabled camera in NVS; disabled ones are reported as skipped.
 std::vector<CameraTestResult> testAllCameraConnections();
 
-// Renders testAllCameraConnections' results as a summary table, for use as
-// a renderShell banner (raw HTML, like testCameraConnection's own string).
 String renderCameraTestAllResults(const std::vector<CameraTestResult>& results);
 
-// Starts testAllCameraConnections() on a background FreeRTOS task instead
-// of running it on the calling task - see testAllCameraConnections' own
-// comment for why a synchronous bulk test would block the whole
-// dashboard, not just the requester, for potentially minutes. A no-op
-// (doesn't start a second overlapping run) if a test is already in
-// progress, OR if a Telegram send is currently in flight (telegramSendInProgress,
-// telegram.h) - deferred rather than risking this job's per-camera SOAP
-// burst overlapping an in-flight photo send's memory footprint; a retry a
-// moment later (once the send has finished either way) goes through
-// normally. Either case reports as AlreadyRunning - the return value
-// tells the caller which of the three outcomes happened, for the
-// /cameras/test-all route handler to show an accurate banner instead of
-// always assuming success.
+// Starts testAllCameraConnections on a task. Also deferred (AlreadyRunning)
+// while a Telegram send is in flight, to avoid overlapping its memory use.
 BackgroundJobStartOutcome startTestAllCamerasAsync();
 
-// Renders the current bulk-test status: "a test is running" while one is
-// in progress, the last completed run's results table once one exists, or
-// "" if no test has ever run this boot. Safe to call from any task
-// (internally locked) - renderCamerasPanel calls this itself, so it shows
-// up on a normal page load too, not just right after clicking the button.
 String renderTestAllStatus();
 
 // ============================================================
-// Network camera discovery (WS-Discovery) - like an NVR's own "search the
-// network" button. onvif_discovery.h (lib/) has the pure Probe-message-
-// building/ProbeMatch-parsing logic; these two functions are the ESP32-
-// specific UDP send/receive and background-task glue around it, same
-// split as testAllCameraConnections above.
+// Network camera discovery (WS-Discovery). lib/onvif_discovery holds the pure
+// probe/parse logic; this is the UDP and task glue.
 // ============================================================
 
-// Starts a WS-Discovery probe on a background FreeRTOS task instead of the
-// calling (PsychicHttp) task - same reasoning as startTestAllCamerasAsync
-// above: the listen window is a few seconds by design (has to give slower
-// cameras time to answer a multicast probe), which would otherwise block
-// the whole dashboard for that long. A no-op if a search is already in
-// progress, OR if a Telegram send is currently in flight - same
-// telegramSendInProgress deferral as startTestAllCamerasAsync above (this
-// job's own UDP listen window overlapping an in-flight photo send is the
-// specific coincidence a real field incident traced a near-heap-exhaustion
-// event to). The return value tells the caller which of the three
-// outcomes happened, for the /cameras/discover route handler to show an
-// accurate banner instead of always assuming success.
+// Starts a probe on a task (the listen window is seconds long). Deferred while
+// a Telegram send is in flight - overlapping the two once nearly exhausted the
+// heap.
 BackgroundJobStartOutcome startCameraDiscoveryAsync();
 
-// Renders the current discovery status: "a search is running" while one is
-// in progress, the last completed run's results (a table with an Add link
-// per discovered camera, prefilling the Add-camera form below with its
-// address and best-effort name - WS-Discovery never carries credentials,
-// so the user still types a username/password by hand) once one exists,
-// or "" if no search has run yet this boot. Safe to call from any task
-// (internally locked) - renderCamerasPanel calls this itself.
+// Discovery results with an Add link per camera (prefilling address and name;
+// credentials are never discovered).
 String renderCameraDiscoveryStatus();
 
 // ============================================================
-// Send Test Alert (per camera) - manual, on-demand verification of the
-// full snapshot-fetch/recipient-filtering/Telegram-delivery chain, same
-// "can't run on the calling PsychicHttp task" reasoning as Test
-// Connection/Test All/discovery above. See telegram.h's sendTestAlert for
-// the actual (potentially several-second: one camera HTTP fetch plus one
-// or more TLS sends to Telegram) work.
+// Send Test Alert (per camera): exercises fetch, recipient filtering and
+// delivery.
 // ============================================================
 
-// Starts sendTestAlert(cfg, st, ..., kind, isPetEvent) on a background
-// FreeRTOS task instead of the calling task. A no-op (doesn't start a
-// second overlapping run, same "one at a time" rule test-all/discovery/
-// test-connection already follow) if one is already in progress - the
-// return value tells the /cameras/test-alert route handler which of the
-// three outcomes happened, for an accurate banner instead of always
-// assuming success. cfg is heap-copied (freed by the task) - safe to pass
-// a local copy. st is taken by reference, NOT copied: it must be the
-// actual live CameraState for this camera (liveStates[idx]), since
-// sendTestAlert reads its real, already-resolved snapshotUri and
-// credentials - safe to hold a pointer to across the task's lifetime
-// since liveStates is sized once at boot and never freed (same
-// assumption every other cross-task CameraState pointer in this project
-// already relies on). kind (default Generic) and isPetEvent (default
-// false) pick which Person/Vehicle/Pet/plain wording the dashboard's kind
-// selector chose - see sendTestAlert's own comment (telegram.h).
+// Starts sendTestAlert on a task. cfg is copied; st must be the live
+// CameraState (liveStates is never reallocated) since the test uses its
+// resolved snapshot URI and credentials.
 BackgroundJobStartOutcome startTestAlertAsync(const CameraConfig& cfg, CameraState& st,
                                                MotionDetectionKind kind = MotionDetectionKind::Generic,
                                                bool isPetEvent = false);
 
-// Renders the current Send-Test-Alert status: "sending in the background"
-// while one is in progress, the last completed run's result once one
-// exists, or "" if none has run yet this boot. Safe to call from any task
-// (internally locked) - renderCamerasPanel calls this itself, so it shows
-// up on a normal page load too, not just right after clicking the button.
 String renderTestAlertStatus();
 
-// True while any of the four background jobs above (test connection, test
-// all, discovery, send test alert) is running - lets renderShell()
-// (webserver.cpp) decide whether to auto-refresh the Cameras page instead
-// of leaving the user to manually reload.
+// True while any background camera job runs, so the page auto-refreshes.
 bool cameraJobsInProgress();

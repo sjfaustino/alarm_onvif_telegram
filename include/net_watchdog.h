@@ -2,15 +2,9 @@
 #include <Arduino.h>
 #include "config.h" // NET_WATCHDOG_PIN_DEFAULT
 
-// Optional internet-connectivity watchdog - same "optional peripheral, off
-// by default, graceful fallback" shape as sd_store.h/rtc_store.h. Tests
-// actual WAN reachability (not just WiFi.status()==WL_CONNECTED, which
-// only confirms the WiFi-to-router hop - a 4G/LTE router can lose its
-// uplink and never recover while that stays up the whole time) and, once
-// an outage has lasted longer than a configurable threshold, pulses a
-// relay wired in series with the router's own power to force a
-// power-cycle. See config.h's own comment on this feature for the pin-
-// safety reasoning.
+// Optional internet watchdog, off by default. Probes real WAN reachability (a
+// 4G router can lose its uplink while WiFi stays connected) and, after a
+// configurable outage, pulses a relay to power-cycle the router.
 
 struct NetWatchdogSettings {
   bool enabled = false;
@@ -22,52 +16,32 @@ struct NetWatchdogSettings {
 NetWatchdogSettings loadNetWatchdogSettings();
 bool saveNetWatchdogSettings(const NetWatchdogSettings& settings);
 
-// Call once from setup() - sets pinMode(OUTPUT) and drives the pin to its
-// resting ("router powered") state if enabled AND the configured pin
-// passes isReservedOrUnsafePin's check (lib/net_watchdog_logic). Serial-
-// only warning and stays inactive otherwise - a bad pin choice is a setup
-// mistake to fix and reboot from, not a runtime data-loss risk worth a
-// Telegram alert (same tone as the RTC's own init-failure path).
+// Call once from setup(). Drives the relay to its resting state if enabled and
+// the pin is safe; otherwise logs and stays inactive.
 void initNetWatchdog();
 
-// True only if the setting is enabled AND initNetWatchdog() accepted the
-// configured pin - mirrors rtcActive()/sdActive()'s shape.
+// Enabled and the pin was accepted.
 bool netWatchdogActive();
 
-// Pulses the relay right now, ignoring the outage/threshold state machine
-// entirely - for the Hardware page's "Pulse relay now" test button, so
-// wiring can be verified without waiting for (or faking) a real outage.
-// Does NOT touch the outage-tracking timers, so it can't disturb a real
-// outage's own "was down since/for" reporting if one happens to be in
-// progress. False (no-op) if !netWatchdogActive() - nothing to pulse.
+// "Pulse relay now" test button: bypasses the state machine and leaves outage
+// tracking alone. False if inactive.
 bool netWatchdogManualPulse();
 
-// What checkInternetAndMaybePulseRelay found this call. Recovered is
-// reported separately from OutageDetected, at recovery time rather than
-// when the outage begins or crosses the pulse threshold - an alert
-// attempted at either of those moments needs the very WAN connectivity
-// that's confirmed absent right then to actually deliver, so it's likely
-// to fail silently with no retry; by the time connectivity is confirmed
-// restored, sending a report back is reliable. outageStartMs/
-// outageDurationMs let the caller say "was down since HH:MM (for X)" -
-// meaningful only when event == Recovered.
+// Recovered is reported when WAN comes back rather than when the outage starts
+// - an alert then would need the missing WAN. outageStartMs/ outageDurationMs
+// are only meaningful for Recovered.
 struct NetWatchdogCheckResult {
   enum class Event { None, OutageDetected, Recovered } event = Event::None;
   unsigned long outageStartMs = 0;    // millis() timestamp; valid only if event == Recovered
   unsigned long outageDurationMs = 0; // valid only if event == Recovered
 };
 
-// Call on NET_WATCHDOG_CHECK_INTERVAL_MS's own cadence (main.cpp's
-// loop()) - does the actual WAN-reachability probe (a short-timeout raw
-// TCP connect to a fixed, well-known IP:port - deliberately not DNS-
-// based, since DNS itself needs working WAN to resolve anything), and
-// runs the outage-threshold/pulse decision. Event::None every other call
-// (no-op if !netWatchdogActive(), still within the threshold, or nothing
-// to report).
+// Call every NET_WATCHDOG_CHECK_INTERVAL_MS. Probes with a short raw TCP
+// connect to a fixed IP (DNS needs WAN too) and runs the outage/pulse
+// decision.
 NetWatchdogCheckResult checkInternetAndMaybePulseRelay();
 
-// Status for the dashboard (Hardware > Internet page) - reflects live
-// state, doesn't re-probe.
+// Hardware page status; doesn't re-probe.
 struct NetWatchdogStatus {
   bool settingEnabled = false;
   bool available = false;       // netWatchdogActive()'s value

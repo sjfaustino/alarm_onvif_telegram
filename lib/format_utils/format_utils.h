@@ -1,47 +1,26 @@
 #pragma once
 #include <Arduino.h> // explicit, not chained - see camera_serialize.h's comment
 
-// Small pure text-formatting helpers used by both main.cpp (Telegram
-// captions/heartbeat) and webserver.cpp (dashboard HTML) - split out here,
-// where formatUptime used to be duplicated separately in each, so they
-// can't drift apart and can be unit-tested (test/test_format_utils).
+// Pure formatting helpers shared by Telegram and the dashboard, tested
+// natively.
 
-// "1d 2h 3m" (days omitted if 0, no seconds).
+// "1d 2h 3m" (days omitted if 0).
 String formatUptime(unsigned long ms);
 
-// "Xh Ym ago" (reusing formatUptime), or "just now" under a minute -
-// formatUptime alone would print "0h 0m ago" for a fresh event, which
-// reads like stale data. nowMs is passed in (rather than read from
-// millis() internally) so this stays deterministic to test - pass
-// millis() at the call site.
+// "Xh Ym ago", or "just now" under a minute. nowMs passed in for testability.
 String formatElapsedSince(unsigned long eventMs, unsigned long nowMs);
 
-// Escapes &, <, >, ", and ' (as &#39;) for safe inclusion in HTML text/
-// attribute content AND inside a single-quoted JS string embedded in an
-// attribute (e.g. onsubmit="return confirm('...')") - see the .cpp's own
-// comment on the ' case for the real reflected-XSS hole an unescaped
-// single quote opened there. Every attribute this project emits is
-// double-quoted, so ' isn't load-bearing for THAT alone - it's escaped
-// because of the nested single-quoted-JS-string case, not in spite of it.
+// Escapes & < > " and ' (as &#39;) - the quote matters for single-quoted JS
+// inside attributes (onsubmit="return confirm('...')"), which was once an XSS
+// hole.
 String htmlEscape(const String& s);
 
-// Percent-encodes anything outside the URL-safe unreserved set (RFC 3986:
-// alnum, -, _, ., ~) - for putting free text (e.g. a camera name) into a
-// query string.
+// RFC 3986 percent-encoding for query-string values.
 String urlEncode(const String& s);
 
-// Extracts "host[:port]" out of a "scheme://host[:port]/path..." URL, for
-// display (the camera list, both Serial and Telegram versions).
+// "host[:port]" from a URL, for display.
 String extractHost(const String& url);
 
-// Escapes \, ', and line terminators for safe inclusion inside a single-
-// quoted JavaScript string literal in a <script> block's own text content
-// (e.g. var x = 'VALUE';) - NOT the same job as htmlEscape(), which is for
-// HTML attribute/text content and would be silently WRONG here: entities
-// like &#39; are only decoded by the HTML parser for attribute/text
-// content, not inside <script> element text, so htmlEscape()'d output
-// would appear as the literal six characters "&#39;" in the resulting JS
-// string instead of a quote. Use this any time a value - especially one
-// that didn't go through a validating form (e.g. arrived via config
-// Import) - is embedded directly into a <script> block's source text.
+// Escapes for a single-quoted JS string inside <script> text. Not htmlEscape:
+// entities aren't decoded inside <script>, so &#39; would appear literally.
 String jsSingleQuoteEscape(const String& s);

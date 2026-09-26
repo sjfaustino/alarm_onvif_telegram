@@ -3,26 +3,13 @@
 #include "config.h" // BRIDGE_WATCHDOG_PIN_DEFAULT
 #include "camera_store.h" // CameraConfig
 
-// Forward-declared, not #include "camera.h" - that header pulls in real
-// FreeRTOS headers (CameraState::stateMutex's SemaphoreHandle_t) that
-// don't exist under the native test environment. This header only ever
-// needs CameraState as an array/pointer parameter type below, which a
-// forward declaration is sufficient for; src/bridge_watchdog.cpp (ESP32-
-// only, never compiled natively) includes the real camera.h itself for
-// the complete type it actually needs to dereference. This is what lets
-// lib/config_import_parse include this header (for BridgeWatchdogSettings)
-// and still build under env:native.
+// Forward-declared: camera.h needs FreeRTOS, which native tests don't have,
+// and lib/config_import_parse includes this header.
 struct CameraState;
 
-// Optional camera-bridge watchdog - same "optional peripheral, off by
-// default, graceful fallback" shape as net_watchdog.h/sd_store.h/
-// rtc_store.h. Watches two specific configured cameras (matched by name)
-// and, once BOTH have been CameraState::isOffline for longer than a
-// configurable threshold, pulses a relay wired to the local wireless
-// bridge carrying them to force a power-cycle - the same recovery
-// mechanism net_watchdog.h uses for the board's own WAN link, applied to a
-// different failure signal. See config.h's own comment on this feature
-// for the pin-safety/pin-conflict reasoning.
+// Optional bridge watchdog, off by default: when both configured cameras
+// (matched by name) have been offline past a threshold, pulses a relay to
+// power-cycle the wireless bridge carrying them.
 
 struct BridgeWatchdogSettings {
   bool enabled = false;
@@ -36,53 +23,32 @@ struct BridgeWatchdogSettings {
 BridgeWatchdogSettings loadBridgeWatchdogSettings();
 bool saveBridgeWatchdogSettings(const BridgeWatchdogSettings& settings);
 
-// Call once from setup() - sets pinMode(OUTPUT) and drives the pin to its
-// resting ("bridge powered") state if enabled AND the configured pin
-// passes isReservedOrUnsafePin's check AND doesn't conflict
-// (watchdogPinsConflict) with the currently-saved NetWatchdogSettings -
-// this last check is defense in depth, the dashboard save routes
-// (webserver.cpp) are the primary guard. Serial-only warning and stays
-// inactive otherwise - a bad config is a setup mistake to fix and reboot
-// from, not a runtime data-loss risk worth a Telegram alert (same tone as
-// net_watchdog's own init-failure path).
+// Call once from setup(). Drives the relay to its resting state if enabled and
+// the pin is safe and doesn't clash with the internet watchdog's (the
+// dashboard is the primary guard). A bad config just logs to Serial and stays
+// inactive.
 void initBridgeWatchdog();
 
-// True only if the setting is enabled AND initBridgeWatchdog() accepted
-// the configured pin - mirrors netWatchdogActive()'s shape.
+// Enabled and the pin was accepted.
 bool bridgeWatchdogActive();
 
-// Pulses the relay right now, ignoring the outage/threshold state machine
-// entirely - see net_watchdog.h's bridgeWatchdogManualPulse for the full reasoning
-// (same pattern: doesn't touch the outage-tracking timers, so a real
-// in-progress outage's own "was down since/for" reporting is unaffected).
-// False (no-op) if !bridgeWatchdogActive().
+// Pulses now, bypassing the state machine and leaving outage tracking alone.
+// False if inactive.
 bool bridgeWatchdogManualPulse();
 
-// Same shape as NetWatchdogCheckResult (net_watchdog.h) - a bridge outage
-// doesn't threaten this board's own Telegram delivery the way a WAN
-// outage does (net_watchdog's own reason for deferring its alert to
-// recovery time), but "was down since HH:MM (for X)" is equally useful
-// information here on its own merits, reported once the outage is
-// actually over rather than only ever logged internally.
+// Like NetWatchdogCheckResult: the outage is reported once it's over.
 struct BridgeWatchdogCheckResult {
   enum class Event { None, OutageDetected, Recovered } event = Event::None;
   unsigned long outageStartMs = 0;    // millis() timestamp; valid only if event == Recovered
   unsigned long outageDurationMs = 0; // valid only if event == Recovered
 };
 
-// Call on BRIDGE_WATCHDOG_CHECK_INTERVAL_MS's own cadence (main.cpp's
-// loop()). Looks up cameraA/cameraB by name (case-insensitively) in the
-// live camera list; if either name isn't currently found or that camera
-// is disabled, the pair can't be evaluated - returns Event::None without
-// touching the outage timer (fail-safe: never guess), surfaced via
-// getBridgeWatchdogStatus()'s camerasResolved field rather than silently
-// doing nothing. Otherwise runs the same reachable/outage/pulse state
-// machine as checkInternetAndMaybePulseRelay, with "both isOffline" in
-// place of "WAN unreachable".
+// Call every BRIDGE_WATCHDOG_CHECK_INTERVAL_MS. If either camera is missing or
+// disabled, does nothing (never guesses) and reports it via camerasResolved.
+// Otherwise the same outage/pulse state machine as the internet watchdog.
 BridgeWatchdogCheckResult checkBridgeCamerasAndMaybePulseRelay(const CameraConfig cameras[], CameraState states[], size_t numCameras);
 
-// Status for the dashboard (Hardware > WiFi Bridge page) - reflects live
-// state, doesn't re-probe.
+// Hardware page status; doesn't re-probe.
 struct BridgeWatchdogStatus {
   bool settingEnabled = false;
   bool available = false;       // bridgeWatchdogActive()'s value

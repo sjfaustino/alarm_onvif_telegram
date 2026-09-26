@@ -6,64 +6,42 @@ struct WifiNetwork {
   String password;
 };
 
-// WiFi credentials + mDNS hostname - persisted in NVS (Preferences,
-// namespace "netcfg"), editable at runtime from the web UI's Network
-// section instead of only at compile time via secrets.h. A change here
-// takes effect after a reboot, same as camera changes - not applied live,
-// since a wrong SSID/password would drop the board off the network with no
-// way back to the web UI to fix it short of physical/serial access.
+// WiFi, hostname and NTP settings, persisted in NVS ("netcfg"). Changes apply
+// after a reboot - applying a wrong password live would strand the board.
 struct WifiCredentials {
   WifiNetwork primary;
 
-  // Optional - empty ssid means no backup. Tried only if primary doesn't
-  // connect in time; if backup connects, connectWiFi() swaps primary/backup
-  // and persists it, so future boots try whichever worked first.
+  // Optional (empty ssid = none). If only backup connects, the two are swapped
+  // and saved.
   WifiNetwork backup;
 
-  // Reaches the dashboard at http://<hostname>.local instead of the IP.
-  // Set once at boot via MDNS.begin(); renaming takes effect after a reboot.
+  // http://<hostname>.local; applied at boot.
   String hostname;
 
-  // Applied via WiFi.config() before WiFi.begin(), for whichever of
-  // primary/backup ends up connecting. useStaticIP=false means DHCP. The
-  // four fields are dotted-quad text; staticDNS empty falls back to the gateway.
+  // Static IP for whichever network connects; false = DHCP. Empty staticDNS
+  // uses the gateway.
   bool useStaticIP = false;
   String staticIP;
   String staticSubnet;
   String staticGateway;
   String staticDNS;
 
-  // No port field - ESP32's SNTP client hardcodes UDP port 123.
+  // No port: ESP32's SNTP client always uses 123.
   String ntpServer;
   unsigned long ntpSyncIntervalMs = 3600000UL; // 1 hour, matches ESP-IDF's own default
 
-  // Optional POSIX TZ rule string (e.g. "WET0WEST,M3.5.0/1,M10.5.0" for
-  // mainland Portugal - look yours up at
-  // https://github.com/nayarsystems/posix_tz_db), applied at boot. Only
-  // affects DST-aware local-time *display* (telegram_transport.cpp's alert photo
-  // captions); the system clock itself always stays true UTC regardless -
-  // WS-Security's Created timestamp reads UTC directly via gmtime_r() and
-  // ignores this entirely. Empty (default) means captions stay in UTC.
+  // Optional POSIX TZ rule (e.g. "WET0WEST,M3.5.0/1,M10.5.0"; see
+  // github.com/nayarsystems/posix_tz_db). Only affects displayed local times;
+  // the system clock stays UTC. Empty = UTC.
   String posixTz;
 };
 
-// Loads WiFi credentials + hostname + NTP config from NVS. On the very
-// first boot (nothing in NVS yet), seeds primary ssid/password from
-// secrets.h, hostname "cameramonitor", NTP "pool.ntp.org" (1h resync).
+// Loads from NVS; a fresh board seeds from secrets.h (hostname
+// "cameramonitor", NTP pool.ntp.org, 1h resync).
 WifiCredentials loadWifiCredentials();
 
-// Overwrites the persisted WiFi credentials + hostname. Pass the existing
-// value for any field to leave it unchanged.
 bool saveWifiCredentials(const WifiCredentials& creds);
 
-// mDNS hostnames only support letters, digits, and hyphens - strips
-// anything else rather than rejecting the whole value, so a stray pasted
-// space or dot doesn't produce a hostname that silently fails to resolve.
-// Shared (not just webserver_network.cpp's own form-save path) so
-// main.cpp's MDNS.begin() call can re-sanitize at the actual point of use
-// too - config Import (config_backup.cpp's applyConfigImport) writes
-// WifiCredentials::hostname straight from an uploaded file via
-// saveWifiCredentials, bypassing the dashboard form (and this filter)
-// entirely, same "hand-edited/imported NVS blob bypasses the form"
-// reasoning as this project's numeric config clamps (config.h).
+// Keeps only letters, digits and hyphens (mDNS-safe). Also applied at
+// MDNS.begin(), since imported configs bypass the form.
 String sanitizeHostname(const String& raw);

@@ -4,50 +4,28 @@
 #include "telegram_users.h"
 #include "background_job.h" // BackgroundJobStartOutcome
 
-// Telegram Users panel: user list, Add/Edit form (permissions, camera
-// subscriptions). Split out of webserver.cpp - see webserver_network.h's
-// comment for why.
+// Telegram Users panel: user list and Add/Edit form.
 
-// prefill/isEdit repopulate the form after an edit link or a failed save -
-// null prefill is the blank "Add Telegram user" state.
+// prefill/isEdit repopulate the form (null = blank Add form).
 String renderUsersPanel(const TelegramUser* prefill, bool isEdit);
 
-// PsychicRequest can't enumerate "all values for a repeated param name", so
-// each camera gets its own checkbox ("cam_<name>") - probed by name.
+// PsychicRequest can't list repeated params, so each camera has its own
+// "cam_<name>" checkbox.
 TelegramUser parseUserForm(PsychicRequest* request);
 
-// originalName is "" for a brand-new user (add), non-empty for an edit (the
-// name the user had before this submission - user.name may differ, which
-// is a rename).
+// originalName is "" for a new user; user.name may differ on a rename.
 bool saveUserSubmission(const TelegramUser& user, const String& originalName, String& banner);
 
 // ============================================================
-// Test message - see webserver_cameras.h's startTestAllCamerasAsync for
-// why this can't run synchronously on the calling (PsychicHttp) task:
-// sendTelegramMessage fans out to every systemMessages recipient, each
-// capable of a 45s g_telegramNetMutex wait (telegram_transport.cpp) - with more than
-// one recipient configured, that's long enough to make the whole dashboard
-// unreachable for everyone, not just whoever clicked the button, the same
-// class of risk the Cameras page's "Test all"/"Search network" buttons
-// already run as background tasks to avoid.
+// Test message. Fans out to every system-message recipient, each able to wait
+// 45s for the Telegram mutex, so it runs on a background task.
 // ============================================================
 
-// Starts sendTestMessage() on a background FreeRTOS task instead of the
-// calling task. A no-op (doesn't start a second overlapping run) if one is
-// already in progress - the return value tells the caller which of the
-// three outcomes happened, for the /users/test route handler to show an
-// accurate banner instead of always assuming success.
+// Starts sendTestMessage on a task; reports if one is already running.
 BackgroundJobStartOutcome startTestMessageAsync();
 
-// Renders the current test-message status: "sending in the background"
-// while one is in progress, the last completed run's result once one
-// exists, or "" if no test has ever run this boot. Safe to call from any
-// task (internally locked) - renderUsersPanel calls this itself, so it
-// shows up on a normal page load too, not just right after clicking the
-// button.
+// Test status HTML: running, last result, or "".
 String renderTestMessageStatus();
 
-// True while the test message job above is running - lets renderShell()
-// (webserver.cpp) decide whether to auto-refresh the Users page instead of
-// leaving the user to manually reload.
+// True while the job runs, so the page auto-refreshes.
 bool userJobsInProgress();

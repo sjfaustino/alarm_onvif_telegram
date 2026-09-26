@@ -7,262 +7,108 @@
 #include "telegram_users.h" // TelegramLang
 #include "telegram_i18n.h" // MotionDetectionKind
 
-// Sends cfg.snapshotBurstCount snapshot(s), captioned "<camera name> -
-// <UTC timestamp>" (plus "(n/N)"), to every subscribed user, subject to
-// cfg's alert cooldown. Safe to call on every motion event.
+// Sends cfg.snapshotBurstCount snapshots to every subscribed user, subject to
+// the camera's cooldown. Safe to call on every motion event.
 //
-// isPetEvent (default false) marks this as a DogCatDetect-only event
-// (camera.cpp's parseEvents - caller already checked
-// CameraConfig::petAlertsEnabled before calling this at all) - shares the
-// exact same mute/cooldown/quiet-hours/recipient gating as a real motion
-// alert, just with pet-specific wording, and skips the photo entirely
-// (sending a single text message instead) when cfg.petAlertsTextOnly is
-// also set.
-//
-// kind (default Generic, ignored entirely when isPetEvent is true - the
-// pet branch has its own fixed wording) picks whether the caption calls
-// out PERSON/VEHICLE specifically instead of the plain "<camera> -
-// <timestamp>" a bare motion/cell-motion event gets - see
-// trMotionCaption's own comment (telegram_i18n.h). This exists so a
-// phone-side notification automation (e.g. MacroDroid/Tasker reading the
-// Telegram notification's text) can play a different sound per detection
-// type without this project needing to know anything about sounds at
-// all - the distinguishing keyword/emoji is all it provides.
+// isPetEvent: DogCatDetect event - same gating, pet wording, and text-only if
+// cfg.petAlertsTextOnly. kind: marks the caption PERSON/VEHICLE so phone-side
+// automations (MacroDroid/Tasker) can pick a sound per detection type.
 void triggerMotionAlert(const CameraConfig& cfg, CameraState& st, bool isPetEvent = false,
                          MotionDetectionKind kind = MotionDetectionKind::Generic);
 
-// Tamper/signal-loss alerts, gated by the same alertsEnabled/cooldown
-// subscribed-recipients rules triggerMotionAlert uses (one shared
-// alertCooldownMs per camera - there's no separate config surface for a
-// per-event-type cooldown). Safe to call on every event.
-//
-// triggerTamperAlert attempts a single snapshot (not the configured
-// burst) since physical tampering usually still has *some* usable video
-// at that instant, unlike an outright signal loss - falls back to a
-// text-only message if the fetch fails or no snapshot URI is known yet,
-// rather than staying silent just because a photo isn't available.
+// Tamper/signal-loss alerts share the motion alert's mute and cooldown rules.
+// Tamper sends one snapshot (falling back to text); signal loss is text-only,
+// since the video is what's gone.
 void triggerTamperAlert(const CameraConfig& cfg, CameraState& st);
 
-// Always text-only, never attempts a snapshot - by definition the video
-// feed is the thing that's gone.
 void triggerSignalLossAlert(const CameraConfig& cfg, CameraState& st);
 
-// Broadcasts an OFFLINE/back-ONLINE notice on a lastContactMs/offlineThresholdMs
-// state transition. Cheap enough to call every cameraTaskFn loop iteration.
+// OFFLINE/back-ONLINE notice on a state transition. Called every task loop.
 void checkCameraOnlineStatus(const CameraConfig& cfg, CameraState& st);
 
-// Broadcasts an alert if this camera hasn't seen a real motion event
-// (CameraState::lastMotionMs, updated independently of mute/cooldown/quiet
-// hours) in over cfg.motionWatchdogHours - a no-op if that's 0 (off,
-// default). Re-arms (won't alert again) once motion resumes. Cheap enough
-// to call every cameraTaskFn loop iteration, same as checkCameraOnlineStatus.
+// Alerts if no real motion in cfg.motionWatchdogHours (0 = off); re-arms when
+// motion resumes.
 void checkMotionWatchdog(const CameraConfig& cfg, CameraState& st);
 
-// Once triggerMotionAlert's cooldown (started by a real, non-quiet-hours
-// snapshot send) ends, sends one summary text of how many further motion
-// events landed during it, if any - "did motion continue after the photo,
-// or was it a one-off" without a photo per event. No-op most calls (no
-// digest pending, or cooldown still running). Cheap enough to call every
-// cameraTaskFn loop iteration, same as checkCameraOnlineStatus/
-// checkMotionWatchdog above.
+// After the post-photo cooldown ends, sends one summary of the motion counted
+// during it, if any.
 void checkPendingMotionDigest(const CameraConfig& cfg, CameraState& st);
 
-// Cross-camera correlation digest - distinct from checkPendingMotionDigest
-// above (which tracks repeated motion on ONE camera during its OWN
-// cooldown). This one correlates DIFFERENT cameras alerting close
-// together (a storm, wind, or a scene-wide false-positive AI trigger
-// hitting several sensors at once) into one extra summary message, so a
-// human scanning Telegram sees "this was one correlated event across N
-// cameras" instead of piecing that together from several separately-
-// arriving photo alerts. Purely additive: every camera's own real alert
-// still sends immediately and unmodified regardless of this - see the
-// .cpp's own comment for the full design. No specific camera argument -
-// this checks GLOBAL state, not one camera's; cheap enough to call every
-// cameraTaskFn loop iteration, same as checkPendingMotionDigest above (it
-// doesn't matter which camera's task happens to notice a digest is due).
+// One extra summary when different cameras alert within
+// MULTI_CAMERA_DIGEST_WINDOW_MS (storm, wind, a shared false positive).
+// Per-camera alerts are unaffected. Global state; any camera task may call it.
 void checkMultiCameraAlertDigest();
 
-// Broadcasts an alert if this camera has been responding (see
-// checkCameraOnlineStatus - not OFFLINE) but hasn't held a working
-// subscription in over cfg.offlineThresholdMs, so it can't actually report
-// any motion/tamper/signal-loss event - the case checkCameraOnlineStatus's
-// own lastContactMs can't catch on its own, since a camera answering every
-// call with a SOAP fault keeps lastContactMs fresh forever without ever
-// subscribing (see cameraSoapCall's own comment, camera.cpp). No-op while
-// isOffline is already true - that's a distinct, already-alerted condition.
-// Re-arms once subscribed again. Call this AFTER checkCameraOnlineStatus
-// each cameraTaskFn loop iteration, so st.isOffline is current.
+// Alerts when a camera answers (so isn't OFFLINE) but hasn't held a
+// subscription for cfg.offlineThresholdMs - e.g. every call returns a SOAP
+// fault. Call after checkCameraOnlineStatus.
 void checkSubscriptionHealth(const CameraConfig& cfg, CameraState& st);
 
-// Captures exactly one snapshot and stores it via pushCameraSnapshot (SD
-// if active, RAM ring otherwise) - never sent to Telegram, no recipients,
-// no cooldown interaction. No-op if st.snapshotUri hasn't resolved yet.
-// Called from cameraTaskFn on cfg.timelapseIntervalMin's own interval,
-// independent of motion/alerts entirely.
+// Stores one snapshot (SD or RAM ring); never sent to Telegram.
 void triggerTimelapseCapture(const CameraConfig& cfg, CameraState& st);
 
-// Manual "Send test alert" button (Cameras dashboard page). Fetches one
-// fresh snapshot and sends it, clearly captioned as a test, to every
-// Telegram user currently subscribed to this camera - see the .cpp's own
-// comment for the full reasoning, including why this deliberately leaves
-// the real motion-alert cooldown/digest state untouched. `outDetail` is
-// set to a human-readable reason on failure. This can block for several
-// seconds (a camera HTTP fetch plus one or more Telegram sends) - callers
-// MUST run it off the calling task (see webserver_cameras.cpp's
-// startTestAlertAsync), never directly from a PsychicHttp route handler.
-//
-// kind (default Generic) picks which trTestAlertCaption wording to send -
-// letting the dashboard button test the Person/Vehicle-specific
-// emoji/keyword a phone-side notification automation (MacroDroid/Tasker)
-// matches on, without waiting for a real detection of that kind.
-// isPetEvent (default false) does the same for the Pet-specific
-// wording/emoji - a separate flag rather than a MotionDetectionKind
-// value, same split as the real alert path (triggerMotionAlert), and
-// checked first when both are set (matching trTestAlertCaption's own
-// precedence). Purely cosmetic (caption text only, and the stored
-// snapshot is still tagged SnapshotSource::Test regardless) - never
-// touches CameraConfig::personAlertsEnabled/vehicleAlertsEnabled/
-// petAlertsEnabled, since this is an explicit manual test, not a real
-// detection subject to being muted.
+// Dashboard "Send test alert": one fresh snapshot to this camera's
+// subscribers, captioned as a test, without touching cooldown/digest state.
+// Blocks for seconds, so run it off the web server task. kind/isPetEvent pick
+// the caption variant so phone automations can be tested.
 bool sendTestAlert(const CameraConfig& cfg, CameraState& st, String& outDetail,
                     MotionDetectionKind kind = MotionDetectionKind::Generic, bool isPetEvent = false);
 
-// Non-blocking: true if a Telegram send is currently in flight (or
-// another task is already waiting for its turn) somewhere in this file,
-// without waiting or taking a turn itself. Lets a heavy, memory-hungry,
-// delay-tolerable background job that doesn't send anything through
-// Telegram itself (webserver_cameras.cpp's WS-Discovery/Test All) check
-// before starting, rather than risk its own buffers overlapping an
-// in-flight photo send's JPEG+TLS buffers - see this function's own
-// comment (telegram_transport.cpp) for the field incident that motivated it.
+// True if a Telegram send is in flight or queued. Lets memory-heavy background
+// jobs (discovery, Test all) wait instead of overlapping a photo send's
+// buffers.
 bool telegramSendInProgress();
 
-// Sends a message to every user with systemMessages enabled, composed
-// per-recipient by calling `compose(u.language)` - lets each recipient get
-// their own configured language (lib/telegram_i18n) instead of one fixed,
-// pre-built string. Returns false if no user has systemMessages enabled,
-// or every send failed.
+// Sends to every user with systemMessages enabled, composed per recipient in
+// their language. False if nobody is eligible or every send failed.
 bool sendTelegramMessage(std::function<String(TelegramLang)> compose);
 
-// Sends one already-composed text message to a single chat id directly -
-// a thin public wrapper around the same internal send path
-// sendTelegramMessage's per-recipient loop uses, for
-// telegram_retry_queue.cpp's flush to call without needing the full
-// TelegramUser list/compose-callback machinery (a queued entry already
-// has its final per-recipient text).
+// Single pre-composed message, used by the retry queue.
 bool sendTelegramMessageToChatId(const String& chatId, const String& text);
 
-// True once TELEGRAM_ROOT_CA holds a real certificate - false means every
-// send will fail TLS verification.
 bool telegramCAConfigured();
 
-// Reads camera `index`'s persisted alerts-enabled flag from NVS (default
-// true). Call once per camera at boot, before spawning its task.
+// Persisted /on /off state for camera `index` (default true).
 bool loadAlertEnabledPref(size_t index);
 
-// One chat ID that recently messaged the bot without matching any
-// configured TelegramUser - see recentUnknownChats' own comment.
+// Chat that messaged the bot but isn't a configured user.
 struct UnknownChatSighting {
   int64_t chatId = 0;
   unsigned long lastSeenMs = 0;
 };
 
-// How many distinct chat IDs recentUnknownChats() tracks - shared with the
-// Users page's own hint text, so both agree on the number.
 static const size_t UNKNOWN_CHAT_TRACK_MAX = 5;
 
-// Up to UNKNOWN_CHAT_TRACK_MAX most recently seen chat IDs that messaged
-// the bot without matching any configured TelegramUser,
-// newest first - a convenience for the Users page so adding a new user is
-// copy-paste from here instead of a side trip to @userinfobot or the raw
-// getUpdates URL. RAM-only, doesn't grow, and isn't a security log - see
-// telegram_commands.cpp's own comment on the tracking table itself.
+// Newest-first unknown chat IDs, so the Users page can offer them for
+// copy-paste. RAM-only; not a security log.
 std::vector<UnknownChatSighting> recentUnknownChats();
 
-// Turns every currently-enabled camera's alerts on/off at once, with an
-// optional timer - the shared implementation behind /on all, /off all
-// (pollTelegramCommands, below) and the Cameras page's own "Mute all"/
-// "Unmute all" buttons (webserver.cpp). durationText follows /on|/off's
-// own duration-token syntax ("" = permanent, minutes, or "HH:MM" - see
-// parseDurationToken, telegram_parse.h); viaWho is a short label for the
-// Serial/Activity log ("Telegram (name)", "the dashboard"). Returns a
-// plain-text result for the caller to show however it likes - success, or
-// the specific reason nothing happened (no enabled cameras, or an
-// unparseable duration). `lang` controls the returned text's language - the
-// dashboard's Mute-all/Unmute-all buttons (webserver.cpp) always pass
-// TelegramLang::English (the web UI stays English regardless of any
-// Telegram user's own preference); the /on all, /off all Telegram command
-// path passes the requesting TelegramUser's own language.
+// /on all, /off all and the dashboard's Mute/Unmute all. durationText uses the
+// /on|/off syntax ("" = permanent, minutes, or "HH:MM"). Returns the result
+// text in `lang` (the dashboard always passes English).
 String setAllCamerasAlertState(const CameraConfig cameras[], CameraState states[], size_t numCameras,
                                 bool turnOn, const String& durationText, const String& viaWho,
                                 TelegramLang lang);
 
-// Polls getUpdates and applies commands, matched by case-insensitive
-// camera-name prefix ("/on D01" matches "D01-FDir"; an ambiguous prefix
-// lists the matches instead of applying anything) - or the literal word
-// "all" in place of a name/prefix, which applies to every enabled camera
-// at once ("/off all 30" mutes everything for 30 minutes; "/snap all"
-// fetches a fresh photo from every camera). A real camera named starting
-// with "all" would be unreachable by its own prefix as a result - an
-// accepted, extremely narrow trade-off, not a bug.
-//   /on|/off|/snap with no target at all - shows a tappable inline-
-//                              keyboard camera picker instead (one button
-//                              per enabled camera plus "All"); permanent
-//                              on/off/snap only, no duration timer via
-//                              buttons. See handleTelegramCallbackQuery
-//                              (telegram_commands.cpp) for how a tap is handled.
-//   /on|/off <name/prefix|all> [duration] - resume/mute alerts
-//                              (subscription stays up either way).
-//                              Optional trailing duration schedules an
-//                              automatic revert back to the opposite
-//                              state - see parseDurationToken
-//                              (telegram_parse.h) for exactly what it
-//                              accepts (plain minutes, or a 24h "HH:MM"
-//                              clock time). Omitted entirely means
-//                              permanent, the original behavior.
-//   /snap <name/prefix|all>  - fresh snapshot now, ignoring mute/cooldown
-//   /status                  - list every enabled camera's on/off state
-//   /uptime                  - board uptime
-//   /health                  - free heap/PSRAM, NVS usage, WiFi signal, SD storage status
-//   /log [N]                 - the N most recent Activity log entries (default 10)
-//   /reset                   - reboot the board immediately
-//   /lang [en|pt]            - change the sender's own TelegramUser::language;
-//                              no argument shows an "English"/"Português"
-//                              inline-keyboard picker instead (same
-//                              tap-handling path as the on/off/snap picker,
-//                              handleTelegramCallbackQuery, telegram_commands.cpp)
-//   /help                    - this command list, plus the sender's own permissions
-// /on, /off, /status, /uptime, /health, /log require canCommand; /snap requires
-// canSnap; /reset requires canReset (off by default, even for the seeded
-// Admin user - see TelegramUser::canReset); /help and /lang require none of
-// the above - a personal display-language preference isn't camera control.
+// Polls getUpdates and runs commands. Cameras are matched by case-insensitive
+// name prefix (ambiguous prefixes list the matches) or "all" (so a camera
+// named "all..." is unreachable by prefix - accepted).
+//   /on|/off|/snap              - no target: inline-keyboard camera picker
+//   /on|/off <name|all> [dur]   - resume/mute; optional duration reverts later
+//                                 (minutes or "HH:MM", see parseDurationToken)
+//   /snap <name|all>            - fresh snapshot, ignoring mute/cooldown
+//   /status, /uptime, /health, /log [N], /reset, /lang [en|pt], /help
+// Permissions: canCommand for on/off/status/uptime/health/log, canSnap for
+// /snap, canReset for /reset (off by default); /help and /lang need none.
 void pollTelegramCommands(const CameraConfig cameras[], CameraState states[], size_t numCameras);
 
-// Flips alertsEnabled back for any camera whose timed /on or /off (see
-// pollTelegramCommands) has reached its scheduled revert time - call once
-// per loop() tick (main.cpp), same cadence as pollTelegramCommands itself.
-// Cheap when nothing's due: just a millis() comparison per camera.
+// Reverts timed /on or /off that are due. Every loop() tick; cheap.
 void checkScheduledAlertReverts(const CameraConfig cameras[], CameraState states[], size_t numCameras);
 
-// Call once every DAILY_DIGEST_INTERVAL_MS (config.h) from main.cpp's
-// loop() - NOT every tick, unlike most other checkX functions here, since
-// this one unconditionally reads AND RESETS every camera's
-// digestPersonCount/digestVehicleCount/digestPetCount/digestMotionCount
-// (CameraState, camera.h) the moment it's called, restarting all of their
-// counting windows together. Sends nothing (a quiet no-op, not an empty
-// message) if every camera's counts were all zero - a digest with nothing
-// to report isn't worth a notification. Distinct from
-// checkMultiCameraAlertDigest/checkPendingMotionDigest above, which are
-// both event-triggered and short-window; this is a periodic volume
-// summary over whatever interval main.cpp checks it at, regardless of
-// whether any single alert ever triggered either of those.
+// Sends per-camera detection counts and resets them, so call only every
+// DAILY_DIGEST_INTERVAL_MS. Sends nothing if all counts are zero.
 void checkDailyActivityDigest(const CameraConfig cameras[], CameraState states[], size_t numCameras);
 
-// Formats a future millis()-timestamp (e.g. CameraState::scheduledRevertDueMs)
-// as a local "HH:MM" wall-clock string, for showing WHEN a timed /on or
-// /off will revert rather than just how long from now (main.cpp's
-// heartbeat: "D07: subscribed (alerts OFF until 06:21)"). Returns "" if
-// the system clock isn't synced yet (same check quiet hours uses) - a
-// clock time computed against a near-epoch, unsynced clock would be
-// actively misleading, unlike a plain countdown duration.
+// millis() due time as local "HH:MM", or "" if the clock isn't synced (a time
+// from an unsynced clock would mislead).
 String formatLocalClockTime(unsigned long dueMs);

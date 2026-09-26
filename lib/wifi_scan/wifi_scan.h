@@ -2,9 +2,7 @@
 #include <Arduino.h>
 #include <vector>
 
-// Pure post-processing of a raw WiFi scan result list, split out of
-// webserver_network.cpp so it can be unit-tested natively
-// (test/test_wifi_scan) without WiFi.h, which only exists on-device.
+// Pure WiFi scan post-processing, tested natively.
 
 struct WifiScanResult {
   String ssid;
@@ -12,12 +10,6 @@ struct WifiScanResult {
   bool encrypted = false;
 };
 
-// Collapses duplicate SSIDs down to one entry each - several access points
-// or mesh nodes broadcasting the same network name is normal and would
-// otherwise list "HomeWiFi" three times - keeping whichever one has the
-// strongest signal (the one actually worth connecting through), then
-// sorts the result strongest-first, the order that's actually useful when
-// picking which network to add. A blank SSID (a hidden network WiFi.SSID()
-// returns as "") is dropped entirely - there'd be nothing for the Add
-// button to usefully prefill.
+// One entry per SSID (strongest AP wins), strongest first; hidden (blank)
+// SSIDs dropped.
 std::vector<WifiScanResult> dedupeSortWifiScanResults(const std::vector<WifiScanResult>& raw);

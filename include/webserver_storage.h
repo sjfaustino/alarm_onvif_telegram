@@ -2,65 +2,24 @@
 #include <Arduino.h>
 #include "background_job.h" // BackgroundJobStartOutcome
 
-// Storage panel content (SD card status, enable/disable toggle, a
-// readability check, and an erase-all-history action). Split out of
-// webserver.cpp - see webserver_network.h's comment for why. Backed by
-// sd_store.h for the actual SD mechanics; this file only renders/parses
-// the form - both maintenance actions go through a background-job wrapper
-// below (startStorageCheckAsync/startEraseAllAsync), not sd_store.h
-// directly, since both walk every camera's snapshot directory and are, by
-// sd_store.cpp's own comment on checkSnapshotStorage, "unbounded by
-// design."
+// Storage panel: SD status, enable toggle, readability check, erase-all.
 String renderStoragePanel();
 
 // ============================================================
-// Background wrappers for both Maintenance actions - sd_store.cpp's
-// checkSnapshotStorage()/eraseAllSnapshots() each walk every stored
-// snapshot file across every camera's directory and are, per
-// checkSnapshotStorage's own comment, "unbounded by design" - can run
-// long enough that main.cpp's loop() (checkSnapshotStorage's automatic
-// periodic caller) resets the task watchdog per file to survive it.
-// Called synchronously from a PsychicHttp request handler, that same
-// unbounded walk blocks the entire dashboard for everyone, not just
-// whoever clicked the button - PsychicHttp here services one request at a
-// time (no async worker pool), the exact reasoning webserver_cameras.h's
-// startTestAllCamerasAsync documents. Not being subscribed to the task
-// watchdog (true - only loop()'s task is) doesn't change that.
-// eraseAllSnapshots has no watchdog resets of its own precisely because it
-// never had an automatic caller forcing that question to be asked - not
-// evidence it's any faster.
+// Both maintenance actions walk every stored file (unbounded), so they run on
+// a background task; PsychicHttp serves one request at a time.
 // ============================================================
 
-// Starts checkSnapshotStorage() (sd_store.h) on a background FreeRTOS task
-// instead of the calling task. A no-op (doesn't start a second overlapping
-// run) if a check is already in progress - the return value tells the
-// caller which of the three outcomes happened, for the /storage/check
-// route handler to show an accurate banner instead of always assuming
-// success.
+// Starts checkSnapshotStorage on a task; reports if one is already running.
 BackgroundJobStartOutcome startStorageCheckAsync();
 
-// Renders the current check status: "checking in the background" while
-// one is in progress, the last completed run's result once one exists, or
-// "" if no check has ever run this boot. Safe to call from any task
-// (internally locked) - renderStoragePanel calls this itself, so it shows
-// up on a normal page load too, not just right after clicking the button.
+// Check status HTML: running, last result, or "".
 String renderStorageCheckStatus();
 
-// Starts eraseAllSnapshots() (sd_store.h) on a background FreeRTOS task
-// instead of the calling task. A no-op (doesn't start a second overlapping
-// run) if an erase is already in progress - the return value tells the
-// caller which of the three outcomes happened, for the /storage/erase
-// route handler to show an accurate banner instead of always assuming
-// success.
+// Starts eraseAllSnapshots on a task; reports if one is already running.
 BackgroundJobStartOutcome startEraseAllAsync();
 
-// Renders the current erase status: "erasing in the background" while one
-// is in progress, the last completed run's result once one exists, or ""
-// if no erase has ever run this boot. Safe to call from any task
-// (internally locked) - renderStoragePanel calls this itself.
 String renderEraseAllStatus();
 
-// True while either background job above (check, erase) is running - lets
-// renderShell() (webserver.cpp) decide whether to auto-refresh the Storage
-// page instead of leaving the user to manually reload.
+// True while either job runs, so the page auto-refreshes.
 bool storageJobsInProgress();
