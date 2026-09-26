@@ -17,10 +17,10 @@
 // elapsed-time prefix in front of each entry are translated (trLogHeader,
 // trLogEmpty, trElapsedSince below), never the stored entry text itself.
 //
-// Also not used for describeResetReason() (main.cpp) - kept out of this
+// Also not used for describeResetReason() (boot_checks.cpp) - kept out of this
 // (natively-tested) lib deliberately, same reasoning as that function's
 // own comment: esp_reset_reason_t is an ESP-IDF type unavailable under the
-// native test environment. main.cpp has its own small
+// native test environment. boot_checks.cpp has its own small
 // describeResetReasonLocalized() sitting next to the English original.
 
 // ---- Camera alerts (broadcast to each subscribed recipient, one call per recipient) ----
@@ -105,7 +105,7 @@ String trCameraTaskSpawnFailure(TelegramLang lang, const String& cameraName);
 // hasFallbackTime picks whether the message reassures that a fallback
 // time (RTC-seeded, or seeded from the router's own HTTP Date header) is
 // still in use, or warns that the system clock has no time source at
-// all - see main.cpp's setupTime() for when each applies.
+// all - see time_sync.cpp's setupTime() for when each applies.
 String trNtpSyncFailed(TelegramLang lang, bool hasFallbackTime);
 String trInternetOutageAlert(TelegramLang lang);
 String trBridgeOutageAlert(TelegramLang lang);
@@ -148,7 +148,7 @@ String trSdCheckWarning(TelegramLang lang, size_t unreadableFiles, size_t filesC
 // reboot.
 String trOtaConfirmedHealthy(TelegramLang lang);
 // The counterpart trOtaConfirmedHealthy never had: sent once, the first
-// boot main.cpp notices esp_ota_get_last_invalid_partition() naming a
+// boot boot_checks.cpp notices esp_ota_get_last_invalid_partition() naming a
 // partition it hasn't already reported (checkOtaRollback's own small NVS
 // marker dedups repeats across every later boot, the same "just this one
 // boot" problem trOtaConfirmedHealthy's own wasPendingVerify check
@@ -172,7 +172,7 @@ String trFreeHeapLine(TelegramLang lang, uint32_t freeBytes, uint32_t minEverByt
 String trNvsUsageLine(TelegramLang lang, unsigned pct);
 String trWifiSignalLine(TelegramLang lang, int rssi);
 // One fully-composed, trailing-newline-free heartbeat line for one camera -
-// mirrors main.cpp's current inline subscribed/OFFLINE/alerts-note assembly.
+// mirrors health_monitor.cpp's current inline subscribed/OFFLINE/alerts-note assembly.
 String trHeartbeatCameraLine(TelegramLang lang, const String& cameraName, bool subscribed, bool offline,
                               bool alertsEnabled, bool revertPending, bool revertToOn, const String& untilTime);
 String trBootHeader(TelegramLang lang, const String& firmwareVersion);

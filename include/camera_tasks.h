@@ -1,6 +1,14 @@
 #pragma once
 #include <cstddef>
+#include <vector>
+#include "camera.h"       // CameraState
 #include "camera_store.h" // CameraConfig
+
+// Every configured camera and its runtime state, index-aligned. Loaded and
+// reserved to MAX_CAMERAS in setup(); only loop()'s task ever changes their
+// size (see applyPendingNewCameraIfAny below). Defined in camera_tasks.cpp.
+extern std::vector<CameraConfig> g_cameras;
+extern std::vector<CameraState> g_cameraStates;
 
 // Spawns cameras[index]'s FreeRTOS monitoring task - same as
 // startMonitoring() (main.cpp) at boot, exposed for webserver_cameras.cpp
@@ -12,7 +20,7 @@
 // create two tasks racing over the same CameraConfig/CameraState.
 void spawnCameraTask(size_t index);
 
-// Stages cam to be added to main.cpp's g_cameras/g_cameraStates and
+// Stages cam to be added to g_cameras/g_cameraStates and
 // spawned live (if enabled), on loop()'s own task - see
 // applyPendingNewCameraIfAny's own comment for why the actual push_back
 // must happen there, not here. Called from webserver_cameras.cpp's
@@ -38,7 +46,7 @@ bool stagePendingNewCamera(const CameraConfig& cam);
 // concurrently reading and mutating the vectors' own size()/structure.
 // Several functions (sendHeartbeat, checkBridgeCamerasAndMaybePulseRelay,
 // pollTelegramCommands, enforceSnapshotRetention,
-// checkScheduledAlertReverts - all in main.cpp/telegram_commands.cpp) already read
+// checkScheduledAlertReverts - all in main.cpp/health_monitor.cpp/telegram_commands.cpp) already read
 // g_cameras.size()/.data() on loop()'s own task, with no lock of their
 // own, relying on those vectors never changing shape except from that
 // same task. Restricting the one operation that DOES change their shape

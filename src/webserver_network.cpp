@@ -300,7 +300,7 @@ void handleSaveNetwork(PsychicRequest* request, String& banner) {
   // fat-fingered huge resync interval would otherwise silently wrap into a
   // tiny one, turning "resync rarely" into a resync storm against the NTP
   // server. This is a form-input sanity bound, not the only guard - see
-  // main.cpp's setupTime for the point-of-use clamp that also covers a
+  // time_sync.cpp's setupTime for the point-of-use clamp that also covers a
   // value that bypassed this form entirely (a hand-edited/imported NVS blob).
   if (ntpMinutes > (long)NTP_SYNC_MAX_MINUTES) ntpMinutes = (long)NTP_SYNC_MAX_MINUTES;
   if (ntpMinutes > 0) creds.ntpSyncIntervalMs = (unsigned long)ntpMinutes * 60000UL;

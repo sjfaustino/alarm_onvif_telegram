@@ -1,7 +1,7 @@
 #pragma once
 #include <stdint.h>
 
-// Pure decision logic behind checkHeapHealth (main.cpp) - split out so it's
+// Pure decision logic behind checkHeapHealth (health_monitor.cpp) - split out so it's
 // natively unit-tested (test/test_heap_health) without FreeRTOS/Arduino,
 // same reasoning as background_job_state.h/backoff.h/subscription_health.h.
 //

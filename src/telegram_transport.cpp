@@ -251,7 +251,7 @@ bool sendTelegramPhotoWithRetry(const uint8_t* jpg, size_t jpgLen, const String&
   return false;
 }
 
-// localtime_r, not gmtime_r - honors whatever POSIX TZ rule main.cpp's
+// localtime_r, not gmtime_r - honors whatever POSIX TZ rule time_sync.cpp's
 // setupTime() applied at boot (WifiCredentials::posixTz), or plain UTC if
 // none configured. The system clock itself always stays true UTC either
 // way - only this *display* value is affected; WS-Security's timestamp
@@ -433,7 +433,7 @@ bool sendTelegramMessage(std::function<String(TelegramLang)> compose) {
     // it itself. A no-op (harmless ESP_ERR_NOT_FOUND, ignored like every
     // other reset call in this project) when called from a camera task,
     // which was never subscribed to this watchdog in the first place - see
-    // initWatchdog()'s own comment (main.cpp).
+    // initWatchdog()'s own comment (boot_checks.cpp).
     esp_task_wdt_reset();
   }
   if (!anyRecipient) {

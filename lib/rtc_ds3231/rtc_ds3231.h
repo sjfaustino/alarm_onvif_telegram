@@ -13,7 +13,7 @@ struct Ds3231Registers {
 };
 
 // Encodes tmStruct (a UTC struct tm - this project's system clock is always
-// UTC, see setupTime()'s own comment in main.cpp) into the DS3231's BCD
+// UTC, see setupTime()'s own comment in time_sync.cpp) into the DS3231's BCD
 // register layout. Always writes 24-hour mode (clears the hours register's
 // 12/24 bit) - this project only ever reads a chip back the same way it
 // wrote it, so there's no need to support 12-hour mode at all. Years are

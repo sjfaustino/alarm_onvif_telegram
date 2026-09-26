@@ -53,7 +53,7 @@ static const uint8_t        PULL_MESSAGES_AMBIGUOUS_LIMIT = 5;
 // may only tolerate 1-2 connections at all (see camera_tasks.h's own
 // staggered-boot comment for a real incident from exactly that class of
 // overload).
-// Reserved capacity for main.cpp's g_cameras/g_cameraStates - see
+// Reserved capacity for camera_tasks.cpp's g_cameras/g_cameraStates - see
 // camera_tasks.h's stagePendingNewCamera for why this is what makes it
 // safe to grow those vectors live (without a reboot) once a brand-new
 // camera is added via the dashboard: main.cpp reserves this many slots
@@ -129,7 +129,7 @@ static const unsigned long RESTORE_PENDING_WINDOW_MS = 5UL * 60UL * 1000UL; // 5
 // real export actually needs rather than as large as the Bot API would
 // technically allow.
 static const size_t RESTORE_MAX_FILE_BYTES = 64UL * 1024UL; // 64KB
-// How often main.cpp's loop() re-checks NVS usage (checkNvsUsage) - see
+// How often main.cpp's loop() re-checks NVS usage (health_monitor.cpp's checkNvsUsage) - see
 // NVS_USAGE_WARN_PERCENT's own comment for why this exists at all.
 // Independent of HEARTBEAT_INTERVAL_MS's much longer cadence: NVS usage
 // only grows from deliberate dashboard edits (adding cameras/users), never
@@ -142,11 +142,11 @@ static const unsigned long NVS_USAGE_CHECK_INTERVAL_MS = 60UL * 60UL * 1000UL; /
 // failed to persist once NVS filled up (see camera_store.cpp's
 // NVS_KEY_LIST_LEGACY comment). Shared by the Firmware page's own hint
 // (webserver_firmware.cpp) and checkNvsUsage's proactive Telegram alert
-// (main.cpp) so both agree on what "getting full" means.
+// (health_monitor.cpp) so both agree on what "getting full" means.
 static const unsigned NVS_USAGE_WARN_PERCENT = 80;
 // Same "proactive counterpart to a reactive failure alert" reasoning as
 // NVS_USAGE_CHECK_INTERVAL_MS/NVS_USAGE_WARN_PERCENT above, for the SD
-// card's own capacity (main.cpp's checkSdUsage) - sd_store.cpp already
+// card's own capacity (health_monitor.cpp's checkSdUsage) - sd_store.cpp already
 // alerts once a write actually fails and falls back to the PSRAM ring
 // (trSdFailure), but nothing warns before that point the way NVS's own
 // warning does. Retention (SdSettings::retentionDays) is the usual
@@ -163,7 +163,7 @@ static const unsigned long SD_USAGE_CHECK_INTERVAL_MS = 60UL * 60UL * 1000UL; //
 // size, so there's more natural headroom here before "full" is actually a
 // near-term risk.
 static const unsigned SD_USAGE_WARN_PERCENT = 90;
-// How often main.cpp's loop() re-checks WiFi.RSSI() (checkWifiSignal) -
+// How often main.cpp's loop() re-checks WiFi.RSSI() (health_monitor.cpp's checkWifiSignal) -
 // shorter than NVS_USAGE_CHECK_INTERVAL_MS since signal strength can
 // genuinely drift within minutes (something moved, a neighbor's channel
 // got busier), unlike NVS usage which only ever changes from a deliberate
@@ -178,7 +178,7 @@ static const unsigned long WIFI_RSSI_CHECK_INTERVAL_MS = 15UL * 60UL * 1000UL; /
 // channel/placement), not just note that it already happened.
 static const int WIFI_RSSI_WARN_DBM = -75;
 // Free-heap threshold (bytes, ESP.getMinFreeHeap() - internal SRAM, not
-// PSRAM) below which checkHeapHealth() (main.cpp) sends a one-time Telegram
+// PSRAM) below which checkHeapHealth() (health_monitor.cpp) sends a one-time Telegram
 // alert the first time a new lifetime-low record crosses it. mbedTLS/
 // WiFiClientSecure allocate from this same pool (see g_telegramNetMutex's
 // own comment, telegram_transport.cpp), so a genuinely low reading here is real
@@ -295,7 +295,7 @@ static const unsigned long SD_RETENTION_CHECK_INTERVAL_MS = 24UL * 60UL * 60UL *
 
 // Clamp for the dashboard's NTP resync interval (WifiCredentials::
 // ntpSyncIntervalMs, Network page) - webserver_network.cpp's
-// handleSaveNetwork clamps user input to this, and main.cpp's setupTime
+// handleSaveNetwork clamps user input to this, and time_sync.cpp's setupTime
 // re-clamps at the actual esp_sntp_set_sync_interval() call (see its own
 // comment for why a form-only clamp isn't enough - same "hand-edited/
 // imported NVS blob bypasses the form entirely" reasoning as

@@ -231,7 +231,7 @@ Arduino-ESP32/IDF releases.
   corrupted transfer, though - if a checksum-valid image itself crashes or
   hangs on boot, ESP-IDF's app rollback (enabled in this board's sdkconfig)
   automatically reverts to the previous working partition on the next reset;
-  `main.cpp`'s `setup()` confirms the new image healthy near the end of its
+  `boot_checks.cpp` (called at the end of `setup()`) confirms the new image healthy near the end of its
   own run, not gated on WiFi connecting (a network outage during an update
   shouldn't roll back otherwise-good firmware). The Firmware page also shows
   NVS usage (% of entries used) - this project has silently hit NVS's practical
@@ -326,7 +326,7 @@ warning instead of proceeding) if there isn't any, rather than run degraded and 
 partway through a send later.
 
 Tested on an ESP32-S3 with 8MB embedded octal PSRAM — `[env:esp32s3]`. Also needs a
-second core (`src/main.cpp` pins one FreeRTOS task per camera to core 1), which every
+second core (`src/camera_tasks.cpp` pins one FreeRTOS task per camera to core 1), which every
 PSRAM-equipped ESP32-S3 variant has, so this hasn't been a real constraint in
 practice; a single-core PSRAM chip is untested.
 
@@ -505,7 +505,7 @@ include/
   network_store.h    # WiFi credentials, NVS load/save (editable from the dashboard)
   auth_store.h       # dashboard Basic Auth username/password, NVS load/save
   event_log_store.h  # thread-safe global wrapper around lib/event_log's ring buffer
-  camera_tasks.h      # spawnCameraTask() - exposed from main.cpp so a dashboard edit can
+  camera_tasks.h      # g_cameras/g_cameraStates + spawnCameraTask(), so a dashboard edit can
                        # start a camera's task live, without a reboot
   sd_store.h          # optional SD card mechanics (settings, mount, write/list/read/prune,
                        # erase-all, readability check) - thread-safe, hardware-dependent
@@ -530,10 +530,16 @@ include/
   generated_build_version.h # created/rewritten fresh before every build (scripts/generate_build_version.py,
                              # a pre: extra_script - runs before any compilation) - gitignored, not
                              # tracked at all; nothing to keep in sync since a build always creates it first
+  wifi_connect.h, time_sync.h, boot_checks.h, health_monitor.h
+                     # main.cpp's boot/loop helpers, split out of it
   camera.h, telegram.h, onvif_soap.h
 src/
-  main.cpp          # boot sequence, PSRAM check, WiFi/NTP, per-camera task spawn, heartbeat,
-                      # reboot-reason reporting, OTA rollback confirmation
+  main.cpp          # setup()/loop(): boot sequence, PSRAM check, startMonitoring, periodic-check cadence
+  camera_tasks.cpp  # g_cameras/g_cameraStates, per-camera task spawn, live camera add
+  wifi_connect.cpp  # primary/backup WiFi connect, static IP, reconnect backoff
+  time_sync.cpp     # NTP sync, RTC seed/writeback, router HTTP-Date fallback clock
+  boot_checks.cpp   # task watchdog, reboot-reason text, OTA rollback confirmation/reporting
+  health_monitor.cpp # heartbeat, NVS/SD/WiFi-signal/heap threshold alerts
   camera.cpp        # ONVIF SOAP calls, event parsing, per-camera FreeRTOS task, live config reload
   camera_store.cpp   # NVS-backed camera list (load/save/add/delete, one-time seed)
   telegram_users.cpp # NVS-backed Telegram user list (load/save/add/delete, one-time seed)
@@ -580,8 +586,8 @@ lib/                 # pure-logic modules with no hardware dependencies, split o
   subscription_health/    # alert-once/re-arm decision logic behind the stuck-subscription
                            # alert (telegram_alerts.cpp's checkSubscriptionHealth)
   heap_health/             # new-record-low/threshold-alert decision logic behind the free-heap
-                           # trail (main.cpp's checkHeapHealth)
-  backoff/                # the doubling-with-a-cap retry delay formula (shared by main.cpp,
+                           # trail (health_monitor.cpp's checkHeapHealth)
+  backoff/                # the doubling-with-a-cap retry delay formula (shared by wifi_connect.cpp,
                            # camera.cpp, and webserver.cpp's login rate-limiter)
   quiet_hours/              # recurring daily do-not-disturb window predicate (start/end minute
                              # of day, handles the overnight-wraparound case)
@@ -628,7 +634,7 @@ alongside the firmware build.
   see that function's own comment for the full story.
 - The Telegram heartbeat reports liveness but can't detect a fully frozen board on
   its own, since a hung `loop()` can't send anything - that's what the ESP32 task
-  watchdog (`initWatchdog()` in `main.cpp`) covers: a 90s timeout on `loop()`
+  watchdog (`initWatchdog()` in `boot_checks.cpp`) covers: a 90s timeout on `loop()`
   forces a reboot if it stops returning to its top. It only watches `loop()`, not
   the per-camera tasks in `camera.cpp` - those already bound every SOAP call with
   `HTTP_TIMEOUT_MS`, and `cameraSetupSequence` chains several such calls back-to-back

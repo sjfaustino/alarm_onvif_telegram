@@ -113,7 +113,7 @@ struct CameraState {
 
   // Pending auto-revert from a timed /on or /off (telegram_commands.cpp) - 0 means
   // none scheduled. A millis() timestamp, compared the same overflow-safe
-  // way as main.cpp's g_wifiRetryDueMs. Not persisted - a reboot cancels
+  // way as wifi_connect.cpp's g_wifiRetryDueMs. Not persisted - a reboot cancels
   // any pending timer and falls back to loadAlertEnabledPref().
   unsigned long scheduledRevertDueMs = 0;
   bool          scheduledRevertToOn = false; // state to revert *to* once due
@@ -246,7 +246,7 @@ struct CameraState {
   uint32_t digestMotionCount = 0; // generic/plain motion - no finer classification available
 
   // Copied once from cfg.user/cfg.pass by resolveCameraCredentials() at
-  // startup. Safe as const char*: cfg lives in main.cpp's g_cameras vector,
+  // startup. Safe as const char*: cfg lives in camera_tasks.cpp's g_cameras vector,
   // which never REALLOCATES for the process lifetime (it may still GROW,
   // live, for a brand-new camera added via the dashboard - see
   // camera_tasks.h's stagePendingNewCamera/applyPendingNewCameraIfAny -
@@ -310,7 +310,7 @@ struct CameraState {
   // reconnectHistory (+Next/Count), offlineHistory (+Next/Count), and
   // motionLatencyHistory (+Next/Count) - the fields both written by this
   // camera's own task and read/written from another task (webserver.cpp's
-  // dashboard render and /cameras/snapshot route, main.cpp's heartbeat,
+  // dashboard render and /cameras/snapshot route, health_monitor.cpp's heartbeat,
   // telegram_commands.cpp's /on /off /snap handling, checkScheduledAlertReverts,
   // pushCameraSnapshot's lastContactMs adjustment - all on loop()'s task).
   // Every other field is touched only by the owning camera task, no lock

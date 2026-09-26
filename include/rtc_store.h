@@ -5,7 +5,7 @@
 // Optional external battery-backed RTC (DS3231, I2C) - same "optional
 // peripheral, off by default, graceful fallback" shape as sd_store.h's SD
 // card support. This board's only clock source otherwise is NTP, which
-// only runs once WiFi connects (main.cpp's setupTime()) - a DS3231 lets
+// only runs once WiFi connects (time_sync.cpp's setupTime()) - a DS3231 lets
 // the system clock be seeded with a roughly-correct time immediately at
 // boot, before WiFi/NTP have had any chance to run, and is itself kept
 // corrected from NTP once a real sync lands. lib/rtc_ds3231 has the pure

@@ -951,7 +951,7 @@ bool saveCameraSubmission(CameraConfig cam, const String& originalName, String& 
 
   // Captured BEFORE updateCamera touches NVS, using the ORIGINAL name - a
   // rename doesn't change which live slot this is. wasRunning reflects
-  // reality precisely because nothing except spawnCameraTask() (main.cpp)
+  // reality precisely because nothing except spawnCameraTask() (camera_tasks.cpp)
   // ever flips a live camera's task into existence, and it's only ever
   // called when enabled was true at boot or via the live-spawn path below
   // - so "was this slot's in-memory CameraConfig::enabled true" is

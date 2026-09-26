@@ -846,7 +846,7 @@ static void handleTelegramCallbackQuery(const TelegramUser& sender, const Telegr
 // sendHeartbeat/checkNvsUsage/checkWifiSignal there, not gated behind an
 // interval of its own. Cheap when nothing's due: just a millis()
 // comparison per camera. Overflow-safe comparison (see CameraState::
-// scheduledRevertDueMs's comment) matches main.cpp's own g_wifiRetryDueMs
+// scheduledRevertDueMs's comment) matches wifi_connect.cpp's own g_wifiRetryDueMs
 // pattern. NOT cheap once something IS due, though - sendTelegramMessage
 // below fans out to every systemMessages recipient (each up to a 45s
 // g_telegramNetMutex wait - see that function's own comment) and is

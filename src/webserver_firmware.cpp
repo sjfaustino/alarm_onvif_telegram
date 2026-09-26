@@ -10,7 +10,7 @@
 #include <nvs.h>
 #include <time.h>
 
-// "" if epoch is 0 (unknown - main.cpp's checks run after WiFi connects,
+// "" if epoch is 0 (unknown - boot_checks.cpp's checks run after WiFi connects,
 // so the clock is normally already synced by then, but a very old record
 // from before this feature existed would have no timestamp at all).
 static String formatEpochLocal(time_t epoch) {
@@ -30,7 +30,7 @@ String renderFirmwarePanel() {
   html += "<tr><th>Version</th><td>" + String(FIRMWARE_VERSION) + "</td></tr>";
   html += "<tr><th>Build</th><td>" + String(__DATE__) + " " + String(__TIME__) + "</td></tr>";
   html += "<tr><th>Running partition</th><td>" + String(running ? running->label : "?") + "</td></tr>";
-  // Persisted (ota_history.h) by main.cpp's boot-time OTA checks - "" (no
+  // Persisted (ota_history.h) by boot_checks.cpp's boot-time OTA checks - "" (no
   // row) until the first update this board ever confirms healthy or rolls
   // back, so a board that's never had an OTA update just doesn't mention
   // it, rather than showing a misleading "None" row.
@@ -48,7 +48,7 @@ String renderFirmwarePanel() {
   html += "<tr><th>Free space for update</th><td>" + String(ESP.getFreeSketchSpace() / 1024) + " KB</td></tr>";
 
   // Same internal-RAM pool WiFiClientSecure/mbedTLS allocate from - see
-  // main.cpp's checkHeapHealth()/HEAP_LOW_WARN_BYTES (config.h) for the
+  // health_monitor.cpp's checkHeapHealth()/HEAP_LOW_WARN_BYTES (config.h) for the
   // proactive Telegram alert and timestamped Activity-log trail this
   // mirrors; shown here too so it's visible without Telegram/Serial
   // access, same "don't only rely on someone noticing a push notification"

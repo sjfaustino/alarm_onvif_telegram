@@ -1,6 +1,6 @@
 #pragma once
 
-// Simple doubling backoff with a cap - shared by main.cpp's WiFi reconnect
+// Simple doubling backoff with a cap - shared by wifi_connect.cpp's WiFi reconnect
 // and camera.cpp's per-camera subscription retry (each used to hand-write
 // this formula separately) so both stay in sync and it's unit-tested once
 // (test/test_backoff).

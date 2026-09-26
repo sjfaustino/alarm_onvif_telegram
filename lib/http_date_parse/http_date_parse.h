@@ -4,7 +4,7 @@
 
 // Pure parsing of an HTTP "Date" response header, split out so it can be
 // unit-tested natively (test/test_http_date_parse) without pulling in
-// HTTPClient/WiFi, which only exist on-device. main.cpp's
+// HTTPClient/WiFi, which only exist on-device. time_sync.cpp's
 // seedSystemClockFromRouterHttpDate is the actual HTTP-fetch glue around
 // this - a fallback clock source for when NTP fails and there's no RTC to
 // seed from (see that function's own comment for the full "why" - a

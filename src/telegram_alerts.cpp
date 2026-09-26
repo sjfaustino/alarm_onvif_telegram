@@ -20,7 +20,7 @@
 // (webserver_cameras.cpp's parseCameraForm clamps user input to
 // [1,CAMERA_ALERT_COOLDOWN_MAX_MS]) - same "hand-edited/imported NVS blob
 // bypasses the form entirely" reasoning as motionWatchdogHours above, the
-// SD storage check interval, and ntpSyncIntervalMs (main.cpp's setupTime).
+// SD storage check interval, and ntpSyncIntervalMs (time_sync.cpp's setupTime).
 // A 0 here isn't a "disabled" sentinel - every motion poll would re-alert
 // with no throttling at all, and skip triggerMotionAlert's own digest-
 // suppression entirely (it only engages while a cooldown is actually
