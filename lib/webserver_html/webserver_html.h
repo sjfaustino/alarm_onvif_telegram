@@ -24,3 +24,13 @@ String renderDiscoveryResultsTable(const std::vector<String>& columnHeaders, con
 
 // Read-only table with no action column (e.g. Test all results).
 String renderDataTable(const std::vector<String>& columnHeaders, const std::vector<std::vector<String>>& rows);
+
+// Labelled form inputs. `label` is trusted HTML (fixed text); `value` is raw
+// and escaped here. `attrs` is appended inside the tag verbatim (e.g.
+// " required").
+String htmlTextInput(const String& label, const char* name, const String& value, const char* attrs = "");
+String htmlTimeInput(const String& label, const char* name, const String& value);
+// Never pre-filled, so a stored password can't leak into the page.
+String htmlPasswordInput(const String& label, const char* name, const char* attrs = "");
+String htmlCheckbox(const String& label, const char* name, bool checked);
+String htmlHiddenInput(const char* name, const String& value);

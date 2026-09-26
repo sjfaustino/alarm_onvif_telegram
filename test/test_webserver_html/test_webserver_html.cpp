@@ -98,6 +98,33 @@ void test_renderDataTable_empty_rows_still_renders_header(void) {
   TEST_ASSERT_TRUE(html.indexOf("<th>Camera</th></tr>") >= 0);
 }
 
+void test_htmlTextInput_escapes_value_and_appends_attrs(void) {
+  TEST_ASSERT_EQUAL_STRING("<label>Name<input type=\"text\" name=\"n\" value=\"a&quot;&lt;b\" required></label>",
+                           htmlTextInput("Name", "n", "a\"<b", " required").c_str());
+}
+
+void test_htmlTimeInput(void) {
+  TEST_ASSERT_EQUAL_STRING("<label>Start<input type=\"time\" name=\"s\" value=\"07:30\"></label>",
+                           htmlTimeInput("Start", "s", "07:30").c_str());
+}
+
+void test_htmlPasswordInput_has_no_value(void) {
+  TEST_ASSERT_EQUAL_STRING("<label>Password<input type=\"password\" name=\"pass\" placeholder=\"x\"></label>",
+                           htmlPasswordInput("Password", "pass", " placeholder=\"x\"").c_str());
+}
+
+void test_htmlCheckbox_checked_and_unchecked(void) {
+  TEST_ASSERT_EQUAL_STRING("<label class=\"checkbox\"><input type=\"checkbox\" name=\"e\" checked> On</label>",
+                           htmlCheckbox("On", "e", true).c_str());
+  TEST_ASSERT_EQUAL_STRING("<label class=\"checkbox\"><input type=\"checkbox\" name=\"e\"> On</label>",
+                           htmlCheckbox("On", "e", false).c_str());
+}
+
+void test_htmlHiddenInput_escapes_value(void) {
+  TEST_ASSERT_EQUAL_STRING("<input type=\"hidden\" name=\"o\" value=\"&#39;x&#39;\">",
+                           htmlHiddenInput("o", "'x'").c_str());
+}
+
 int main(int argc, char** argv) {
   UNITY_BEGIN();
   RUN_TEST(test_renderEditDeleteActions_edit_link_uses_route_base_and_encoded_name);
@@ -112,5 +139,10 @@ int main(int argc, char** argv) {
   RUN_TEST(test_renderDataTable_renders_headers_and_cells_with_no_add_column);
   RUN_TEST(test_renderDataTable_escapes_cell_content);
   RUN_TEST(test_renderDataTable_empty_rows_still_renders_header);
+  RUN_TEST(test_htmlTextInput_escapes_value_and_appends_attrs);
+  RUN_TEST(test_htmlTimeInput);
+  RUN_TEST(test_htmlPasswordInput_has_no_value);
+  RUN_TEST(test_htmlCheckbox_checked_and_unchecked);
+  RUN_TEST(test_htmlHiddenInput_escapes_value);
   return UNITY_END();
 }
