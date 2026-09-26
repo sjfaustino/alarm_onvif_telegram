@@ -210,13 +210,13 @@ Arduino-ESP32/IDF releases.
   Cameras page's 5-entry Preview strip - most useful with SD storage active
   (far more history than the PSRAM ring holds), showing up to 30 thumbnails per
   camera per page load.
-- The running build's exact version - "YYYYMMDD.HHMM" (year-first so two
-  versions sort correctly), the real wall-clock time it was built, computed
-  fresh by `scripts/generate_build_version.py` on every `pio run`/upload,
-  not something anyone has to remember to bump by hand -
-  is shown alongside every "Camera Monitor" label: the dashboard title/
-  sidebar/login prompt, the Telegram heartbeat and boot-online messages, the
-  Firmware page (its own "Version" row, next to the existing build date/time),
+- The running build's exact version, from `git describe` - "1.2.0" for a
+  tagged release, "1.2.0-5-gabc1234" for 5 commits after it, with "-dirty"
+  when built from uncommitted changes (`scripts/generate_build_version.py`;
+  nothing to bump by hand, see [Releases](#releases)) - is shown alongside
+  every "Camera Monitor" label: the dashboard title/sidebar/login prompt, the
+  Telegram heartbeat and boot-online messages, the Firmware page (its own
+  "Version" row, next to the existing build date/time),
   and the config export header. Useful for confirming which exact build is
   actually running, especially after an OTA update.
 - Firmware, Maintenance, and Storage live under a "System" submenu in the sidebar;
@@ -315,6 +315,26 @@ Arduino-ESP32/IDF releases.
   restored from the file; an imported network section has no WiFi password -
   re-enter it before rebooting, or the board is stranded off the network. Takes effect after a reboot, same
   as any other bulk camera/network change.
+
+## Scope
+
+What this project is for, and what it deliberately leaves out:
+
+- **One ESP32-S3 (with PSRAM) watching ONVIF cameras on a home or small-property
+  LAN**, up to 24 cameras (`MAX_CAMERAS`). It uses ONVIF event PullPoint
+  subscriptions; cameras that only push events some other way aren't
+  supported.
+- **Alerts go to Telegram, and only Telegram.** There is no email, SMS, MQTT or
+  cloud service, and nothing leaves the LAN except Telegram Bot API calls.
+- **Snapshots, not video.** Alerts carry JPEG snapshots, and history keeps
+  snapshots (a small PSRAM ring, or an optional SD card). There is no video
+  recording or NVR function; the dashboard's RTSP/MJPEG links send your
+  player or browser straight to the camera.
+- **The dashboard is for the local network.** It is plain HTTP with optional
+  Basic Auth and rate limiting - never forward port 80 to the internet. Use
+  Telegram commands, or a VPN, for remote access.
+- **Languages:** Telegram messages in English or European Portuguese (per
+  user); the dashboard is English only.
 
 ## Hardware
 
@@ -523,12 +543,9 @@ include/
   config_backup.h   # config export/import and the one-slot pre-import backup (dashboard + Telegram)
   secrets.h.example # template for secrets.h (copy, fill in, gitignored)
   telegram_ca.h      # Telegram's root CA for TLS pinning (committed, not secret)
-  build_version.h    # extern FIRMWARE_VERSION - its own translation unit (build_version.cpp)
-                      # specifically so the build-timestamp value that changes on every single
-                      # build doesn't force a full rebuild of everything that includes config.h
-  generated_build_version.h # created/rewritten fresh before every build (scripts/generate_build_version.py,
-                             # a pre: extra_script - runs before any compilation) - gitignored, not
-                             # tracked at all; nothing to keep in sync since a build always creates it first
+  build_version.h    # extern FIRMWARE_VERSION (git describe) - own translation unit, so a new
+                      # version recompiles one file
+  generated_build_version.h # written by scripts/generate_build_version.py before each build (gitignored)
   wifi_connect.h, time_sync.h, boot_checks.h, health_monitor.h
                      # main.cpp's boot/loop helpers, split out of it
   camera.h, telegram.h, onvif_soap.h
@@ -602,9 +619,23 @@ lib/                 # pure-logic modules with no hardware dependencies, split o
   format_utils/             # formatUptime/formatElapsedSince, htmlEscape, urlEncode
   camera_parse/             # ONVIF GetProfiles/NotificationMessage parsing - motion/tamper/
                              # signal-loss classification
-  webserver_html/           # shared Edit/Delete row-actions HTML fragment
+  webserver_html/           # shared HTML builders: form inputs, list-row actions, tables
 test/                 # native unit tests for lib/* - `pio test -e native`, no hardware needed
 ```
+
+## Releases
+
+The firmware version comes from git tags (`git describe`), so releasing is:
+
+1. Move the `[Unreleased]` notes in `CHANGELOG.md` under a new version heading
+   and commit.
+2. Tag the commit: `git tag -a v1.1.0 -m "v1.1.0"` and push the tag
+   (`git push origin v1.1.0`).
+3. Build (`pio run -e esp32s3`) or take CI's `firmware-esp32s3` artifact, and
+   upload `firmware.bin` from the dashboard's Firmware page.
+
+The board then reports exactly `1.1.0`. Builds between tags report e.g.
+`1.1.0-3-gabc1234`, and `-dirty` means uncommitted changes were built.
 
 ## Testing
 
