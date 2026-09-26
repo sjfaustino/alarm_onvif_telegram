@@ -125,6 +125,17 @@ void test_htmlHiddenInput_escapes_value(void) {
                            htmlHiddenInput("o", "'x'").c_str());
 }
 
+void test_htmlSelect_marks_selected_option(void) {
+  TEST_ASSERT_EQUAL_STRING(
+      "<label>Lang<select name=\"l\"><option value=\"en\">English</option>"
+      "<option value=\"pt\" selected>PT</option></select></label>",
+      htmlSelect("Lang", "l", {{"en", "English"}, {"pt", "PT"}}, "pt").c_str());
+}
+
+void test_input_names_are_escaped(void) {
+  TEST_ASSERT_TRUE(htmlCheckbox("x", "cam_<\"a\">", false).indexOf("name=\"cam_&lt;&quot;a&quot;&gt;\"") >= 0);
+}
+
 int main(int argc, char** argv) {
   UNITY_BEGIN();
   RUN_TEST(test_renderEditDeleteActions_edit_link_uses_route_base_and_encoded_name);
@@ -144,5 +155,7 @@ int main(int argc, char** argv) {
   RUN_TEST(test_htmlPasswordInput_has_no_value);
   RUN_TEST(test_htmlCheckbox_checked_and_unchecked);
   RUN_TEST(test_htmlHiddenInput_escapes_value);
+  RUN_TEST(test_htmlSelect_marks_selected_option);
+  RUN_TEST(test_input_names_are_escaped);
   return UNITY_END();
 }

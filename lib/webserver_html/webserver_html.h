@@ -36,10 +36,15 @@ String renderDataTable(const std::vector<String>& columnHeaders, const std::vect
 
 // Labelled form inputs. `label` is trusted HTML (fixed text); `value` is raw
 // and escaped here. `attrs` is appended inside the tag verbatim (e.g.
-// " required").
-String htmlTextInput(const String& label, const char* name, const String& value, const char* attrs = "");
-String htmlTimeInput(const String& label, const char* name, const String& value);
+// " required"). `name` is escaped too (it can carry user data, e.g.
+// "cam_<camera name>").
+String htmlTextInput(const String& label, const String& name, const String& value, const char* attrs = "");
+String htmlTimeInput(const String& label, const String& name, const String& value);
 // Never pre-filled, so a stored password can't leak into the page.
-String htmlPasswordInput(const String& label, const char* name, const char* attrs = "");
-String htmlCheckbox(const String& label, const char* name, bool checked);
-String htmlHiddenInput(const char* name, const String& value);
+String htmlPasswordInput(const String& label, const String& name, const char* attrs = "");
+String htmlCheckbox(const String& label, const String& name, bool checked);
+String htmlHiddenInput(const String& name, const String& value);
+// <select> with one option per (value, text) pair; `selected` marks the
+// matching value. Option text is trusted HTML.
+String htmlSelect(const String& label, const String& name,
+                  const std::vector<std::pair<String, String>>& options, const String& selected);
