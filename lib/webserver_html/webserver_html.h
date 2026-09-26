@@ -3,6 +3,15 @@
 #include <vector>
 #include <utility> // std::pair
 
+// Submitted form fields. The dashboard wraps a PsychicRequest
+// (request_params.h); tests use a map.
+class FormParams {
+ public:
+  virtual ~FormParams() = default;
+  virtual bool has(const char* name) const = 0;
+  virtual String get(const char* name, const char* fallback) const = 0;
+};
+
 // Pure HTML builders shared by the dashboard's list panels. All inputs are
 // raw; escaping happens here, in one place.
 
