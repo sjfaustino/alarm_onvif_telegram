@@ -7,43 +7,22 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
-// Guards addCamera/updateCamera/deleteCamera's whole load-all-modify-one-
-// save-all sequence - without this, two near-simultaneous calls (two
-// browser tabs, or a retried form submit) each load the same starting
-// list, apply their own single change, and save independently - whichever
-// save lands second silently overwrites the first's change (a classic
-// lost update), with no error surfaced to either caller. Deliberately a
-// separate mutex from webserver_cameras.cpp's own g_saveMutex (which
-// guards that file's live-reload bookkeeping around a save, a webserver-
-// layer concern this storage layer has no business knowing about) - this
-// one protects the NVS read-modify-write invariant itself, for every
-// caller, not just the ones that happen to go through that specific route
-// handler.
+// Serializes the load-modify-save sequence so concurrent edits (two tabs, a
+// retried submit) can't lose each other's changes. Separate from the web
+// layer's own save mutex.
 static SemaphoreHandle_t g_camerasMutex = xSemaphoreCreateMutex();
 
 static const char* NVS_NAMESPACE  = "camstore";
-// Legacy: the whole record list used to live under this one key, as a
-// single NVS string value - read as a fallback if NVS_KEY_LIST_CHUNKS
-// isn't present yet, but no longer written. See nvs_chunk.h for why: a
-// verbose ~10-camera list is large enough to plausibly hit NVS's practical
-// per-entry size ceiling, which happened in the field (some records
-// silently failed to persist, only visible once the write's return value
-// was actually checked).
+// Old single-key list: read as a fallback, never written. One large value hit
+// NVS's per-entry limit and silently lost cameras (see nvs_chunk.h).
 static const char* NVS_KEY_LIST_LEGACY = "list";
 static const char* NVS_KEY_LIST_CHUNKS = "listChunks"; // uint16_t chunk count
 static const size_t NVS_CHUNK_MAX_BYTES = 1500;
 static const char* NVS_KEY_SCHEMA = "schema"; // see camera_serialize.h's CAMERA_SCHEMA_VERSION comment
-// Bumped again (was "seedRestore2") - the root cause of the last 2-3
-// missing cameras was saveCameras() silently hitting NVS's per-entry size
-// ceiling on a large camera list (see NVS_KEY_LIST_LEGACY's comment,
-// fixed by chunking above), not a name collision. That fix needs one more
-// full restore pass to actually land the previously-failed cameras.
+// Bumped to rerun the restore once more after the chunking fix.
 static const char* NVS_KEY_SEED_RESTORED = "seedRestore3"; // see restoreMissingCamerasFromSeed()
 
-// Separates whole camera records within the NVS blob (distinct from
-// camera_serialize.cpp's own FIELD_SEP, which separates one record's
-// fields - this file only ever joins/splits on RECORD_SEP, never sees
-// FIELD_SEP directly).
+// Separates records; FIELD_SEP (camera_serialize) separates fields.
 static const char RECORD_SEP = '\x1E';
 
 static std::vector<CameraConfig> seedFromSecrets() {
@@ -75,8 +54,7 @@ static String chunkKey(uint16_t index) {
 
 std::vector<CameraConfig> loadCameras() {
   Preferences prefs;
-  // Read-write, not read-only - see auth_store.cpp's loadDashboardAuth for
-  // why (avoids a spurious NOT_FOUND error log on a not-yet-written namespace).
+  // Read-write (see loadDashboardAuth).
   prefs.begin(NVS_NAMESPACE, false);
   bool hasChunkedList = prefs.isKey(NVS_KEY_LIST_CHUNKS);
   bool hasLegacyList  = prefs.isKey(NVS_KEY_LIST_LEGACY);
@@ -92,9 +70,7 @@ std::vector<CameraConfig> loadCameras() {
   } else if (hasLegacyList) {
     blob = prefs.getString(NVS_KEY_LIST_LEGACY, ""); // pre-chunking format - see its declaration comment
   }
-  // 0 = written before schema versioning existed - see
-  // camera_serialize.h's CAMERA_SCHEMA_VERSION comment for what that means
-  // for how the records below get parsed.
+  // 0 = pre-versioning records.
   uint16_t storedVersion = prefs.getUShort(NVS_KEY_SCHEMA, 0);
   prefs.end();
 
@@ -132,11 +108,7 @@ std::vector<CameraConfig> loadCameras() {
           cams.push_back(c);
         } else {
           droppedRecords++;
-          // Expected count per schema version - see camera_serialize.cpp's
-          // deserializeCameraV0..V5 for what each one actually requires;
-          // kept in sync here by hand since cameraRecordFieldCount() only
-          // reports what a record actually has, not what its own version
-          // expected it to have.
+          // Expected field count per version, for the log (kept by hand).
           const char* expected = "exactly 24";
           if (storedVersion == 0) expected = "11-14";
           else if (storedVersion == 1) expected = "exactly 14";
@@ -152,17 +124,9 @@ std::vector<CameraConfig> loadCameras() {
     }
   }
 
-  // One-time migration: anything not already on the current schema gets
-  // rewritten in the current layout immediately, so every subsequent load
-  // this boot (and every boot after) sees storedVersion == CAMERA_SCHEMA_VERSION.
-  //
-  // Skipped entirely if any record was dropped above - saveCameras() would
-  // permanently overwrite the NVS blob with just the survivors (possibly
-  // zero cameras), destroying whatever's still in the raw, unparsed
-  // original. Safer to leave NVS untouched and keep re-attempting this
-  // same (non-destructive) parse every boot until the real problem - a
-  // firmware bug, or genuinely corrupt NVS - is fixed, than to "migrate"
-  // by quietly deleting the unparsed records.
+  // Rewrite in the current schema, unless a record failed to parse: saving
+  // then would permanently drop it. Leave NVS alone and retry each boot
+  // instead.
   if (droppedRecords > 0) {
     Serial.printf("[camera_store] %d of %d camera record(s) failed to parse - NOT migrating/rewriting "
                   "NVS this boot so the raw data isn't lost. Only the %u that parsed are active for "
@@ -184,8 +148,6 @@ bool saveCameras(const std::vector<CameraConfig>& cameras) {
     if (i > 0) blob += RECORD_SEP;
     blob += serializeCamera(cameras[i]);
   }
-  // Chunked across several keys rather than one - see NVS_KEY_LIST_LEGACY's
-  // declaration comment for why a single value doesn't scale.
   std::vector<String> chunks = splitIntoChunks(blob, NVS_CHUNK_MAX_BYTES);
 
   Preferences prefs;
@@ -193,14 +155,10 @@ bool saveCameras(const std::vector<CameraConfig>& cameras) {
 
   bool chunksOk = true;
   for (size_t i = 0; i < chunks.size(); i++) {
-    // putString returns 0 on failure (NVS full, value too large for one
-    // entry, etc.) - previously ignored here, so a failed write would
-    // silently report success to every caller (addCamera/updateCamera/
-    // deleteCamera) while NVS quietly kept its old value.
+    // putString returns 0 on failure; this used to be ignored.
     if (prefs.putString(chunkKey((uint16_t)i).c_str(), chunks[i]) == 0) chunksOk = false;
   }
-  // Drop leftover chunk keys from a previous, larger save (fewer cameras
-  // now, or the same data landing in fewer chunks).
+  // Remove leftover chunks from a larger previous save.
   uint16_t oldChunkCount = prefs.getUShort(NVS_KEY_LIST_CHUNKS, 0);
   for (uint16_t i = (uint16_t)chunks.size(); i < oldChunkCount; i++) prefs.remove(chunkKey(i).c_str());
   if (prefs.isKey(NVS_KEY_LIST_LEGACY)) prefs.remove(NVS_KEY_LIST_LEGACY); // done with the pre-chunking format
@@ -294,7 +252,7 @@ bool updateCamera(const String& originalName, const CameraConfig& cam) {
 
 size_t restoreMissingCamerasFromSeed() {
   Preferences prefs;
-  // Read-write, not read-only - see auth_store.cpp's loadDashboardAuth for why.
+  // Read-write (see loadDashboardAuth).
   prefs.begin(NVS_NAMESPACE, false);
   bool alreadyRestored = prefs.getBool(NVS_KEY_SEED_RESTORED, false);
   prefs.end();
@@ -323,9 +281,7 @@ size_t restoreMissingCamerasFromSeed() {
                     "collision detected mid-loop, or the NVS write itself failed - see any "
                     "saveCameras ERROR line above).\n", s.name.c_str());
     }
-    // Each iteration does a real NVS read+write; setup() doesn't feed the
-    // watchdog otherwise (only loop() does), so a slow flash write here
-    // shouldn't be allowed to add up toward the 90s timeout.
+    // setup() doesn't feed the watchdog, so feed it per NVS write here.
     esp_task_wdt_reset();
   }
 

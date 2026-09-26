@@ -36,14 +36,8 @@ String findElementByLocalName(const String& xml, const String& localName, int fr
   if (p < 0) return "";
   int start = p + suffix.length();
 
-  // Unlike the unprefixed branch above (which searches for the exact
-  // closing tag string), a namespace prefix on the opening tag doesn't
-  // guarantee the closing tag repeats the same prefix - some ONVIF stacks
-  // are inconsistent about that. Scan forward through *every* "</...>" from
-  // here, comparing each one's own local name (the part after its own
-  // last ':', if any) against localName, so a nested child element's
-  // closing tag that happens to come first doesn't get mistaken for this
-  // element's own end.
+  // Prefixed opening tag: the closing tag may drop the prefix, so compare each
+  // "</...>"'s local name instead of the exact string.
   int searchFrom = start;
   while (true) {
     int closeStart = xml.indexOf("</", searchFrom);
@@ -87,12 +81,8 @@ String findAttributeInTag(const String& tag, const String& attributeName) {
 }
 
 String findAttributeValue(const String& xml, const String& elementName, const String& attributeName) {
-  // Anchored the same two ways findElementByLocalName is (a bare "<name"
-  // opening tag, or a ":name" namespaced one) rather than a plain
-  // substring search for elementName anywhere in the document, which
-  // could otherwise match inside an unrelated longer tag/attribute name
-  // that just happens to contain it (e.g. "Profiles" inside a
-  // "VideoProfiles"-named element, or inside some attribute's value).
+  // Anchored to a real tag name, not any substring (e.g. inside
+  // "VideoProfiles" or an attribute).
   int element = xml.indexOf("<" + elementName);
   if (element < 0) element = xml.indexOf(":" + elementName);
   if (element < 0) return "";
@@ -105,14 +95,8 @@ String findAttributeValue(const String& xml, const String& elementName, const St
 bool responseHasFault(const String& response) {
   if (response.indexOf("<s:Fault") >= 0 || response.indexOf(":Fault") >= 0) return true;
 
-  // Both checks above require a colon immediately before "Fault" (a
-  // namespace-prefixed element - "s:Fault", "soap:Fault", "env:Fault", ...).
-  // A SOAP server declaring the envelope as the DEFAULT (unprefixed)
-  // namespace would instead emit a bare <Fault>, which neither check
-  // matches - this loop catches that case too. Requires a tag-boundary
-  // character right after "Fault" (>, whitespace, or /) so a hypothetical
-  // unrelated element merely starting with "Fault" (e.g. "FaultInfo")
-  // doesn't produce a false positive.
+  // Also catch an unprefixed <Fault> (default-namespace envelope), requiring a
+  // tag boundary after it so "FaultInfo" doesn't match.
   int p = response.indexOf("<Fault");
   while (p >= 0) {
     char next = (p + 6 < (int)response.length()) ? response[p + 6] : '\0';

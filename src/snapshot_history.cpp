@@ -5,10 +5,7 @@
 #include <cstring>
 
 // ============================================================
-// PSRAM ring fallback - unchanged from before SD support existed
-// (including its own free-PSRAM safety check, added when history was
-// first introduced), just moved here from telegram.cpp and given
-// internal linkage.
+// PSRAM ring fallback
 // ============================================================
 
 static void pushRamSnapshot(const CameraConfig& cfg, CameraState& st, uint8_t* jpg, size_t jpgLen,
@@ -78,10 +75,7 @@ static std::vector<SnapshotSource> ramSnapshotSourcesAll(CameraState& st) {
   return sources;
 }
 
-// date is left "" for every entry - the PSRAM ring only stores a boot-
-// relative millis() timestamp (SnapshotHistoryEntry::ms), not a wall-clock
-// date, so there's nothing to report here. See SnapshotEntryInfo's own
-// comment (snapshot_source.h).
+// No dates: the ring only has boot-relative millis().
 static std::vector<SnapshotEntryInfo> ramSnapshotEntriesAll(CameraState& st) {
   std::vector<SnapshotEntryInfo> entries;
   CameraStateLock lock(st);
@@ -102,25 +96,13 @@ static std::vector<SnapshotEntryInfo> ramSnapshotEntriesAll(CameraState& st) {
 void pushCameraSnapshot(const CameraConfig& cfg, CameraState& st, uint8_t* jpg, size_t jpgLen,
                          SnapshotSource source) {
   if (sdActive()) {
-    // writeSdSnapshot blocks on sd_store.cpp's internal mutex, which a
-    // concurrent full storage check (checkSnapshotStorage, when the
-    // automatic periodic check is enabled) can hold for a long walk - this
-    // camera task can't reach checkCameraOnlineStatus (camera.cpp) again
-    // until this call returns. Without the compensation below, that purely
-    // SD-internal delay would silently count against st.lastContactMs and
-    // could trip a false OFFLINE alert with nothing actually wrong with
-    // the camera - lastContactMs already reflects the camera's real last
-    // response (set in cameraSoapCall, before this write ever started), so
-    // advancing it by exactly how long this call was blocked just excludes
-    // that unrelated delay from "how long has this camera been silent,"
-    // rather than fabricating fresh contact that didn't happen.
+    // The SD write can block behind a long storage check. Advance
+    // lastContactMs by the time blocked, so SD delays don't count as camera
+    // silence (a false OFFLINE).
     unsigned long before = millis();
     writeSdSnapshot(cfg, jpg, jpgLen, source); // takes ownership regardless of outcome - see its own comment
     unsigned long blockedMs = millis() - before;
-    // Lock-guarded - this function is reachable from loop()'s task too
-    // (sendOnDemandSnapshot, via /snap or handleAllCamerasCommand), not
-    // just the owning camera's own task. See cameraSoapCall's (camera.cpp)
-    // comment for why lastContactMs itself is lock-guarded now.
+    // Locked: also reached from loop()'s task via /snap.
     { CameraStateLock lock(st); st.lastContactMs += blockedMs; }
     return;
   }

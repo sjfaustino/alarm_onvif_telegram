@@ -11,10 +11,7 @@
 #include <cctype>
 #include <time.h>
 
-// IP/MAC/signal/gateway/subnet/DNS rows for whichever network is currently
-// connected - shared by both the Primary and Backup fieldsets below rather
-// than duplicated, since exactly one (or neither) of them is ever true at
-// once.
+// Live connection rows, shown under whichever network is connected.
 static String renderLiveConnectionRows() {
   String html;
   html += "<tr><th>IP address</th><td>" + WiFi.localIP().toString() + "</td></tr>";
@@ -26,12 +23,8 @@ static String renderLiveConnectionRows() {
   return html;
 }
 
-// External battery-backed RTC (DS3231, I2C) - optional, off by default,
-// same "enable checkbox needs a reboot, status reflects what actually
-// happened at boot" shape as the Storage page's SD card section. Grouped
-// with the other clock-related settings on this page (NTP/TZ below)
-// rather than a whole new tab, since it answers the same underlying
-// question: what does this board think time is.
+// Optional DS3231 RTC; enabling needs a reboot and the status shows what
+// happened at boot. Lives here with the other clock settings.
 static String renderRtcFieldset() {
   RtcStatus status = getRtcStatus();
 
@@ -78,13 +71,8 @@ static String renderRtcFieldset() {
 String renderNetworkPanel(const String& prefillSsid) {
   WifiCredentials creds = loadWifiCredentials();
 
-  // Status below reflects the ACTUAL stored/connected primary, never the
-  // prefill - a scanned-network "Add" click used to overwrite
-  // creds.primary.ssid before this check ran, so the Primary status box
-  // would silently show "Not currently connected" for a network you were
-  // only considering adding, while your real primary's status vanished
-  // from the page. formPrimarySsid is prefill-aware and used ONLY to
-  // populate the edit form below.
+  // Status uses the stored primary, never the prefill: a scan's Add link once
+  // made the real primary's status disappear.
   bool primaryConnected = WiFi.status() == WL_CONNECTED && WiFi.SSID() == creds.primary.ssid;
   bool backupConnected = WiFi.status() == WL_CONNECTED && creds.backup.ssid.length() > 0 &&
                           WiFi.SSID() == creds.backup.ssid;
@@ -92,14 +80,7 @@ String renderNetworkPanel(const String& prefillSsid) {
 
   String html = "<h1>Network</h1>";
 
-  // Live connection details (IP/MAC/signal/gateway/etc.) only mean anything
-  // for whichever network is ACTUALLY connected right now - WiFi.localIP()
-  // and friends reflect the one active radio connection, not a property of
-  // either SSID individually, so they're rendered under whichever fieldset
-  // is currently connected rather than in a separate block that didn't say
-  // which network it was describing. The MAC address is the board's own
-  // interface (same regardless of which network it joins), shown alongside
-  // the rest for convenience, not because it's specific to that network.
+  // Live details go under whichever fieldset is actually connected.
   html += "<fieldset><legend>Primary</legend><table>";
   html += "<tr><th>SSID</th><td>" + htmlEscape(creds.primary.ssid) + "</td></tr>";
   html += "<tr><th>Status</th><td>" + String(primaryConnected ? "Connected" : "Not currently connected") +
@@ -151,8 +132,6 @@ String renderNetworkPanel(const String& prefillSsid) {
           "(reachable at http://&lt;hostname&gt;.local/)"
           "<input type=\"text\" name=\"hostname\" value=\"" + htmlEscape(creds.hostname) + "\" required></label>";
 
-  // Applies to whichever of primary/backup ends up connecting - see
-  // network_store.h's comment on WifiCredentials::useStaticIP.
   html += "<div style=\"margin-top:20px;\"><label class=\"checkbox\">"
           "<input type=\"radio\" name=\"ipMode\" value=\"dhcp\" id=\"ipModeDhcp\"" +
           String(creds.useStaticIP ? "" : " checked") + "> DHCP</label>";
@@ -164,20 +143,13 @@ String renderNetworkPanel(const String& prefillSsid) {
   html += "<label>DNS server (optional - falls back to the gateway if left blank)"
           "<input type=\"text\" name=\"staticDNS\" id=\"staticDNS\"></label>";
 
-  // DHCP shows the board's live settings, grayed out; Static shows the
-  // stored values, editable. Disabled inputs don't submit, so switching to
-  // DHCP and saving correctly leaves the stored static values untouched.
+  // DHCP shows live values greyed out; Static shows stored values. Disabled
+  // inputs don't submit, so saving in DHCP mode keeps the stored static
+  // values.
   html += "<script>";
-  // netLive comes straight from the ESP32 WiFi stack (IPAddress::toString()
-  // only ever produces digits and dots) - safe by construction, no escaping
-  // needed. netStatic's fields are jsSingleQuoteEscape()d, not just relying
-  // on handleSaveNetwork's IPAddress::fromString() validation below: config
-  // Import (config_backup.cpp -> network_serialize.cpp) writes
-  // WifiCredentials' static-IP fields straight from an uploaded file with
-  // no format validation at all, bypassing that check entirely - an
-  // imported non-IP value here would otherwise break out of this
-  // single-quoted JS string and inject arbitrary script into every future
-  // load of this page.
+  // netLive is digits and dots only. netStatic is JS-escaped because an
+  // imported config can put anything in those fields - otherwise script
+  // injection.
   html += "var netLive={ip:'" + WiFi.localIP().toString() + "',subnet:'" + WiFi.subnetMask().toString() +
           "',gateway:'" + WiFi.gatewayIP().toString() + "',dns:'" + WiFi.dnsIP().toString() + "'};";
   html += "var netStatic={ip:'" + jsSingleQuoteEscape(creds.staticIP) + "',subnet:'" +
@@ -226,11 +198,8 @@ void handleSaveNetwork(PsychicRequest* request, String& banner) {
   String ssid = request->getParam("ssid", "");
   ssid.trim();
   String password = request->getParam("password", "");
-  // A changed SSID with a blank password would otherwise silently keep the
-  // OLD network's password and pair it with the NEW network - guaranteed
-  // to fail to connect, and for the board's own WiFi that means it never
-  // comes back without a USB cable. Require the password whenever the SSID
-  // itself actually changes; unchanged SSID still keeps "blank = unchanged".
+  // A new SSID with a blank password would pair the old password with the new
+  // network and strand the board, so require one whenever the SSID changes.
   if (ssid.length() > 0 && ssid != creds.primary.ssid && password.length() == 0) {
     banner = "Primary SSID changed - its password is required too (an old password would otherwise be "
              "paired with the new network). Not saved.";
@@ -239,8 +208,8 @@ void handleSaveNetwork(PsychicRequest* request, String& banner) {
   if (ssid.length() > 0) creds.primary.ssid = ssid;
   if (password.length() > 0) creds.primary.password = password;
 
-  // Backup SSID isn't "blank keeps current" like the passwords - it's the
-  // only way to disable a configured backup, so blank clears both fields.
+  // Blank backup SSID removes the backup (unlike blank passwords, which keep
+  // the current one).
   String backupSsid = request->getParam("backupSsid", "");
   backupSsid.trim();
   if (backupSsid.length() == 0) {
@@ -248,7 +217,6 @@ void handleSaveNetwork(PsychicRequest* request, String& banner) {
     creds.backup.password = "";
   } else {
     String backupPassword = request->getParam("backupPassword", "");
-    // Same trap as primary above, same fix.
     if (backupSsid != creds.backup.ssid && backupPassword.length() == 0) {
       banner = "Backup SSID changed - its password is required too (an old password would otherwise be "
                "paired with the new network). Not saved.";
@@ -266,8 +234,7 @@ void handleSaveNetwork(PsychicRequest* request, String& banner) {
     return;
   }
 
-  // Static fields are disabled (never submitted) when DHCP is selected -
-  // only touch/validate them when the form actually submitted ipMode=static.
+  // Static fields only submit (and are validated) in static mode.
   String ipMode = request->getParam("ipMode", "dhcp");
   creds.useStaticIP = (ipMode == "static");
   if (creds.useStaticIP) {
@@ -295,20 +262,12 @@ void handleSaveNetwork(PsychicRequest* request, String& banner) {
   if (ntpServer.length() > 0) creds.ntpServer = ntpServer;
 
   long ntpMinutes = request->getParam("ntpSyncMinutes", "60").toInt();
-  // Upper-capped at 30 days (NTP_SYNC_MAX_MINUTES): unsigned long is 32-bit
-  // on this platform, and *60000UL wraps above ~71583 minutes - a
-  // fat-fingered huge resync interval would otherwise silently wrap into a
-  // tiny one, turning "resync rarely" into a resync storm against the NTP
-  // server. This is a form-input sanity bound, not the only guard - see
-  // time_sync.cpp's setupTime for the point-of-use clamp that also covers a
-  // value that bypassed this form entirely (a hand-edited/imported NVS blob).
+  // Capped at 30 days (minutes * 60000 overflows 32 bits). Re-clamped at use.
   if (ntpMinutes > (long)NTP_SYNC_MAX_MINUTES) ntpMinutes = (long)NTP_SYNC_MAX_MINUTES;
   if (ntpMinutes > 0) creds.ntpSyncIntervalMs = (unsigned long)ntpMinutes * 60000UL;
-  // else keep whatever was already stored - a blank/zero/negative field
-  // shouldn't produce a 0ms (hammer-the-server) resync interval.
+  // else keep the stored value; 0 would resync continuously.
 
-  // A blank field is a valid choice in its own right (UTC, no TZ applied) -
-  // no "keep previous value" fallback needed here, unlike the fields above.
+  // Blank is valid (UTC).
   String posixTz = request->getParam("posixTz", "");
   posixTz.trim();
   creds.posixTz = posixTz;
@@ -321,17 +280,11 @@ void handleSaveNetwork(PsychicRequest* request, String& banner) {
 }
 
 // ============================================================
-// WiFi network scan - see webserver_network.h's own comments on
-// startWifiScanAsync/renderWifiScanStatus. BackgroundJob<T> (shared with
-// the Cameras page's "Test all cameras"/"Search network for cameras"
-// buttons) owns the mutex/state-machine part.
+// WiFi network scan.
 // ============================================================
 
-// A scan that genuinely found nothing nearby and a scan that outright
-// failed (radio/driver hiccup - WiFi.scanNetworks() returns negative)
-// used to render the identical "No networks found", which told a user
-// getting a real failure that their neighborhood is just quiet. Carrying
-// scanFailed alongside the result list is the whole fix.
+// Distinguishes a failed scan from a quiet neighbourhood; both used to read
+// "No networks found".
 struct WifiScanOutcome {
   bool scanFailed = false;
   std::vector<WifiScanResult> networks;
@@ -339,20 +292,10 @@ struct WifiScanOutcome {
 
 static BackgroundJob<WifiScanOutcome> g_wifiScanJob;
 
-// Milliseconds to wait before actually starting the scan. The route
-// handler's HTTP response ("Scanning...") is queued to send over this same
-// WiFi radio moments before this task starts - without a short head start,
-// WiFi.scanNetworks()'s channel-hopping could begin while that response is
-// still in flight, delaying or corrupting delivery of the very "scan
-// started" confirmation the click was supposed to produce. The user is
-// already waiting several seconds for the scan itself; this adds an
-// unnoticeable fraction of one more.
+// Let the "Scanning..." response go out before channel hopping starts
+// disrupting the radio.
 static const unsigned long kScanStartDelayMs = 500;
 
-// The actual (slow) work - runs on wifiScanTask's own background task,
-// never on the calling task. See startWifiScanAsync's own comment for why
-// running this synchronously on the request-handling task would be worse
-// than just slow.
 static WifiScanOutcome runWifiScan() {
   delay(kScanStartDelayMs);
 
@@ -385,9 +328,7 @@ BackgroundJobStartOutcome startWifiScanAsync() {
   if (!g_wifiScanJob.tryStart()) return BackgroundJobStartOutcome::AlreadyRunning; // one scan at a time - a second click while one's in flight is a no-op
   BaseType_t created = xTaskCreate(wifiScanTask, "wifiScan", 4096, nullptr, tskIDLE_PRIORITY + 1, nullptr);
   if (created != pdPASS) {
-    // Without this, a task creation failure (out of memory) would leave
-    // g_wifiScanJob permanently stuck "in progress" - see
-    // BackgroundJob<T>::cancelStart's own comment (background_job.h).
+    // Undo tryStart() so the job isn't stuck in progress.
     g_wifiScanJob.cancelStart();
     Serial.println("[webserver_network] ERROR: failed to start the WiFi scan task (out of memory?) - "
                     "try again once memory frees up.");

@@ -10,9 +10,7 @@
 #include <nvs.h>
 #include <time.h>
 
-// "" if epoch is 0 (unknown - boot_checks.cpp's checks run after WiFi connects,
-// so the clock is normally already synced by then, but a very old record
-// from before this feature existed would have no timestamp at all).
+// "" for epoch 0 (no timestamp recorded).
 static String formatEpochLocal(time_t epoch) {
   if (epoch == 0) return "";
   struct tm tmStruct;
@@ -30,10 +28,7 @@ String renderFirmwarePanel() {
   html += "<tr><th>Version</th><td>" + String(FIRMWARE_VERSION) + "</td></tr>";
   html += "<tr><th>Build</th><td>" + String(__DATE__) + " " + String(__TIME__) + "</td></tr>";
   html += "<tr><th>Running partition</th><td>" + String(running ? running->label : "?") + "</td></tr>";
-  // Persisted (ota_history.h) by boot_checks.cpp's boot-time OTA checks - "" (no
-  // row) until the first update this board ever confirms healthy or rolls
-  // back, so a board that's never had an OTA update just doesn't mention
-  // it, rather than showing a misleading "None" row.
+  // No row until an OTA outcome has been recorded.
   OtaHistoryEntry otaHistory = loadOtaHistory();
   if (otaHistory.outcome != OtaOutcome::None) {
     String when = formatEpochLocal(otaHistory.epoch);
@@ -47,29 +42,15 @@ String renderFirmwarePanel() {
   html += "<tr><th>Sketch size</th><td>" + String(ESP.getSketchSize() / 1024) + " KB</td></tr>";
   html += "<tr><th>Free space for update</th><td>" + String(ESP.getFreeSketchSpace() / 1024) + " KB</td></tr>";
 
-  // Same internal-RAM pool WiFiClientSecure/mbedTLS allocate from - see
-  // health_monitor.cpp's checkHeapHealth()/HEAP_LOW_WARN_BYTES (config.h) for the
-  // proactive Telegram alert and timestamped Activity-log trail this
-  // mirrors; shown here too so it's visible without Telegram/Serial
-  // access, same "don't only rely on someone noticing a push notification"
-  // reasoning as the NVS usage row below. Largest allocatable block, not
-  // just the free-byte total, distinguishes a fragmented heap (plenty of
-  // free bytes, none of them contiguous enough for whatever allocation
-  // actually needs one) from genuinely low total memory - same stat
-  // sendTelegramPhotoBuffered (telegram_transport.cpp) already logs before every
-  // photo send.
+  // Internal RAM, where mbedTLS allocates. Largest block vs. total shows
+  // fragmentation.
   html += "<tr><th>Free heap (internal)</th><td>" + String(ESP.getFreeHeap()) + " bytes</td></tr>";
   html += "<tr><th>Free heap - lifetime min</th><td>" + String(ESP.getMinFreeHeap()) + " bytes</td></tr>";
   html += "<tr><th>Largest allocatable block</th><td>" + String(ESP.getMaxAllocHeap()) + " bytes</td></tr>";
   html += "<tr><th>Free PSRAM</th><td>" +
           String((unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM)) + " bytes</td></tr>";
 
-  // Previously invisible entirely - see TelegramRetryQueueStatus's own
-  // comment (telegram_retry_queue.h) for what an empty vs. nonzero count
-  // actually means. formatUptime()'s "Xh Ym ago" shape reused directly
-  // for "queued for" since oldestPendingMs is already an elapsed
-  // duration, not a point in time (formatElapsedSince, its usual partner,
-  // would need a "now" to subtract from, which isn't the case here).
+  // oldestPendingMs is already a duration, so formatUptime fits.
   TelegramRetryQueueStatus retryStatus = getTelegramRetryQueueStatus();
   html += "<tr><th>Telegram retry queue</th><td>" +
           (retryStatus.count > 0
@@ -78,15 +59,8 @@ String renderFirmwarePanel() {
                : String("empty")) +
           "</td></tr>";
 
-  // NVS is entry-based (fixed ~32-byte slots), not a raw byte pool, so
-  // "% used" here means % of entries, not bytes - still the right signal:
-  // this project has hit a real incident before where camera records
-  // silently failed to persist once NVS filled up (see camera_store.cpp's
-  // NVS_KEY_LIST_LEGACY comment) - a visible warning here before that
-  // happens again beats discovering it via a dropped write. main.cpp's
-  // checkNvsUsage() also proactively alerts via Telegram at the same
-  // NVS_USAGE_WARN_PERCENT threshold, so this doesn't only get noticed by
-  // someone happening to load this page.
+  // Percent of NVS entries (slots), not bytes. Records have silently failed to
+  // save once NVS filled; checkNvsUsage also alerts at this threshold.
   nvs_stats_t nvsStats;
   if (nvs_get_stats(NULL, &nvsStats) == ESP_OK && nvsStats.total_entries > 0) {
     unsigned pct = (unsigned)((uint64_t)nvsStats.used_entries * 100 / nvsStats.total_entries);

@@ -16,15 +16,9 @@
 #include <Preferences.h>
 #include <vector>
 
-// snapshotUriOverride (buildConfigExport, below) is free text, not
-// necessarily using the intended {USER}/{PASS} placeholder pattern - a
-// user could instead type literal embedded URL credentials
-// ("http://admin:realpass@host/snap.jpg"). This function's own stated
-// guarantee ("Password: (not exported...)") only actually holds if that
-// case is caught too, not just the placeholder path - strips any
-// "user[:pass]@" authority-section credentials before export. A bare '@'
-// that's actually part of the URL's path (not the authority section, i.e.
-// appears after the first '/' following the scheme) is left untouched.
+// snapshotUriOverride is free text and may hold literal credentials
+// ("http://admin:pass@host/..."); strip userinfo from the readable section. An
+// '@' after the host (in the path) is left alone.
 static String redactUrlCredentials(const String& url) {
   int schemeEnd = url.indexOf("://");
   if (schemeEnd < 0) return url;
@@ -36,26 +30,16 @@ static String redactUrlCredentials(const String& url) {
   return url.substring(0, authorityStart) + "(redacted)@" + url.substring(at + 1);
 }
 
-// BridgeWatchdogSettings::cameraA/cameraB are free text (typed into a
-// dashboard <input>, not selected from a fixed list at export time), so -
-// same discipline camera_serialize.cpp/telegram_user_serialize.cpp's own
-// stripSeparators() already applies to every free-text field they
-// serialize - a stray literal 0x1F byte must not be allowed to corrupt
-// the exported NETWATCHDOG/BRIDGEWATCHDOG/POWERMONITOR lines' own field
-// boundaries (all use the same separator).
+// cameraA/cameraB are free text; strip the field separator so it can't break
+// the line's fields.
 static String stripFieldSep(const String& s) {
   String out = s;
   out.replace(String((char)0x1F), "");
   return out;
 }
 
-// One-slot pre-import backup - see applyConfigImport's own comment for why
-// this needs to exist at all. Chunked the same way camera_store.cpp/
-// telegram_users.cpp chunk their own record lists (nvs_chunk.h) - a full
-// export with several cameras/users can exceed NVS's practical per-entry
-// size ceiling, same reasoning as their own NVS_KEY_LIST_LEGACY comments.
-// Only ever one backup slot (each new import overwrites the last) - this
-// is a "just before this last mistake" safety net, not a version history.
+// One-slot pre-import backup ("undo my last import", not a history), chunked
+// like the record lists since a full export can exceed one NVS entry.
 static const char* BACKUP_NVS_NAMESPACE = "cfgbackup";
 static const char* BACKUP_KEY_CHUNK_COUNT = "count";
 static const size_t BACKUP_CHUNK_MAX_BYTES = 1500;
@@ -76,8 +60,7 @@ static bool saveConfigBackup(const String& text) {
   for (size_t i = 0; i < chunks.size(); i++) {
     if (prefs.putString(backupChunkKey((uint16_t)i).c_str(), chunks[i]) == 0) chunksOk = false;
   }
-  // Drop leftover chunk keys from a previous, larger backup - same reasoning
-  // as camera_store.cpp's saveCameras().
+  // Remove leftover chunks from a larger previous backup.
   uint16_t oldChunkCount = prefs.getUShort(BACKUP_KEY_CHUNK_COUNT, 0);
   for (uint16_t i = (uint16_t)chunks.size(); i < oldChunkCount; i++) prefs.remove(backupChunkKey(i).c_str());
 
@@ -88,11 +71,8 @@ static bool saveConfigBackup(const String& text) {
 
 String loadConfigBackup() {
   Preferences prefs;
-  // Read-write, not read-only - see auth_store.cpp's loadDashboardAuth for
-  // why (this namespace is never written until the first import, so a
-  // read-only open would spam a NOT_FOUND error on every /import/backup
-  // request - or every render, if this is ever surfaced there too - until
-  // that first import happens).
+  // Read-write (see loadDashboardAuth); this namespace doesn't exist until the
+  // first import.
   prefs.begin(BACKUP_NVS_NAMESPACE, false);
   uint16_t chunkCount = prefs.getUShort(BACKUP_KEY_CHUNK_COUNT, 0);
   std::vector<String> chunks;
@@ -110,9 +90,7 @@ ConfigImportApplyResult applyConfigImport(const String& text) {
       parsed.camerasFound || parsed.usersFound || parsed.networkFound || parsed.sdSettingsFound ||
       parsed.netWatchdogFound || parsed.bridgeWatchdogFound || parsed.powerMonitorFound;
   if (result.anyDomainFound) {
-    // Captures whatever is CURRENTLY in NVS before any of the replaceAll*/
-    // save* calls below touch it - see this function's own header comment
-    // (config_backup.h) for why this has to happen first, not after.
+    // Must snapshot before anything below writes to NVS.
     result.backupSaved = saveConfigBackup(buildConfigExport());
     if (!result.backupSaved) {
       Serial.println("[config_backup] WARNING: failed to save the pre-import backup (NVS write "
@@ -123,9 +101,7 @@ ConfigImportApplyResult applyConfigImport(const String& text) {
 
   if (parsed.camerasFound) {
     if (parsed.camerasDuplicateName) {
-      // See ConfigImportResult::camerasDuplicateName's own comment
-      // (config_import_parse.h) - parsed.cameras is already empty here,
-      // nothing safe to hand to replaceAllCameras.
+      // Duplicate names: the parser left cameras empty.
       result.camerasRejectedDuplicate = true;
     } else if (replaceAllCameras(parsed.cameras)) {
       result.camerasImported = true;
@@ -250,12 +226,8 @@ String buildConfigExport() {
          (sdSettings.checkIntervalHours > 0 ? String(sdSettings.checkIntervalHours) + "h" : String("off")) + "\n";
   out += "SD snapshot retention: " +
          (sdSettings.retentionDays > 0 ? String(sdSettings.retentionDays) + " day(s)" : String("keep forever")) + "\n";
-  // No dedicated serializer - see config_import_parse.cpp's own comment on
-  // why this stays a tiny inline parser rather than a whole schema-
-  // versioned lib module for a few primitive fields. v2 (retentionDays
-  // appended) - v1 (2 fields, no retentionDays) is a permanent, never-
-  // edited historical branch in config_import_parse.cpp, same discipline
-  // as the schema-versioned serializers' own old branches.
+  // Inline format (a few primitive fields), still versioned. v2 added
+  // retentionDays; the v1 parser branch stays unchanged.
   out += "### SDSETTINGS v2\n";
   out += String(sdSettings.enabled ? "1" : "0") + "\x1F" + String(sdSettings.checkIntervalHours) +
          "\x1F" + String(sdSettings.retentionDays) + "\n";

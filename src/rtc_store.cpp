@@ -12,21 +12,13 @@ static const uint8_t DS3231_REG_SECONDS = 0x00; // first of the 7 contiguous clo
 
 static bool g_rtcSettingEnabled = false; // cached at boot, see initRtc()
 static bool g_rtcAvailable = false;      // see rtcActive()'s comment
-// Guards every I2C transaction against the DS3231 - readRtcTime() can run
-// on a PsychicHttp request task (the Network page reads it directly) at
-// the same moment writeRtcTime() runs on loop()'s task (setupTime()'s
-// post-NTP-sync writeback, on a WiFi reconnect) - Wire's multi-call
-// transaction sequence (beginTransmission/write/endTransmission/
-// requestFrom/read) isn't atomic across tasks on its own, so an
-// overlapping read and write could otherwise interleave and corrupt each
-// other. Same reasoning as sd_store.cpp's g_sdMutex/telegram_transport.cpp's
-// g_telegramNetMutex - a shared hardware peripheral touched from more
-// than one task needs a lock around each transaction.
+// Wire transactions aren't atomic across tasks; the Network page (web server)
+// can read while loop() writes after an NTP sync.
 static SemaphoreHandle_t g_rtcMutex = xSemaphoreCreateMutex();
 
 RtcSettings loadRtcSettings() {
   Preferences prefs;
-  // Read-write, not read-only - see auth_store.cpp's loadDashboardAuth for why.
+  // Read-write (see loadDashboardAuth).
   prefs.begin(NVS_NAMESPACE, false);
   RtcSettings settings;
   settings.enabled = prefs.getBool(NVS_KEY_ENABLED, false);
@@ -74,8 +66,7 @@ bool rtcActive() {
   return g_rtcSettingEnabled && g_rtcAvailable;
 }
 
-// Caller must hold g_rtcMutex. Reads one register byte; false on any I2C
-// failure.
+// Caller holds g_rtcMutex.
 static bool readRegisterLocked(uint8_t reg, uint8_t* outByte) {
   Wire.beginTransmission(DS3231_I2C_ADDR);
   Wire.write(reg);
@@ -85,8 +76,7 @@ static bool readRegisterLocked(uint8_t reg, uint8_t* outByte) {
   return true;
 }
 
-// Caller must hold g_rtcMutex. Writes one register byte; false on any I2C
-// failure.
+// Caller holds g_rtcMutex.
 static bool writeRegisterLocked(uint8_t reg, uint8_t value) {
   Wire.beginTransmission(DS3231_I2C_ADDR);
   Wire.write(reg);
@@ -112,11 +102,7 @@ bool readRtcTime(struct tm* out) {
   Ds3231Registers regs;
   for (auto& b : regs.bytes) b = (uint8_t)Wire.read();
 
-  // Per the datasheet, a set Oscillator Stop Flag means the chip's clock
-  // registers - however plausible-looking - are not trustworthy, typically
-  // because the backup battery was dead or missing during a power loss.
-  // Checked on every read, not just at boot, since the chip could lose
-  // power (battery removed/replaced) at any point in this board's uptime.
+  // Checked on every read: the chip can lose power (battery swap) at any time.
   uint8_t statusByte = 0;
   bool statusOk = readRegisterLocked(DS3231_STATUS_REG, &statusByte);
   xSemaphoreGive(g_rtcMutex);
@@ -143,13 +129,9 @@ bool writeRtcTime(const struct tm& t) {
   for (uint8_t b : regs.bytes) Wire.write(b);
   bool ok = Wire.endTransmission() == 0;
 
-  // Best-effort: this write just set a known-good (NTP-sourced) time, so
-  // clear the Oscillator Stop Flag that a past power loss may have set -
-  // read-modify-write to leave every other status register bit (alarm
-  // flags, 32kHz output enable) untouched. Failing to clear it doesn't
-  // fail the overall write - the important part (the actual time) already
-  // succeeded; the next readRtcTime() would just keep reporting the flag
-  // and refusing to trust the chip, which is the safe direction to fail in.
+  // Best-effort clear of the Oscillator Stop Flag (read-modify-write keeps the
+  // other bits). If it fails, reads keep distrusting the chip - the safe
+  // direction.
   if (ok) {
     uint8_t statusByte = 0;
     if (readRegisterLocked(DS3231_STATUS_REG, &statusByte) && ds3231OscillatorStopped(statusByte)) {

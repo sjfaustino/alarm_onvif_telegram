@@ -3,9 +3,9 @@
 
 // Pure decision logic for the relay watchdogs, tested natively.
 
-// Pins already in use (SD, RTC) or unsafe on the ESP32-S3: strapping pins 0,
-// 3, 45, 46 and 26-31 (octal PSRAM/flash - driving them hangs the chip).
-// Needed because relay pins are set from the dashboard or an imported config.
+// Pins already used (SD, RTC) or unsafe on the ESP32-S3: strapping pins,
+// flash/octal PSRAM (26-37), USB-JTAG and UART0. Needed because relay pins
+// come from the dashboard or an imported config.
 bool isReservedOrUnsafePin(int pin);
 
 // Unsigned subtraction keeps this correct across millis() wraparound.

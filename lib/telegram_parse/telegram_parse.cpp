@@ -7,12 +7,8 @@ std::vector<TelegramUpdate> parseTelegramUpdates(const String& jsonBody, String*
   std::vector<TelegramUpdate> updates;
 
   JsonDocument doc;
-  // .c_str(), not jsonBody directly - ArduinoJson's Arduino-String reader
-  // specialization relies on platform detection that doesn't kick in
-  // under ArduinoFake (env:native), falling back to a generic Stream-style
-  // reader String doesn't implement. Passing a plain const char* sidesteps
-  // that entirely and works identically on both the real firmware and
-  // native tests.
+  // .c_str(): ArduinoJson's String reader doesn't work under ArduinoFake
+  // (native tests); const char* works everywhere.
   DeserializationError err = deserializeJson(doc, jsonBody.c_str());
   if (err) {
     if (error) *error = String("JSON parse failed: ") + err.c_str();
@@ -36,10 +32,7 @@ std::vector<TelegramUpdate> parseTelegramUpdates(const String& jsonBody, String*
         u.chatId = chat["id"].as<int64_t>();
         u.hasChatId = true;
       }
-      // const char*, not .as<String>() - same reasoning as the .c_str()
-      // above: ArduinoJson's String-aware conversion isn't available under
-      // ArduinoFake, but every platform supports const char*, and String's
-      // own constructor from one works everywhere regardless.
+      // const char* for the same reason.
       const char* text = message["text"];
       if (text != nullptr) {
         u.text = String(text);
@@ -54,10 +47,7 @@ std::vector<TelegramUpdate> parseTelegramUpdates(const String& jsonBody, String*
         }
         const char* fileName = document["file_name"];
         if (fileName != nullptr) u.documentFileName = String(fileName);
-        // A document's own accompanying text arrives as "caption", not
-        // "text" (which stays absent on a document message) - see
-        // TelegramUpdate::documentCaption's own comment for why this
-        // isn't folded into `text` above.
+        // A document's text arrives as "caption".
         const char* caption = message["caption"];
         if (caption != nullptr) u.documentCaption = String(caption);
       }
@@ -73,11 +63,7 @@ std::vector<TelegramUpdate> parseTelegramUpdates(const String& jsonBody, String*
       const char* data = callbackQuery["data"];
       if (data != nullptr) u.callbackData = String(data);
 
-      // Same null-safety idiom as the "message" branch above - a stale/
-      // deleted-message callback_query can omit this entirely, in which
-      // case chatId/hasChatId just stay whatever "message" above already
-      // left them (false, since a callback_query update has no top-level
-      // "message" of its own).
+      // May be absent on a stale callback; chatId then stays unset.
       JsonObject cbMessage = callbackQuery["message"];
       if (!cbMessage.isNull()) {
         JsonObject chat = cbMessage["chat"];
@@ -87,10 +73,8 @@ std::vector<TelegramUpdate> parseTelegramUpdates(const String& jsonBody, String*
         }
       }
     }
-    // Neither "message" nor "callback_query" (e.g. edited_message,
-    // channel_post) - u keeps hasChatId=false/text=""/hasCallbackQuery=
-    // false, which the caller treats as "nothing to act on", but updateId
-    // is still returned so its offset still advances.
+    // Other update types: nothing to act on, but updateId still advances the
+    // offset.
 
     updates.push_back(u);
   }
@@ -129,19 +113,14 @@ TelegramCommandPermission requiredPermissionForCommand(TelegramCommand command) 
     case TelegramCommand::Restore: return TelegramCommandPermission::Restore;
     case TelegramCommand::Unknown:
     case TelegramCommand::Help:
-    // A user's own display language is a personal preference, not camera
-    // control - available to any configured user regardless of
-    // canCommand/canSnap/canReset, same as /help.
+    // Language is a personal preference, open to every user (like /help).
     case TelegramCommand::Lang: return TelegramCommandPermission::Unknown;
   }
   return TelegramCommandPermission::Unknown; // unreachable if every enumerator above is handled
 }
 
-// Splits "D01 30" into name="D01", duration="30" (both trimmed); "D01"
-// alone leaves duration empty. Only the first two whitespace-separated
-// tokens matter - anything after a second space is silently dropped
-// (parseDurationToken/telegram_commands.cpp reject a garbled duration token on
-// their own, no need to duplicate that here).
+// "D01 30" -> name "D01", duration "30". Anything after a second space is
+// dropped; bad durations are rejected downstream.
 static void splitNameAndDuration(const String& rest, String& name, String& duration) {
   String trimmed = rest;
   trimmed.trim();
@@ -217,25 +196,19 @@ ParsedDuration parseDurationToken(const String& token, const struct tm& nowLocal
 
   int colon = token.indexOf(':');
   if (colon < 0) {
-    // Plain minutes - require every character to be a digit, so a typo
-    // like "30m" or "abc" doesn't silently parse as 0 via String::toInt().
+    // All digits, so "30m" doesn't parse as 0.
     for (size_t i = 0; i < token.length(); i++) {
       if (!isdigit((unsigned char)token[i])) return result;
     }
     long minutes = token.toInt();
     if (minutes <= 0) return result; // "0" isn't a valid timer
-    // See MAX_DURATION_MINUTES' own comment - this isn't a sanity clamp,
-    // it's what keeps checkScheduledAlertReverts' millis()-wraparound due-
-    // check correct. Rejected outright (not silently clamped down) so an
-    // absurd request doesn't silently schedule something the sender never
-    // asked for.
+    // Rejected, not clamped (see MAX_DURATION_MINUTES).
     if (minutes > MAX_DURATION_MINUTES) return result;
     result.ok = true;
     result.secondsFromNow = (unsigned long)minutes * 60UL;
     return result;
   }
 
-  // HH:MM - exactly 2 digits each, colon in the middle, nothing else.
   if (token.length() != 5 || colon != 2) return result;
   for (int i = 0; i < 5; i++) {
     if (i == 2) continue; // the colon itself
@@ -245,16 +218,13 @@ ParsedDuration parseDurationToken(const String& token, const struct tm& nowLocal
   int minute = token.substring(3, 5).toInt();
   if (hour > 23 || minute > 59) return result;
 
-  // Resolving "at HH:MM" needs a real current time-of-day - same synced-
-  // clock check onvif_soap.cpp's isoTimeNow() uses (tm_year is still at
-  // the epoch default until NTP has actually set the clock at least once).
+  // HH:MM needs a synced clock (tm_year stays at the epoch until NTP runs).
   if (nowLocal.tm_year <= (2016 - 1900)) return result;
 
   int nowSecOfDay = nowLocal.tm_hour * 3600 + nowLocal.tm_min * 60 + nowLocal.tm_sec;
   int targetSecOfDay = hour * 3600 + minute * 60;
   int deltaSec = targetSecOfDay - nowSecOfDay;
-  // Already passed, or exactly now - roll to tomorrow rather than firing
-  // (or scheduling a same-instant no-op revert) immediately.
+  // Already passed or now: tomorrow.
   if (deltaSec <= 0) deltaSec += 24 * 3600;
 
   result.ok = true;

@@ -15,16 +15,12 @@ static bool g_available = false;        // see powerMonitorActive()'s comment
 static int g_activePin = -1;
 static bool g_activeHigh = false;
 static bool g_confirmedPowerPresent = true; // last CONFIRMED (debounced) reading
-// 0 = the current raw reading agrees with g_confirmedPowerPresent - a
-// millis() timestamp of when a DISAGREEING raw reading was first seen,
-// same "0 is the sentinel for none pending" convention net_watchdog.cpp's
-// own g_firstFailureMs uses. Same-task-only (main.cpp's loop() is the
-// only caller of checkPowerStateChanged/getPowerMonitorStatus), no lock needed.
+// When a disagreeing reading was first seen (0 = none). loop() only.
 static unsigned long g_pendingSinceMs = 0;
 
 PowerMonitorSettings loadPowerMonitorSettings() {
   Preferences prefs;
-  // Read-write, not read-only - see auth_store.cpp's loadDashboardAuth for why.
+  // Read-write (see loadDashboardAuth).
   prefs.begin(NVS_NAMESPACE, false);
   PowerMonitorSettings s;
   s.enabled = prefs.getBool(NVS_KEY_ENABLED, false);
@@ -70,10 +66,8 @@ void initPowerMonitor() {
     return;
   }
 
-  // Defense in depth - the dashboard save routes (webserver.cpp) are the
-  // primary guard against any two of this project's three relay/sensor
-  // features sharing a pin; this catches a hand-edited/imported NVS
-  // record that bypassed them.
+  // Backstop for imported configs; the save routes are the main pin-clash
+  // guard.
   NetWatchdogSettings netSettings = loadNetWatchdogSettings();
   BridgeWatchdogSettings bridgeSettings = loadBridgeWatchdogSettings();
   if (watchdogPinsConflict(true, settings.pin, netSettings.enabled, netSettings.pin)) {
@@ -90,14 +84,8 @@ void initPowerMonitor() {
   }
 
   g_activePin = settings.pin;
-  // INPUT_PULLUP only correctly supports the activeHigh=false wiring
-  // (COM->GND - an open contact floats HIGH via the pull-up, a closed one
-  // pulls LOW, unambiguous). For activeHigh=true (COM->3.3V - a closed
-  // contact drives HIGH), INPUT_PULLUP would ALSO read HIGH on an open
-  // contact (nothing pulls it toward GND), making the two states
-  // indistinguishable - the sensor would never detect an outage at all.
-  // INPUT_PULLDOWN is the correct counterpart there: an open contact
-  // floats LOW, a closed one still drives HIGH.
+  // Pull toward the open-contact level: with COM->3.3V, a pull-up would read
+  // HIGH whether open or closed, and outages would never be seen.
   pinMode(g_activePin, settings.activeHigh ? INPUT_PULLDOWN : INPUT_PULLUP);
   g_confirmedPowerPresent = readConfirmedFromPin();
   g_pendingSinceMs = 0;
@@ -126,9 +114,7 @@ bool checkPowerStateChanged() {
     return false;
   }
 
-  // Reused from lib/net_watchdog_logic despite its outage-flavored name -
-  // it's a plain "has enough time passed" check, already generic (see its
-  // own header comment), and two other features already depend on it.
+  // Generic "enough time passed" check despite the name.
   if (!outageThresholdReached(g_pendingSinceMs, now, POWER_MONITOR_DEBOUNCE_MS)) return false;
 
   g_confirmedPowerPresent = rawPresent;

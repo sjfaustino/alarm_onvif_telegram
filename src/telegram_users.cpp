@@ -8,26 +8,18 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
-// Guards addTelegramUser/updateTelegramUser/deleteTelegramUser's whole
-// load-all-modify-one-save-all sequence - same reasoning as
-// camera_store.cpp's g_camerasMutex (see its own comment): without this,
-// two near-simultaneous calls each load the same starting list and save
-// independently, and whichever save lands second silently overwrites the
-// first's change with no error to either caller. This file previously had
-// no locking of any kind.
+// Serializes load-modify-save so concurrent edits can't lose each other's
+// changes (same as camera_store.cpp).
 static SemaphoreHandle_t g_usersMutex = xSemaphoreCreateMutex();
 
 static const char* NVS_NAMESPACE  = "tgusers";
-// Legacy single-key format - see camera_store.cpp's identical
-// NVS_KEY_LIST_LEGACY comment for why this is now chunked instead.
+// Old single-key list, read-only fallback (see camera_store.cpp).
 static const char* NVS_KEY_LIST_LEGACY = "list";
 static const char* NVS_KEY_LIST_CHUNKS = "listChunks"; // uint16_t chunk count
 static const size_t NVS_CHUNK_MAX_BYTES = 1500;
 static const char* NVS_KEY_SCHEMA = "schema"; // see telegram_user_serialize.h's *_SCHEMA_VERSION comment
 
-// Separates whole user records within the NVS blob (distinct from
-// telegram_user_serialize.cpp's own FIELD_SEP/LIST_SEP, private to that
-// file - this file only ever joins/splits on RECORD_SEP).
+// Separates records; fields use telegram_user_serialize's separators.
 static const char RECORD_SEP = '\x1E';
 
 static String chunkKey(uint16_t index) {
@@ -38,7 +30,7 @@ static String chunkKey(uint16_t index) {
 
 std::vector<TelegramUser> loadTelegramUsers() {
   Preferences prefs;
-  // Read-write, not read-only - see auth_store.cpp's loadDashboardAuth for why.
+  // Read-write (see loadDashboardAuth).
   prefs.begin(NVS_NAMESPACE, false);
   bool hasChunkedList = prefs.isKey(NVS_KEY_LIST_CHUNKS);
   bool hasLegacyList  = prefs.isKey(NVS_KEY_LIST_LEGACY);
@@ -109,9 +101,8 @@ std::vector<TelegramUser> loadTelegramUsers() {
     }
   }
 
-  // One-time migration, same reasoning as camera_store.cpp's loadCameras() -
-  // skipped if anything was dropped, so a parse failure can't turn into a
-  // permanent NVS overwrite that deletes the unparsed records for good.
+  // Migrate to the current schema, unless something failed to parse (see
+  // camera_store.cpp).
   if (droppedRecords > 0) {
     Serial.printf("[telegram_users] %d of %d user record(s) failed to parse - NOT migrating/rewriting "
                   "NVS this boot so the raw data isn't lost. Only the %u that parsed are active for "
@@ -137,9 +128,7 @@ bool saveTelegramUsers(const std::vector<TelegramUser>& users) {
   Preferences prefs;
   if (!prefs.begin(NVS_NAMESPACE, false)) return false;
 
-  // See camera_store.cpp's saveCameras() for why these return values are
-  // checked - an unnoticed write failure here used to look identical to a
-  // successful save.
+  // Write failures used to look like success.
   bool chunksOk = true;
   for (size_t i = 0; i < chunks.size(); i++) {
     if (prefs.putString(chunkKey((uint16_t)i).c_str(), chunks[i]) == 0) chunksOk = false;
@@ -168,13 +157,8 @@ bool addTelegramUser(const TelegramUser& user) {
   bool collides = false;
   for (auto& u : users) {
     if (u.name.equalsIgnoreCase(user.name)) { collides = true; break; }
-    // Two different-named entries sharing one chat ID would double-send
-    // every alert to that physical Telegram account (triggerMotionAlert's
-    // recipient fan-out doesn't de-dup by chat ID) and make command
-    // permission resolution non-deterministic (pollTelegramCommands'
-    // sender lookup is first-match-wins, so whichever record loads first
-    // silently decides that account's canCommand/canSnap/canReset) -
-    // reject the add outright instead of silently allowing either.
+    // A shared chat ID would double-send every alert and make permissions
+    // depend on which record loads first, so reject it.
     if (chatIdMatches(u.chatId, newChatId)) { collides = true; break; }
   }
   bool ok = false;
@@ -222,7 +206,6 @@ bool updateTelegramUser(const String& originalName, const TelegramUser& user) {
     for (size_t i = 0; i < users.size(); i++) {
       if ((int)i == idx) continue;
       if (users[i].name.equalsIgnoreCase(user.name)) { collides = true; break; }
-      // Same reasoning as addTelegramUser's own comment.
       if (chatIdMatches(users[i].chatId, newChatId)) { collides = true; break; }
     }
     if (!collides) {

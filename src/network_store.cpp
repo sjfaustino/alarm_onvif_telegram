@@ -32,17 +32,14 @@ String sanitizeHostname(const String& raw) {
 
 WifiCredentials loadWifiCredentials() {
   Preferences prefs;
-  // Read-write, not read-only - see auth_store.cpp's loadDashboardAuth for why.
+  // Read-write (see loadDashboardAuth).
   prefs.begin(NVS_NAMESPACE, false);
   bool alreadyInitialized = prefs.isKey(NVS_KEY_SSID);
   WifiCredentials creds;
   if (alreadyInitialized) {
     creds.primary.ssid     = prefs.getString(NVS_KEY_SSID, "");
     creds.primary.password = prefs.getString(NVS_KEY_PASS, "");
-    // ssid2/pass2/static/ip/subnet/gw/dns didn't exist before backup
-    // networks and static IP were added - absent keys just come back
-    // empty/false, meaning "no backup, DHCP", the correct default for
-    // anyone upgrading from before these existed.
+    // Missing keys (older settings) read as no backup and DHCP.
     creds.backup.ssid      = prefs.getString(NVS_KEY_SSID2, "");
     creds.backup.password  = prefs.getString(NVS_KEY_PASS2, "");
     creds.hostname          = prefs.getString(NVS_KEY_HOST, DEFAULT_HOSTNAME);
@@ -53,9 +50,7 @@ WifiCredentials loadWifiCredentials() {
     creds.staticDNS         = prefs.getString(NVS_KEY_DNS, "");
     creds.ntpServer         = prefs.getString(NVS_KEY_NTPSRV, DEFAULT_NTP_SERVER);
     creds.ntpSyncIntervalMs = prefs.getULong(NVS_KEY_NTPINT, 3600000UL);
-    // Absent key (didn't exist before this field was added) correctly
-    // defaults to "" - no TZ applied, display stays UTC - same
-    // backward-compat reasoning as ssid2/pass2/static/etc above.
+    // Missing = no TZ (UTC).
     creds.posixTz = prefs.getString(NVS_KEY_TZ, "");
   }
   prefs.end();
@@ -76,14 +71,8 @@ WifiCredentials loadWifiCredentials() {
   return creds;
 }
 
-// putString returns bytes written, 0 on failure - comparing against the
-// source string's own length (rather than just "> 0") correctly treats a
-// legitimately empty field (no backup network, DHCP, no TZ, etc. - several
-// of these fields are optional and empty by design) as success too, not
-// just a non-empty one. Same failure class camera_store.cpp's saveCameras
-// hit in the field (NVS full/write error silently ignored) - here it means
-// the WiFi config the caller believes it just set was never actually
-// persisted, and reverts to whatever's really on flash on the next reboot.
+// Compare with the length so empty optional fields count as success; unsaved
+// settings would silently revert on reboot.
 static bool putStringChecked(Preferences& prefs, const char* key, const String& value) {
   return prefs.putString(key, value) == value.length();
 }

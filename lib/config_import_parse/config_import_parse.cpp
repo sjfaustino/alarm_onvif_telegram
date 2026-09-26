@@ -3,9 +3,7 @@
 #include <cctype>
 #include <cstring>
 
-// See ConfigImportResult::camerasDuplicateName's own comment (config_import_parse.h)
-// for why this check exists at all - O(n^2) is fine here, a config import's
-// camera count is nowhere near large enough for that to matter.
+// O(n^2) is fine at these sizes.
 static bool camerasHaveDuplicateName(const std::vector<CameraConfig>& cameras) {
   for (size_t i = 0; i < cameras.size(); i++) {
     for (size_t j = i + 1; j < cameras.size(); j++) {
@@ -15,12 +13,7 @@ static bool camerasHaveDuplicateName(const std::vector<CameraConfig>& cameras) {
   return false;
 }
 
-// See ConfigImportResult::usersDuplicateIdentity's own comment. Chat ID
-// comparison reuses chatIdMatches (telegram_parse.h) - the same numeric
-// comparison telegram_users.cpp's addTelegramUser/updateTelegramUser use -
-// so this can't be fooled by two chat IDs that are textually different but
-// numerically identical (e.g. a stray leading zero) the way a raw String
-// == compare could be.
+// chatIdMatches compares numerically, so "0123" and "123" collide.
 static bool usersHaveDuplicateIdentity(const std::vector<TelegramUser>& users) {
   for (size_t i = 0; i < users.size(); i++) {
     int64_t chatIdI = strtoll(users[i].chatId.c_str(), nullptr, 10);
@@ -32,13 +25,8 @@ static bool usersHaveDuplicateIdentity(const std::vector<TelegramUser>& users) {
   return false;
 }
 
-// Same separator config_export's SDSETTINGS line uses (config_backup.cpp) -
-// few enough primitive fields that this stays a tiny inline parser rather
-// than its own schema-versioned lib module the way cameras/users/network
-// (all string-bearing) warrant - but still version-tagged, same discipline,
-// since "no realistic future reordering risk" already turned out wrong
-// once (retentionDays was added to SdSettings after this format existed,
-// silently dropped by every import until v2 below).
+// Inline parsing for the small primitive sections, still versioned: SD
+// retentionDays was once silently dropped by every import until v2.
 static const char SD_FIELD_SEP = '\x1F';
 static const uint16_t SDSETTINGS_SCHEMA_VERSION_CURRENT = 2;
 
@@ -62,9 +50,7 @@ struct SectionMarker {
   uint16_t version = 0;
 };
 
-// "### <SECTION> v<N>" - the only shape this ever looks for. Deliberately
-// NOT dependent on anything else in the file (prose wording elsewhere has
-// already been reworded more than once in this project's history).
+// Depends only on the marker line, never on prose wording.
 static SectionMarker parseMarkerLine(const String& line) {
   SectionMarker m;
   static const char* kPrefix = "### ";
@@ -87,13 +73,8 @@ static SectionMarker parseMarkerLine(const String& line) {
   return m;
 }
 
-// Version 1 (superseded): "<enabled 0/1>\x1F<checkIntervalHours>" -
-// retentionDays didn't exist on SdSettings yet when this line format was
-// first written. Kept exactly as it was, never edited, so an export taken
-// before retention existed still imports correctly - out.retentionDays
-// simply stays at SdSettings' own struct default (SD_RETENTION_DAYS_DEFAULT)
-// for a line in this shape, same "old record, current default for the
-// field it doesn't mention" pattern camera_serialize.cpp's V0 branch uses.
+// v1: "<enabled>\x1F<checkIntervalHours>"; retentionDays keeps its default.
+// Never edited.
 static bool parseSdSettingsLineV1(const String& line, SdSettings& out) {
   int sep = line.indexOf(SD_FIELD_SEP);
   if (sep < 0) return false;
@@ -105,8 +86,7 @@ static bool parseSdSettingsLineV1(const String& line, SdSettings& out) {
   return true;
 }
 
-// Version 2 (SDSETTINGS_SCHEMA_VERSION_CURRENT): V1's 2 fields plus
-// retentionDays, appended - "<enabled 0/1>\x1F<checkIntervalHours>\x1F<retentionDays>".
+// v2: v1 + "\x1F<retentionDays>".
 static bool parseSdSettingsLineV2(const String& line, SdSettings& out) {
   int sep1 = line.indexOf(SD_FIELD_SEP);
   if (sep1 < 0) return false;
@@ -134,9 +114,8 @@ static std::vector<String> splitFieldsBySep(const String& line, char sep) {
   return fields;
 }
 
-// "<enabled 0/1>\x1F<pin>\x1F<activeLow 0/1>\x1F<outageThresholdMs>\x1F<pulseDurationMs>" -
-// one version so far (matches NetWatchdogSettings' own current field list;
-// bump and add a V2 the same way SDSETTINGS did if that ever changes).
+// v1:
+// "<enabled>\x1F<pin>\x1F<activeLow>\x1F<outageThresholdMs>\x1F<pulseDurationMs>".
 static bool parseNetWatchdogLineV1(const String& line, NetWatchdogSettings& out) {
   std::vector<String> f = splitFieldsBySep(line, SD_FIELD_SEP);
   if (f.size() != 5 || f[0].length() == 0) return false;
@@ -148,7 +127,8 @@ static bool parseNetWatchdogLineV1(const String& line, NetWatchdogSettings& out)
   return true;
 }
 
-// "<enabled 0/1>\x1F<cameraA>\x1F<cameraB>\x1F<pin>\x1F<activeLow 0/1>\x1F<outageThresholdMs>\x1F<pulseDurationMs>"
+// v1:
+// "<enabled>\x1F<cameraA>\x1F<cameraB>\x1F<pin>\x1F<activeLow>\x1F<outageThresholdMs>\x1F<pulseDurationMs>".
 static bool parseBridgeWatchdogLineV1(const String& line, BridgeWatchdogSettings& out) {
   std::vector<String> f = splitFieldsBySep(line, SD_FIELD_SEP);
   if (f.size() != 7 || f[0].length() == 0) return false;
@@ -162,7 +142,7 @@ static bool parseBridgeWatchdogLineV1(const String& line, BridgeWatchdogSettings
   return true;
 }
 
-// "<enabled 0/1>\x1F<pin>\x1F<activeHigh 0/1>"
+// v1: "<enabled>\x1F<pin>\x1F<activeHigh>".
 static bool parsePowerMonitorLineV1(const String& line, PowerMonitorSettings& out) {
   std::vector<String> f = splitFieldsBySep(line, SD_FIELD_SEP);
   if (f.size() != 3 || f[0].length() == 0) return false;

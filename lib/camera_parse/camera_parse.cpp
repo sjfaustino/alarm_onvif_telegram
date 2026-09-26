@@ -24,12 +24,8 @@ std::vector<ProfileInfo> parseProfiles(const String& xml) {
       if (ce > cs) name = xml.substring(cs, ce);
     }
 
-    // Bounded to this profile's own block (up to the next "...Profiles "
-    // opening tag, or end of document) before searching within it - a
-    // camera's own AudioEncoderConfiguration has its own Encoding element
-    // too, and an unbounded search could otherwise pick up either the
-    // wrong element or a LATER profile's VideoEncoderConfiguration when
-    // this one has none.
+    // Search only this profile's block, so an audio Encoding or a later
+    // profile's video Encoding isn't picked up.
     String encoding;
     int nextProfilePos = xml.indexOf("Profiles ", tagEnd);
     int profileBlockEnd = (nextProfilePos > 0) ? nextProfilePos : xml.length();
@@ -44,21 +40,10 @@ std::vector<ProfileInfo> parseProfiles(const String& xml) {
   return profiles;
 }
 
-// PullMessages is called with MessageLimit=20 (camera.cpp), so a single
-// response routinely batches several <wsnt:NotificationMessage> blocks -
-// including, on some cameras, more than one for the SAME topic in one
-// batch (e.g. a stale/trailing "false" from before this poll followed by
-// a genuine new "true", or plain debounce flicker). The original version
-// of this function only ever inspected the FIRST block mentioning
-// topicKeyword and stopped there - a real motion event reported in a
-// later block was silently invisible whenever an earlier block in the
-// same batch happened to mention the same topic as false. Now scans every
-// block that mentions the topic and returns "true" as soon as any of them
-// report it - a topic firing true anywhere in the batch counts as fired,
-// full stop, regardless of what an earlier or later block in the same
-// batch said. Falls back to the last non-empty value found if none was
-// "true" (preserves the original single-block behavior/return value when
-// there's genuinely only one relevant block, or every block agrees).
+// A PullMessages batch (MessageLimit=20) can hold several messages for the
+// same topic, e.g. a stale "false" then a real "true". Checking only the first
+// made later events invisible. Returns "true" if any block says so, else the
+// last non-empty value.
 String extractEventStateValue(const String& xml, const String& topicKeyword) {
   String lastValue;
   int searchFrom = 0;
@@ -93,12 +78,7 @@ String extractEventStateValue(const String& xml, const String& topicKeyword) {
       }
     }
 
-    // Advance to (at least) this block's end so the next iteration looks
-    // at a later block, not the same occurrence again - blockEnd rather
-    // than topicPos+1 skips the whole block in one step when it's found;
-    // falls back to a plain +1 only if this block's closing tag was never
-    // found at all (already exhausted the document via blockEnd==length()
-    // in that case, so the next indexOf simply returns -1 and the loop ends).
+    // Skip past this whole block (or +1 if it has no closing tag).
     searchFrom = (blockEnd > topicPos) ? blockEnd : topicPos + 1;
   }
   return lastValue;
@@ -106,15 +86,8 @@ String extractEventStateValue(const String& xml, const String& topicKeyword) {
 
 CameraEventClassification classifyCameraEvent(const String& xml) {
   CameraEventClassification ev;
-  // Both quote styles, not just double - extractEventStateValue below
-  // already tolerates either (xml_helpers.h documents inconsistent
-  // attribute quoting as a real quirk already seen in this project's own
-  // camera fleet). Missing the single-quoted form here would make anyTrue
-  // false for every event a Value='true'-quoting camera ever sends -
-  // parseEvents (camera.cpp) returns immediately whenever anyTrue is
-  // false, so that single missed case means motion/tamper/signal-loss
-  // detection is silently, completely dead for that camera, with no log
-  // line anywhere to explain why.
+  // Both quote styles: missing Value='true' would make anyTrue false and
+  // silently kill all detection for that camera.
   ev.anyTrue = xml.indexOf("Value=\"true\"") >= 0 || xml.indexOf("Value='true'") >= 0;
   ev.motionAlarm   = xml.indexOf("MotionAlarm") >= 0;
   ev.cellMotion    = xml.indexOf("CellMotionDetector") >= 0;
@@ -135,21 +108,13 @@ bool motionEventFired(const String& xml, const CameraEventClassification& ev) {
   if (ev.cellMotion && topicReportedTrue(xml, "CellMotionDetector")) return true;
   if (ev.peopleDetect && topicReportedTrue(xml, "PeopleDetect")) return true;
   if (ev.vehicleDetect && topicReportedTrue(xml, "VehicleDetect")) return true;
-  // DogCatDetect deliberately excluded - see its own comment in
-  // camera_parse.h. Gated per-camera by camera.cpp's parseEvents instead.
+  // DogCatDetect is gated per camera in parseEvents instead.
   return false;
 }
 
 String firstTopic(const String& xml) {
-  // Deliberately NOT findElementByLocalName (xml_helpers.h): that
-  // function's exact/suffix matching is built for attribute-free elements
-  // (Uri, Address, XAddr) - a real <wsnt:Topic Dialect="...">...</wsnt:Topic>
-  // almost always carries a Dialect attribute per the ONVIF WS-Topics
-  // spec, which breaks both of findElementByLocalName's search strategies
-  // (neither "<Topic>" nor the ":Topic>" suffix appears in an opening tag
-  // that has attributes before its '>'). Anchored the same two ways
-  // (":Topic" or "<Topic") to require an actual tag name, not incidental
-  // text elsewhere.
+  // Not findElementByLocalName: <wsnt:Topic> usually carries a Dialect
+  // attribute, which that function's matching can't handle.
   int p = xml.indexOf(":Topic");
   if (p < 0) p = xml.indexOf("<Topic");
   if (p < 0) return "";
