@@ -53,12 +53,12 @@ String trTimelapseCaption(TelegramLang lang, const String& cameraName, const Str
 String trTamperCaption(TelegramLang lang, const String& cameraName, const String& timestamp);
 String trSignalLossMessage(TelegramLang lang, const String& cameraName, const String& timestamp);
 String trMotionDigest(TelegramLang lang, const String& cameraName, uint32_t count, unsigned long elapsedSec);
-// Cross-camera correlation summary (telegram.cpp's checkMultiCameraAlertDigest) -
+// Cross-camera correlation summary (telegram_alerts.cpp's checkMultiCameraAlertDigest) -
 // distinct from trMotionDigest above, which is about repeated motion on
 // ONE camera during its own cooldown. cameraList is already comma-joined
 // by the caller - language-neutral, not part of this.
 String trMultiCameraDigest(TelegramLang lang, uint32_t count, const String& cameraList);
-// Periodic activity-volume summary (main.cpp's loop(), telegram.cpp's
+// Periodic activity-volume summary (main.cpp's loop(), telegram_alerts.cpp's
 // checkDailyActivityDigest) - a per-camera detection count over the
 // interval since the last digest, distinct from trMotionDigest above (one
 // camera's own cooldown-triggered follow-up) and trMultiCameraDigest
@@ -203,7 +203,7 @@ String trBackupFailed(TelegramLang lang);
 // pending-window-lapsed case. Not-authorized reuses trNotAuthorized above
 // (commandDisplayName(TelegramCommand::Restore)) rather than a dedicated
 // function - same message shape as every other command's rejection. See
-// telegram.cpp's own comment on the full two-step (or one-step,
+// telegram_commands.cpp's own comment on the full two-step (or one-step,
 // caption="/restore") design.
 String trRestorePrompt(TelegramLang lang);
 String trRestoreExpired(TelegramLang lang);
@@ -234,7 +234,7 @@ String trCameraPickerPrompt(TelegramLang lang, const String& commandDisplayName)
 // The picker keyboard's own "apply to every camera" button label -
 // distinct from trAllCamerasSubject (the "All N camera(s) alerts: ON"
 // reply text after tapping it/using /on all) and from the literal "all"
-// callback_data token (sendCameraPickerKeyboard, telegram.cpp), which is
+// callback_data token (sendCameraPickerKeyboard, telegram_commands.cpp), which is
 // a protocol identifier matched case-insensitively in
 // handleTelegramCallbackQuery and must NOT be translated.
 String trAllButtonLabel(TelegramLang lang);

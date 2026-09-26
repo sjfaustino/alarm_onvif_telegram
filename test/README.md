@@ -26,13 +26,13 @@ this way:
 | `xml_helpers`                | `onvif_soap.cpp`                       | ONVIF response substring parsing (`findElementByLocalName`, `findAttributeValue`/`findAttributeInTag`, `responseHasFault`) and `xmlEscape` - hardened against inconsistent attribute quoting and a closing tag that drops its namespace prefix |
 | `camera_serialize`           | `camera_store.cpp`                     | `CameraConfig` <-> NVS blob (de)serialization, schema-versioned (see below) |
 | `telegram_user_serialize`    | `telegram_users.cpp`                   | `TelegramUser` <-> NVS blob (de)serialization (also schema-versioned), and `telegramUserWantsCamera` |
-| `telegram_parse`             | `telegram.cpp`                         | `parseTelegramUpdates` (ArduinoJson, replacing hand-rolled brace-counting) and the `/on`/`/off`/`/snap` camera-name prefix matching |
+| `telegram_parse`             | `telegram_commands.cpp`                | `parseTelegramUpdates` (ArduinoJson, replacing hand-rolled brace-counting) and the `/on`/`/off`/`/snap` camera-name prefix matching |
 | `backoff`                    | `main.cpp` + `camera.cpp` (duplicated) | The doubling-with-a-cap retry delay formula, previously hand-written twice and prone to drifting apart |
 | `camera_parse`               | `camera.cpp`                           | ONVIF `GetProfiles` response parsing (`parseProfiles`), motion/tamper/signal-loss event classification (`classifyCameraEvent`), and the per-topic state-value lookup (`extractEventStateValue`) |
 | `onvif_discovery`            | `webserver_cameras.cpp`                | WS-Discovery Probe message building (`buildProbeMessage`) and ProbeMatch reply parsing (`parseProbeMatch` - XAddrs/Scopes extraction) for the Cameras page's "Search network for cameras" button |
 | `background_job_state`       | `webserver_cameras.cpp`                | The start/finish state-transition rules behind `BackgroundJob<T>` (`include/background_job.h`) - shared by the Cameras page's "Test all cameras"/"Search network for cameras" buttons and the Network page's "Search WiFi networks" button, which each used to (or would have) hand-written their own copy of this logic |
 | `wifi_scan`                  | `webserver_network.cpp`                | Dedupes a raw WiFi scan result list down to one entry per SSID (keeping the strongest signal) and sorts strongest-first, for the Network page's "Search WiFi networks" button |
-| `telegram_multipart`         | `telegram.cpp`                         | `sendPhoto`'s multipart/form-data request builder (`buildMultipart`) - boundary/head/tail/Content-Length construction |
+| `telegram_multipart`         | `telegram_transport.cpp`               | `sendPhoto`'s multipart/form-data request builder (`buildMultipart`) - boundary/head/tail/Content-Length construction |
 | `format_utils`               | `main.cpp` + `webserver.cpp` (duplicated) | `formatUptime`, `formatElapsedSince`, `htmlEscape`, `urlEncode`, `extractHost` - `formatUptime` was independently hand-written in both files (byte-identical, silently able to drift) before this |
 
 ### Why the serialization modules are schema-versioned
@@ -66,7 +66,7 @@ now comes back empty instead.
 ## What's *not* covered, and what it would take
 
 - **`onvif_soap.cpp`'s `soapPost`/`makeSecurityHeader`/`isoTimeNow`, the SOAP
-  call sequencing in `camera.cpp`, `telegram.cpp`'s actual send paths,
+  call sequencing in `camera.cpp`, `telegram_transport.cpp`'s actual send paths,
   `webserver.cpp`'s route handlers, `main.cpp`'s boot sequence** - all
   fundamentally about talking to a network/clock/NVS that doesn't exist on a
   CI runner. Testing these for real would mean either running against actual

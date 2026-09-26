@@ -55,7 +55,7 @@ struct CameraConfig {
   unsigned int snapshotBurstCount = 1;
 
   // Recurring daily do-not-disturb window - motion alerts only (tamper/
-  // signal-loss stay always-on, see telegram.cpp's triggerMotionAlert).
+  // signal-loss stay always-on, see telegram_alerts.cpp's triggerMotionAlert).
   // quietStartMinute/quietEndMinute are minutes since local midnight
   // (0-1439). quietStartMinute == quietEndMinute means "no active window"
   // (see lib/quiet_hours' own comment for why that's the safe default,
@@ -145,7 +145,7 @@ struct CameraConfig {
   bool vehicleAlertsEnabled = true;
 
   // Opt-OUT (default true) - preserves this project's original, always-on
-  // behavior (checkPendingMotionDigest, telegram.cpp) for anyone already
+  // behavior (checkPendingMotionDigest, telegram_alerts.cpp) for anyone already
   // relying on it. Controls only the FOLLOW-UP "motion continued - N more
   // event(s) in the last X seconds" summary sent once the cooldown after a
   // real alert ends; the alert itself (and the cooldown/suppressed-count

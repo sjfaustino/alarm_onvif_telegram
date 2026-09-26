@@ -549,8 +549,14 @@ src/
   webserver_security.cpp
                      # each panel's rendering/form-handling, split out of what used to be one
                      # 946-line webserver.cpp
-  telegram.cpp       # photo/message send paths, multi-recipient fan-out, remote commands
-                       # (including timed /on//off), scheduled-revert checking
+  telegram_transport.cpp # TLS sends to the Bot API (message/photo/document/keyboard), the
+                           # project-wide Telegram send mutex, local-clock helpers
+  snapshot_fetch.cpp     # camera snapshot HTTP GET into a PSRAM buffer
+  telegram_alerts.cpp    # motion/tamper/signal-loss/offline alerts, multi-recipient fan-out,
+                           # digests, health watchdogs, test alerts
+  telegram_commands.cpp  # getUpdates polling, remote commands (including timed /on//off),
+                           # /backup and /restore, scheduled-revert checking
+  telegram_internal.h    # helpers shared between the four files above only
   onvif_soap.cpp     # SOAP envelope building, WS-Security digest
   build_version.cpp  # defines FIRMWARE_VERSION from generated_build_version.h - see build_version.h
 lib/                 # pure-logic modules with no hardware dependencies, split out of the
@@ -569,7 +575,7 @@ lib/                 # pure-logic modules with no hardware dependencies, split o
   background_job_state/   # pure start/finish/failed-to-start transition rules behind
                            # BackgroundJob<T> (include/background_job.h)
   subscription_health/    # alert-once/re-arm decision logic behind the stuck-subscription
-                           # alert (telegram.cpp's checkSubscriptionHealth)
+                           # alert (telegram_alerts.cpp's checkSubscriptionHealth)
   heap_health/             # new-record-low/threshold-alert decision logic behind the free-heap
                            # trail (main.cpp's checkHeapHealth)
   backoff/                # the doubling-with-a-cap retry delay formula (shared by main.cpp,

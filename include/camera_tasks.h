@@ -38,7 +38,7 @@ bool stagePendingNewCamera(const CameraConfig& cam);
 // concurrently reading and mutating the vectors' own size()/structure.
 // Several functions (sendHeartbeat, checkBridgeCamerasAndMaybePulseRelay,
 // pollTelegramCommands, enforceSnapshotRetention,
-// checkScheduledAlertReverts - all in main.cpp/telegram.cpp) already read
+// checkScheduledAlertReverts - all in main.cpp/telegram_commands.cpp) already read
 // g_cameras.size()/.data() on loop()'s own task, with no lock of their
 // own, relying on those vectors never changing shape except from that
 // same task. Restricting the one operation that DOES change their shape

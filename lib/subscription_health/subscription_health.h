@@ -1,7 +1,7 @@
 #pragma once
 
 // Pure alert-once/re-arm decision logic behind checkSubscriptionHealth
-// (telegram.cpp) - split out so it's natively unit-tested
+// (telegram_alerts.cpp) - split out so it's natively unit-tested
 // (test/test_subscription_health) without FreeRTOS/Arduino, same reasoning
 // as background_job_state.h/backoff.h. checkSubscriptionHealth exists to
 // catch a camera that keeps *answering* (refreshing CameraState::

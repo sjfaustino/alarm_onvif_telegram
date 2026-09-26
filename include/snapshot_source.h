@@ -9,7 +9,7 @@
 // timestamp. A superset of telegram_i18n.h's MotionDetectionKind (which
 // only distinguishes Generic/Person/Vehicle for the Telegram caption
 // itself) - Pet/Tamper/Timelapse/Test/Manual each come from a completely
-// different trigger path in telegram.cpp, not a motion classification.
+// different trigger path in telegram_alerts.cpp, not a motion classification.
 //
 // Motion is both the generic/no-classification case (plain PIR/cell
 // motion, or an ONVIF feed that doesn't distinguish person/vehicle) and
@@ -28,7 +28,7 @@ enum class SnapshotSource : uint8_t {
 };
 
 // Short, lowercase, English-only label - same "filename/log-facing, not
-// recipient-facing, so no i18n" reasoning as telegram.cpp's own
+// recipient-facing, so no i18n" reasoning as telegram_alerts.cpp's own
 // motionKindLogLabel. Doubles as the SD filename suffix (sd_store.cpp)
 // and the Gallery/Preview column's display text.
 const char* snapshotSourceLabel(SnapshotSource source);

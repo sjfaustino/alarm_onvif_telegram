@@ -57,7 +57,7 @@ static void removeById(uint32_t id) {
 void flushTelegramRetryQueue() {
   // Copied out under the lock, sends attempted OUTSIDE it - same "never
   // hold a mutex across a blocking network call" discipline as every
-  // other cross-task lock in this project (e.g. telegram.cpp's
+  // other cross-task lock in this project (e.g. telegram_alerts.cpp's
   // checkMultiCameraAlertDigest). A message enqueued by another task
   // while sends are in flight here just waits for the next flush; each
   // send's own outcome is applied back via removeById (by stable id), not

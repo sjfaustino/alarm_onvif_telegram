@@ -56,7 +56,7 @@ String renderFirmwarePanel() {
   // just the free-byte total, distinguishes a fragmented heap (plenty of
   // free bytes, none of them contiguous enough for whatever allocation
   // actually needs one) from genuinely low total memory - same stat
-  // sendTelegramPhotoBuffered (telegram.cpp) already logs before every
+  // sendTelegramPhotoBuffered (telegram_transport.cpp) already logs before every
   // photo send.
   html += "<tr><th>Free heap (internal)</th><td>" + String(ESP.getFreeHeap()) + " bytes</td></tr>";
   html += "<tr><th>Free heap - lifetime min</th><td>" + String(ESP.getMinFreeHeap()) + " bytes</td></tr>";

@@ -378,7 +378,7 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
       // Three-state badge, not two - OFFLINE (red, hard failure - not
       // answering at all) and "not subscribed" (amber - answering fine but
       // can't hold a subscription, exactly the case checkSubscriptionHealth,
-      // telegram.cpp, exists to catch) are genuinely different situations,
+      // telegram_alerts.cpp, exists to catch) are genuinely different situations,
       // not degrees of the same one. ONLINE (green) only once both are
       // clear.
       if (offline) {
@@ -811,7 +811,7 @@ CameraConfig parseCameraForm(PsychicRequest* request) {
   // wrap into a tiny one (alert spam instead of the throttling actually
   // requested), same overflow class motionWatchdogHours/timelapseIntervalMin
   // below are already clamped against. This is a form-input sanity bound,
-  // not the only guard - see telegram.cpp's safeAlertCooldownMs for the
+  // not the only guard - see telegram_alerts.cpp's safeAlertCooldownMs for the
   // point-of-use clamp that also covers a value that bypassed this form
   // entirely (a hand-edited/imported NVS blob).
   long cooldownMaxSec = (long)(CAMERA_ALERT_COOLDOWN_MAX_MS / 1000UL);
@@ -821,7 +821,7 @@ CameraConfig parseCameraForm(PsychicRequest* request) {
   long offlineMin = request->getParam("offlineThresholdMin", "5").toInt();
   // Upper-capped at CAMERA_OFFLINE_THRESHOLD_MAX_MS (7 days), same overflow
   // reasoning as above - *60000UL wraps above ~71583 minutes. See
-  // telegram.cpp's safeOfflineThresholdMs for the point-of-use clamp.
+  // telegram_alerts.cpp's safeOfflineThresholdMs for the point-of-use clamp.
   long offlineMaxMin = (long)(CAMERA_OFFLINE_THRESHOLD_MAX_MS / 60000UL);
   if (offlineMin > offlineMaxMin) offlineMin = offlineMaxMin;
   c.offlineThresholdMs = offlineMin > 0 ? (unsigned long)offlineMin * 60000UL : CameraConfig().offlineThresholdMs;
@@ -829,7 +829,7 @@ CameraConfig parseCameraForm(PsychicRequest* request) {
   long burstCount = request->getParam("snapshotBurstCount", "1").toInt();
   // Clamp to [1, CAMERA_SNAPSHOT_BURST_MAX]: blank/zero/negative falls back
   // to 1 shot, and the cap stops a fat-fingered number from flooding past
-  // Telegram's rate limit. See telegram.cpp's safeSnapshotBurstCount for
+  // Telegram's rate limit. See telegram_alerts.cpp's safeSnapshotBurstCount for
   // the point-of-use clamp.
   if (burstCount < 1) burstCount = 1;
   if (burstCount > (long)CAMERA_SNAPSHOT_BURST_MAX) burstCount = (long)CAMERA_SNAPSHOT_BURST_MAX;

@@ -394,7 +394,7 @@ void test_parseTelegramCommand_is_case_insensitive(void) {
 }
 
 // Bare "/on"/"/off"/"/snap" (no target at all) parse as their own command
-// with an empty cameraName, NOT Unknown - handleTelegramCommand (telegram.cpp)
+// with an empty cameraName, NOT Unknown - handleTelegramCommand (telegram_commands.cpp)
 // recognizes the empty name and sends an inline-keyboard camera picker
 // instead of falling through to name/prefix matching.
 void test_parseTelegramCommand_on_without_target_is_picker(void) {
@@ -500,7 +500,7 @@ void test_parseDurationToken_rejects_zero_minutes(void) {
   TEST_ASSERT_FALSE(parseDurationToken("0", now).ok);
 }
 
-// The real bug this cap exists to prevent: telegram.cpp's
+// The real bug this cap exists to prevent: telegram_commands.cpp's
 // checkScheduledAlertReverts decides due-ness via the standard millis()-
 // wraparound-safe idiom `(long)(millis() - dueMs) < 0`, correct only for
 // a scheduled delay under 2^31ms (~35791 minutes) - a duration accepted

@@ -134,7 +134,7 @@ bool sendTestAlert(const CameraConfig& cfg, CameraState& st, String& outDetail,
 // Telegram itself (webserver_cameras.cpp's WS-Discovery/Test All) check
 // before starting, rather than risk its own buffers overlapping an
 // in-flight photo send's JPEG+TLS buffers - see this function's own
-// comment (telegram.cpp) for the field incident that motivated it.
+// comment (telegram_transport.cpp) for the field incident that motivated it.
 bool telegramSendInProgress();
 
 // Sends a message to every user with systemMessages enabled, composed
@@ -176,7 +176,7 @@ static const size_t UNKNOWN_CHAT_TRACK_MAX = 5;
 // newest first - a convenience for the Users page so adding a new user is
 // copy-paste from here instead of a side trip to @userinfobot or the raw
 // getUpdates URL. RAM-only, doesn't grow, and isn't a security log - see
-// telegram.cpp's own comment on the tracking table itself.
+// telegram_commands.cpp's own comment on the tracking table itself.
 std::vector<UnknownChatSighting> recentUnknownChats();
 
 // Turns every currently-enabled camera's alerts on/off at once, with an
@@ -210,7 +210,7 @@ String setAllCamerasAlertState(const CameraConfig cameras[], CameraState states[
 //                              per enabled camera plus "All"); permanent
 //                              on/off/snap only, no duration timer via
 //                              buttons. See handleTelegramCallbackQuery
-//                              (telegram.cpp) for how a tap is handled.
+//                              (telegram_commands.cpp) for how a tap is handled.
 //   /on|/off <name/prefix|all> [duration] - resume/mute alerts
 //                              (subscription stays up either way).
 //                              Optional trailing duration schedules an
@@ -230,7 +230,7 @@ String setAllCamerasAlertState(const CameraConfig cameras[], CameraState states[
 //                              no argument shows an "English"/"Português"
 //                              inline-keyboard picker instead (same
 //                              tap-handling path as the on/off/snap picker,
-//                              handleTelegramCallbackQuery, telegram.cpp)
+//                              handleTelegramCallbackQuery, telegram_commands.cpp)
 //   /help                    - this command list, plus the sender's own permissions
 // /on, /off, /status, /uptime, /health, /log require canCommand; /snap requires
 // canSnap; /reset requires canReset (off by default, even for the seeded

@@ -26,7 +26,7 @@ struct TelegramUpdate {
   // text stays empty for a callback update.
   bool hasCallbackQuery = false;
   String callbackQueryId; // needed to answer it (clears the button's loading spinner)
-  String callbackData;    // e.g. "off|D01-FrontDoor" - see telegram.cpp's handleTelegramCallbackQuery
+  String callbackData;    // e.g. "off|D01-FrontDoor" - see telegram_commands.cpp's handleTelegramCallbackQuery
 
   // Set for a document (file) upload - chatId/hasChatId are populated the
   // same way as a typed message, but the text (if any) the sender typed
@@ -35,7 +35,7 @@ struct TelegramUpdate {
   // reusing `text` for it. documentFileId is what the Bot API's getFile
   // method needs to resolve a downloadable path; documentFileName is the
   // uploader's own filename, informational only (never used for anything
-  // security-relevant - see telegram.cpp's /restore flow, the only
+  // security-relevant - see telegram_commands.cpp's /restore flow, the only
   // consumer of this).
   bool hasDocument = false;
   String documentFileId;
@@ -143,7 +143,7 @@ struct ParsedDuration {
 };
 
 // Upper bound for the plain-minutes duration form - 14 days. Real bound,
-// not a sanity number: checkScheduledAlertReverts (telegram.cpp) decides
+// not a sanity number: checkScheduledAlertReverts (telegram_commands.cpp) decides
 // "is this timer due yet" via the standard millis()-wraparound-safe
 // `(long)(millis() - dueMs) < 0` idiom, only correct for a delay under
 // 2^31ms (~24.86 days) - a duration parsed past that would read as

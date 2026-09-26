@@ -140,7 +140,7 @@ TelegramCommandPermission requiredPermissionForCommand(TelegramCommand command) 
 // Splits "D01 30" into name="D01", duration="30" (both trimmed); "D01"
 // alone leaves duration empty. Only the first two whitespace-separated
 // tokens matter - anything after a second space is silently dropped
-// (parseDurationToken/telegram.cpp reject a garbled duration token on
+// (parseDurationToken/telegram_commands.cpp reject a garbled duration token on
 // their own, no need to duplicate that here).
 static void splitNameAndDuration(const String& rest, String& name, String& duration) {
   String trimmed = rest;

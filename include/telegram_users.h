@@ -28,7 +28,7 @@ struct TelegramUser {
 
   // Independent of canCommand - may send /snap on demand. Split out since
   // it's a different kind of trust (check in on a camera right now vs.
-  // silence its alerts). See telegram.cpp for how each command is gated.
+  // silence its alerts). See telegram_commands.cpp for how each command is gated.
   bool canSnap = false;
 
   // May send /reset (reboots the board immediately - drops every camera's
@@ -62,7 +62,7 @@ struct TelegramUser {
   bool canRestore = false;
 
   // Enforced as a minimum gap between this user's commands
-  // (60000/maxCommandsPerMinute ms - see telegram.cpp's rate-limit check in
+  // (60000/maxCommandsPerMinute ms - see telegram_commands.cpp's rate-limit check in
   // handleTelegramCommand), not a true rolling-window count: O(1) in-RAM
   // state per user (just a last-command timestamp), no ring buffer. 0 =
   // unlimited (default) - most users never need this; it exists for a

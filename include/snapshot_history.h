@@ -4,7 +4,7 @@
 #include "camera.h" // CameraConfig, CameraState
 
 // The single place that decides "SD or PSRAM ring" for a camera's
-// snapshot history, so telegram.cpp/webserver.cpp/webserver_cameras.cpp
+// snapshot history, so telegram_alerts.cpp/webserver.cpp/webserver_cameras.cpp
 // don't each duplicate that branch. Neither backing store knows about the
 // other: sd_store.h/.cpp owns the SD-specific mechanics, CameraState's
 // own snapshotHistory ring (camera.h) is the PSRAM fallback, exactly as
@@ -15,7 +15,7 @@
 // Dispatches to sd_store's writeSdSnapshot() if sdActive() (sd_store.h),
 // else falls back to the existing PSRAM ring - unchanged, including its
 // own free-PSRAM safety check. source (snapshot_source.h) is required,
-// not defaulted - every call site (telegram.cpp) has a real answer for
+// not defaulted - every call site (telegram_alerts.cpp) has a real answer for
 // "why was this captured" (motion/person/vehicle/pet, tamper, timelapse,
 // a manual test alert, or an on-demand /snap), and a silent default would
 // too easily hide a forgotten update at a new call site.

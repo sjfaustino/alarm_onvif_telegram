@@ -25,7 +25,7 @@ bool saveUserSubmission(const TelegramUser& user, const String& originalName, St
 // Test message - see webserver_cameras.h's startTestAllCamerasAsync for
 // why this can't run synchronously on the calling (PsychicHttp) task:
 // sendTelegramMessage fans out to every systemMessages recipient, each
-// capable of a 45s g_telegramNetMutex wait (telegram.cpp) - with more than
+// capable of a 45s g_telegramNetMutex wait (telegram_transport.cpp) - with more than
 // one recipient configured, that's long enough to make the whole dashboard
 // unreachable for everyone, not just whoever clicked the button, the same
 // class of risk the Cameras page's "Test all"/"Search network" buttons

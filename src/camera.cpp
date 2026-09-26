@@ -84,7 +84,7 @@ bool resolveCameraCredentials(const CameraConfig& cfg, CameraState& st) {
 // vs. plain HTTP Basic Auth, for stacks that choke on WSSE). Every SOAP
 // call funnels through here, so this is also where st.lastContactMs gets
 // updated - a non-empty response (even a SOAP fault) means the camera's
-// stack answered, which is what checkCameraOnlineStatus (telegram.cpp)
+// stack answered, which is what checkCameraOnlineStatus (telegram_alerts.cpp)
 // uses to tell a genuinely offline camera from one merely failing a call.
 // lastContactMs is lock-guarded (CameraState::stateMutex), not same-task-
 // only: pushCameraSnapshot (snapshot_history.cpp) also adjusts it, and
@@ -275,7 +275,7 @@ bool cameraGetEventProperties(const CameraConfig& cfg, CameraState& st, String* 
 // Re-clamped here, at the point of use, not just at the dashboard form
 // boundary - same "hand-edited/imported NVS blob bypasses the form
 // entirely" reasoning as every other clamp in this project (e.g.
-// telegram.cpp's safeSnapshotBurstCount). 0 passes through unclamped -
+// telegram_alerts.cpp's safeSnapshotBurstCount). 0 passes through unclamped -
 // it means "unset", not "zero pixels".
 static uint16_t safeSnapshotDimension(uint16_t value) {
   if (value == 0) return 0;
@@ -673,7 +673,7 @@ static const unsigned long RETRY_BACKOFF_MAX_MS = 300000UL; // 5 minutes between
 // (webserver_cameras.cpp's parseCameraForm clamps user input to
 // [CAMERA_POLL_INTERVAL_MIN_MS, CAMERA_POLL_INTERVAL_MAX_MS]) - same
 // "hand-edited/imported NVS blob bypasses the form entirely" reasoning as
-// this project's other per-camera clamps (telegram.cpp's
+// this project's other per-camera clamps (telegram_alerts.cpp's
 // safeAlertCooldownMs and siblings). A value near 0 here wouldn't just
 // poll aggressively - every SOAP call sends "Connection: close"
 // (onvif_soap.cpp), so it would open and tear down a fresh TCP connection
@@ -740,7 +740,7 @@ void cameraTaskFn(void* pvParameters) {
   // instant it subscribes instead of waiting a full interval first.
   st.lastTimelapseMs = millis();
 
-  // Same reasoning again for checkSubscriptionHealth (telegram.cpp) - a 0
+  // Same reasoning again for checkSubscriptionHealth (telegram_alerts.cpp) - a 0
   // baseline would make this camera look like it's been unsubscribed since
   // the epoch, tripping the alert immediately instead of giving the retry
   // loop below a fair chance first.
@@ -780,7 +780,7 @@ void cameraTaskFn(void* pvParameters) {
       // every other field this task touches unlocked elsewhere in this
       // file - are read only by this same task): a Telegram /snap
       // command on loop()'s task reads it cross-task via
-      // fetchOneSnapshot/sendOnDemandSnapshot (telegram.cpp), under this
+      // fetchOneSnapshot/sendOnDemandSnapshot (telegram_commands.cpp), under this
       // same lock, and could otherwise race a plain String assignment
       // here mid-read.
       { CameraStateLock lock(st); st.subscriptionActive = false; st.snapshotUri = ""; }

@@ -342,7 +342,7 @@ static String renderShell(Tab active, const String& banner, const String& conten
   html += "a.secondary:hover{background:var(--secondary-hover);border-color:var(--secondary-hover-border);}";
   // Small colored status pills - .badge-on (healthy/enabled, green),
   // .badge-warn (needs attention but not a hard failure - e.g. responding
-  // but not subscribed, see telegram.cpp's checkSubscriptionHealth - amber),
+  // but not subscribed, see telegram_alerts.cpp's checkSubscriptionHealth - amber),
   // .badge-offline (hard failure, red), .badge-off (a deliberate/intentional
   // state, not a problem - e.g. muted or disabled - neutral gray). Lets a
   // multi-camera table be scanned at a glance instead of reading a run-on
@@ -809,7 +809,7 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
                                              false, duration, "the dashboard", TelegramLang::English);
     // htmlEscape()d here, the one point this ever becomes HTML -
     // setAllCamerasAlertState's failure message (via resolveAlertTimer,
-    // telegram.cpp) echoes the submitted duration text verbatim, which is
+    // telegram_commands.cpp) echoes the submitted duration text verbatim, which is
     // exactly right for its OTHER caller (a plain-text Telegram reply) but
     // was a raw reflected-XSS hole here: renderShell's banner is inserted
     // unescaped by design, same as every other banner that's pre-built

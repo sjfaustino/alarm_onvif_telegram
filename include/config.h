@@ -90,7 +90,7 @@ static const unsigned long HEARTBEAT_INTERVAL_MS    = 6UL * 60UL * 60UL * 1000UL
 // A reboot restarts the count, same as every other interval here.
 static const unsigned long DAILY_DIGEST_INTERVAL_MS = 24UL * 60UL * 60UL * 1000UL; // 24 hours
 static const unsigned long TELEGRAM_COMMAND_POLL_MS = 5000UL;        // /on, /off, /status polling cadence
-// How long a task waits to acquire telegram.cpp's g_telegramNetMutex
+// How long a task waits to acquire telegram_transport.cpp's g_telegramNetMutex
 // before treating a Telegram send/poll as failed rather than blocking
 // indefinitely - see that mutex's own comment for the real incident this
 // fixes (concurrent TLS sessions across cameras exhausting internal RAM
@@ -115,7 +115,7 @@ static const size_t TELEGRAM_RETRY_QUEUE_CAPACITY = 20;
 static const unsigned long TELEGRAM_RETRY_FLUSH_INTERVAL_MS = 60UL * 1000UL;      // 1 minute
 static const unsigned long TELEGRAM_RETRY_MAX_AGE_MS = 24UL * 60UL * 60UL * 1000UL; // 24 hours
 
-// /restore command (telegram.cpp) - how long a bare "/restore" stays
+// /restore command (telegram_commands.cpp) - how long a bare "/restore" stays
 // armed, waiting for the actual file to arrive as a separate message, and
 // the sanity cap on that file's size (a config export is at most a few
 // tens of KB even with many cameras/users - anything wildly larger than
@@ -181,7 +181,7 @@ static const int WIFI_RSSI_WARN_DBM = -75;
 // PSRAM) below which checkHeapHealth() (main.cpp) sends a one-time Telegram
 // alert the first time a new lifetime-low record crosses it. mbedTLS/
 // WiFiClientSecure allocate from this same pool (see g_telegramNetMutex's
-// own comment, telegram.cpp), so a genuinely low reading here is real
+// own comment, telegram_transport.cpp), so a genuinely low reading here is real
 // allocation-failure territory, not a sanity nicety - 20KB is comfortably
 // above a single TLS handshake's typical needs, so crossing it is an early
 // warning, not already-crashed. No re-arm: this is a running minimum
@@ -207,7 +207,7 @@ static const bool          SUPPRESS_SOAP_SUCCESS_LOG = true;
 // PSRAM is a hard requirement - setup() refuses to start if
 // ESP.getPsramSize() is 0, since a snapshot alert going to multiple
 // Telegram users needs the JPEG buffered once in RAM and resent per
-// recipient. SNAPSHOT_MAX_BYTES is only telegram.cpp's fallback cap for
+// recipient. SNAPSHOT_MAX_BYTES is only snapshot_fetch.cpp's fallback cap for
 // the rare case a PSRAM allocation itself fails (fragmentation).
 //
 // camera.cpp's per-camera FreeRTOS tasks are pinned to core 1, requiring a
@@ -299,14 +299,14 @@ static const unsigned long SD_RETENTION_CHECK_INTERVAL_MS = 24UL * 60UL * 60UL *
 // re-clamps at the actual esp_sntp_set_sync_interval() call (see its own
 // comment for why a form-only clamp isn't enough - same "hand-edited/
 // imported NVS blob bypasses the form entirely" reasoning as
-// SD_CHECK_INTERVAL_MAX_HOURS/telegram.cpp's motionWatchdogHours clamp).
+// SD_CHECK_INTERVAL_MAX_HOURS/telegram_alerts.cpp's motionWatchdogHours clamp).
 // 43200min = 30 days.
 static const unsigned long NTP_SYNC_MAX_MINUTES = 43200UL;
 
 // Clamps for CameraConfig's three alert-throttling fields (Cameras page) -
 // same "hand-edited/imported NVS blob bypasses the form entirely" reasoning
 // as the constants above. webserver_cameras.cpp's parseCameraForm clamps
-// user input to these; telegram.cpp re-clamps at each point of use (see
+// user input to these; telegram_alerts.cpp re-clamps at each point of use (see
 // its own comments - an unclamped alertCooldownMs/snapshotBurstCount pair
 // is exactly the multi-camera Telegram burst class this project has
 // already been burned by once, see git history around "Serialize Telegram
@@ -322,7 +322,7 @@ static const unsigned int CAMERA_SNAPSHOT_BURST_MAX = 10;
 // as CAMERA_SNAPSHOT_BURST_MAX above.
 static const uint16_t CAMERA_SNAPSHOT_DIMENSION_MAX = 4096;
 
-// Cross-camera alert-correlation window (telegram.cpp's
+// Cross-camera alert-correlation window (telegram_alerts.cpp's
 // checkMultiCameraAlertDigest/noteMultiCameraAlert) - how long after the
 // FIRST camera in a burst to keep watching for other, different cameras
 // also alerting before sending one combined summary message. Fixed-length
@@ -340,7 +340,7 @@ static const unsigned long MULTI_CAMERA_DIGEST_WINDOW_MS = 30UL * 1000UL;
 // Clamp for TelegramUser::maxCommandsPerMinute (Telegram Users page) - just
 // a sanity bound on the number field, same idea as CAMERA_SNAPSHOT_BURST_MAX
 // above. Not safety-critical the way the *_MAX_MS constants are (no
-// overflow-prone multiply downstream - see telegram.cpp's
+// overflow-prone multiply downstream - see telegram_commands.cpp's
 // allowTelegramCommand, a plain 60000/N division), just keeps the field
 // from holding an arbitrarily large, meaningless number.
 static const uint16_t TELEGRAM_MAX_COMMANDS_PER_MINUTE_MAX = 600;

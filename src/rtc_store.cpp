@@ -19,7 +19,7 @@ static bool g_rtcAvailable = false;      // see rtcActive()'s comment
 // transaction sequence (beginTransmission/write/endTransmission/
 // requestFrom/read) isn't atomic across tasks on its own, so an
 // overlapping read and write could otherwise interleave and corrupt each
-// other. Same reasoning as sd_store.cpp's g_sdMutex/telegram.cpp's
+// other. Same reasoning as sd_store.cpp's g_sdMutex/telegram_transport.cpp's
 // g_telegramNetMutex - a shared hardware peripheral touched from more
 // than one task needs a lock around each transaction.
 static SemaphoreHandle_t g_rtcMutex = xSemaphoreCreateMutex();

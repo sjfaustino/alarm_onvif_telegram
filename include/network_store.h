@@ -40,7 +40,7 @@ struct WifiCredentials {
   // Optional POSIX TZ rule string (e.g. "WET0WEST,M3.5.0/1,M10.5.0" for
   // mainland Portugal - look yours up at
   // https://github.com/nayarsystems/posix_tz_db), applied at boot. Only
-  // affects DST-aware local-time *display* (telegram.cpp's alert photo
+  // affects DST-aware local-time *display* (telegram_transport.cpp's alert photo
   // captions); the system clock itself always stays true UTC regardless -
   // WS-Security's Created timestamp reads UTC directly via gmtime_r() and
   // ignores this entirely. Empty (default) means captions stay in UTC.

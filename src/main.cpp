@@ -47,7 +47,7 @@ static unsigned long lastDigestMs = 0;
 // True once checkNvsUsage() has already alerted for the current high-usage
 // stretch - re-armed (set back false) once usage drops back under
 // NVS_USAGE_WARN_PERCENT, same "alert once per state transition, not every
-// check" pattern as CameraState::isOffline (telegram.cpp's
+// check" pattern as CameraState::isOffline (telegram_alerts.cpp's
 // checkCameraOnlineStatus).
 static bool g_nvsUsageAlerted = false;
 static unsigned long lastWifiRssiCheckMs = 0;
@@ -391,7 +391,7 @@ static bool seedSystemClockFromRouterHttpDate() {
   http.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
   // Registered so http.header() can actually see it after GET() - without
   // collectHeaders(), HTTPClient doesn't expose an arbitrary header
-  // through header() at all. See telegram.cpp's fetchOneSnapshot for the
+  // through header() at all. See snapshot_fetch.cpp's fetchOneSnapshot for the
   // same requirement with Transfer-Encoding.
   static const char* kDateHeader[] = {"Date"};
   http.collectHeaders(kDateHeader, 1);
@@ -434,7 +434,7 @@ static void setupTime() {
   // (webserver_network.cpp's handleSaveNetwork clamps user input to
   // [1, NTP_SYNC_MAX_MINUTES] minutes) - same "hand-edited/imported NVS
   // blob bypasses the form entirely" reasoning already applied to
-  // motionWatchdogHours (telegram.cpp's checkMotionWatchdog) and the SD
+  // motionWatchdogHours (telegram_alerts.cpp's checkMotionWatchdog) and the SD
   // storage check interval below. Unlike those two, 0 isn't a legitimate
   // "disabled" sentinel here - esp_sntp_set_sync_interval(0) means resync
   // continuously, exactly the "hammer the NTP server" outcome
@@ -450,7 +450,7 @@ static void setupTime() {
   // configTime() above set TZ to a no-op UTC form (gmtOffset=0/daylightOffset=0
   // - the system clock stays true UTC, see WifiCredentials::posixTz). This
   // overrides it with a real POSIX TZ rule if configured, affecting only
-  // DST-aware local-time reads (telegram.cpp's nowTimestampString) -
+  // DST-aware local-time reads (telegram_transport.cpp's nowTimestampString) -
   // WS-Security's timestamp reads UTC directly via gmtime_r regardless.
   if (g_wifiCredentials.posixTz.length() > 0) {
     setenv("TZ", g_wifiCredentials.posixTz.c_str(), 1);
@@ -671,7 +671,7 @@ static void checkHeapHealth() {
   if (!r.shouldLog) return;
 
   // Largest single allocatable block, not just the free-byte total - same
-  // stat sendTelegramPhotoBuffered (telegram.cpp) already logs before every
+  // stat sendTelegramPhotoBuffered (telegram_transport.cpp) already logs before every
   // TLS send, for the same reason: a free-heap number much bigger than this
   // one means a FRAGMENTED heap (plenty of free bytes, none of them
   // contiguous enough for whatever allocation actually failed), a different
@@ -1109,7 +1109,7 @@ void loop() {
   // reasoning (a heap event during an outage should still get a timestamp).
   checkHeapHealth();
   // checkHeapHealth's one-time low-heap alert can block on
-  // telegram.cpp's g_telegramNetMutex for up to TELEGRAM_NET_MUTEX_TIMEOUT_MS
+  // telegram_transport.cpp's g_telegramNetMutex for up to TELEGRAM_NET_MUTEX_TIMEOUT_MS
   // (45s) before sendTelegramMessage's own per-recipient reset ever fires -
   // same reasoning as the reset after each of sendHeartbeat/checkNvsUsage/
   // checkWifiSignal below: without this, that alert (rare, but its timing
@@ -1150,7 +1150,7 @@ void loop() {
     }
   }
 
-  // Every one of these three can block on telegram.cpp's g_telegramNetMutex
+  // Every one of these three can block on telegram_transport.cpp's g_telegramNetMutex
   // for up to TELEGRAM_NET_MUTEX_TIMEOUT_MS (45s) before a send is even
   // attempted - and HEARTBEAT_INTERVAL_MS/NVS_USAGE_CHECK_INTERVAL_MS/
   // WIFI_RSSI_CHECK_INTERVAL_MS (6h/1h/15min) are exact multiples of each
@@ -1296,7 +1296,7 @@ void loop() {
   // applies no clamp of its own, so a hand-edited NVS blob could hold a
   // value large enough to overflow the *3600000UL multiply (wraps above
   // ~1193 hours), same overflow class already fixed for
-  // motionWatchdogHours (telegram.cpp's checkMotionWatchdog).
+  // motionWatchdogHours (telegram_alerts.cpp's checkMotionWatchdog).
   uint32_t safeSdCheckHours = sdCheckIntervalHours();
   if (safeSdCheckHours > SD_CHECK_INTERVAL_MAX_HOURS) safeSdCheckHours = SD_CHECK_INTERVAL_MAX_HOURS;
   if (WiFi.status() == WL_CONNECTED && sdActive() && safeSdCheckHours > 0 &&

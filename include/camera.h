@@ -111,7 +111,7 @@ struct CameraState {
   // Telegram send is suppressed.
   bool     alertsEnabled = true;
 
-  // Pending auto-revert from a timed /on or /off (telegram.cpp) - 0 means
+  // Pending auto-revert from a timed /on or /off (telegram_commands.cpp) - 0 means
   // none scheduled. A millis() timestamp, compared the same overflow-safe
   // way as main.cpp's g_wifiRetryDueMs. Not persisted - a reboot cancels
   // any pending timer and falls back to loadAlertEnabledPref().
@@ -159,7 +159,7 @@ struct CameraState {
   // it reconnected" - a related but distinct signal (a camera can flap
   // reconnects without ever crossing offlineThresholdMs, or go offline once
   // and stay there, which reconnectHistory alone wouldn't show). Pushed by
-  // checkCameraOnlineStatus (telegram.cpp) on the false->true transition
+  // checkCameraOnlineStatus (telegram_alerts.cpp) on the false->true transition
   // only, not every check. Lock-guarded, same as reconnectHistory.
   unsigned long offlineHistory[EVENT_HISTORY_RING_SIZE] = {0};
   size_t offlineHistoryNext = 0;
@@ -168,7 +168,7 @@ struct CameraState {
   // Ring of the most recent motion-to-first-photo latencies, in
   // milliseconds - values, not timestamps, unlike reconnectHistory/
   // offlineHistory above, but the same ring mechanics (Next/Count).
-  // Pushed by triggerMotionAlert (telegram.cpp) once per motion alert,
+  // Pushed by triggerMotionAlert (telegram_alerts.cpp) once per motion alert,
   // only on an actual successful fetch (a failed one doesn't represent
   // "how long until a usable photo" and would skew the rollup toward a
   // HTTP_TIMEOUT_MS-bounded failure instead). Lets the Cameras page show
@@ -188,7 +188,7 @@ struct CameraState {
   bool     motionWatchdogTripped = false; // avoid repeat alerts until motion resumes
 
   // Same-task-only - last scheduled timelapse capture
-  // (triggerTimelapseCapture, telegram.cpp). Baselined to task-start time,
+  // (triggerTimelapseCapture, telegram_alerts.cpp). Baselined to task-start time,
   // same reasoning as lastMotionMs - a 0 default would fire the first
   // timelapse immediately for any task whose subscription took longer than
   // the configured interval to come up.
@@ -198,7 +198,7 @@ struct CameraState {
   // (cameraTaskFn's main loop, refreshed every iteration while subscribed -
   // same "continuously refreshed while healthy" shape as lastContactMs).
   // Baselined to task-start time, same reasoning as lastMotionMs/
-  // lastTimelapseMs. What checkSubscriptionHealth (telegram.cpp) uses to
+  // lastTimelapseMs. What checkSubscriptionHealth (telegram_alerts.cpp) uses to
   // catch a camera that keeps *answering* (refreshing lastContactMs, even
   // with a SOAP fault - see cameraSoapCall's own comment) but can never
   // actually hold a subscription, and so can never report a real
@@ -207,7 +207,7 @@ struct CameraState {
   unsigned long lastSubscribedMs = 0;
   bool subscriptionLostAlerted = false; // avoid repeat alerts until subscribed again - see checkMotionWatchdog's motionWatchdogTripped for the same pattern
 
-  // True once triggerMotionAlert (telegram.cpp) has actually sent a real
+  // True once triggerMotionAlert (telegram_alerts.cpp) has actually sent a real
   // (non-quiet-hours) motion snapshot and is now tracking whether more
   // motion arrives before the cooldown ends - see checkPendingMotionDigest.
   // Same-task-only, no lock needed, same reasoning as lastMotionMs above.
@@ -229,7 +229,7 @@ struct CameraState {
   unsigned long lastSuppressedMotionMs = 0;
 
   // Plain counts of real, cooldown-clearing detections since the last
-  // daily activity digest (checkDailyActivityDigest, telegram.cpp) -
+  // daily activity digest (checkDailyActivityDigest, telegram_alerts.cpp) -
   // incremented at both points triggerMotionAlert actually records a
   // detection (the quiet-hours-suppressed-send branch and the real-send
   // branch), read and reset to 0 by that digest once it fires. A plain
@@ -272,7 +272,7 @@ struct CameraState {
   // down at all now (it couldn't before this).
   bool stopRequested = false;
 
-  // True while fetchOneSnapshot (telegram.cpp) has an HTTP GET in flight to
+  // True while fetchOneSnapshot (snapshot_fetch.cpp) has an HTTP GET in flight to
   // this specific camera - the single choke point every snapshot fetch
   // goes through (motion/tamper alerts and timelapse capture on this
   // camera's own task, on-demand /snap on loop()'s task). Set/cleared
@@ -290,13 +290,13 @@ struct CameraState {
   // A ring of the most recently sent snapshots' raw JPEG bytes (motion,
   // tamper, on-demand /snap), so the dashboard can show a timeline without
   // a fresh fetch. Owned by this struct - pushSnapshotHistory
-  // (telegram.cpp) takes ownership of an already-fetched buffer, evicting
+  // (snapshot_history.cpp) takes ownership of an already-fetched buffer, evicting
   // and freeing whichever entry it overwrites. snapshotHistoryNext is the
   // index the next push writes to (age-0/newest is always at
   // (snapshotHistoryNext - 1 + SNAPSHOT_HISTORY_SIZE) %
   // SNAPSHOT_HISTORY_SIZE); snapshotHistoryCount is how many slots hold a
   // real snapshot yet. Heap-allocated (PSRAM via heap_caps_malloc, same as
-  // every other snapshot buffer - see telegram.cpp's allocateSnapshotBuffer).
+  // every other snapshot buffer - see snapshot_fetch.cpp's allocateSnapshotBuffer).
   SnapshotHistoryEntry snapshotHistory[SNAPSHOT_HISTORY_SIZE];
   size_t snapshotHistoryNext = 0;
   size_t snapshotHistoryCount = 0;
@@ -311,7 +311,7 @@ struct CameraState {
   // motionLatencyHistory (+Next/Count) - the fields both written by this
   // camera's own task and read/written from another task (webserver.cpp's
   // dashboard render and /cameras/snapshot route, main.cpp's heartbeat,
-  // telegram.cpp's /on /off /snap handling, checkScheduledAlertReverts,
+  // telegram_commands.cpp's /on /off /snap handling, checkScheduledAlertReverts,
   // pushCameraSnapshot's lastContactMs adjustment - all on loop()'s task).
   // Every other field is touched only by the owning camera task, no lock
   // needed. Created once by cameraStateInit() before any task can see this

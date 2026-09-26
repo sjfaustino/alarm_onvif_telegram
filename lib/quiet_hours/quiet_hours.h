@@ -2,7 +2,7 @@
 
 // Pure predicate for a per-camera recurring daily "quiet hours" window
 // (CameraConfig::quietHoursEnabled/quietStartMinute/quietEndMinute,
-// telegram.cpp's triggerMotionAlert) - whether motion alerts should be
+// telegram_alerts.cpp's triggerMotionAlert) - whether motion alerts should be
 // suppressed right now. Minutes are minutes-since-local-midnight (0-1439).
 //
 // start == end (the pre-filled 00:00/00:00 default) returns false, not
