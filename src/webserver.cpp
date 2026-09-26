@@ -8,6 +8,7 @@
 #include "webserver_maintenance.h"
 #include "webserver_hardware.h"
 #include "webserver_security.h"
+#include "config_backup.h"
 #include "webserver_activity.h"
 #include "webserver_gallery.h"
 #include "webserver_storage.h"
@@ -1361,7 +1362,7 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
     if (last) {
       ConfigImportApplyResult r = applyConfigImport(g_importText);
       g_importText = ""; // done with it - don't hold the buffer until the next import
-      g_importBanner = renderImportResultBanner(r);
+      g_importBanner = summarizeImportResult(r, ImportSummaryFormat::Html);
     }
     return ESP_OK;
   });
@@ -1370,7 +1371,7 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
   });
   server.on("/import", HTTP_POST, importHandler);
 
-  // Downloads the snapshot applyConfigImport() (webserver_security.cpp)
+  // Downloads the snapshot applyConfigImport() (config_backup.cpp)
   // automatically saves of whatever was stored just before the most recent
   // import - in the exact same format buildConfigExport() produces, so
   // undoing a bad import is just importing this file back. Same

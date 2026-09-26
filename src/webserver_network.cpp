@@ -172,7 +172,7 @@ String renderNetworkPanel(const String& prefillSsid) {
   // only ever produces digits and dots) - safe by construction, no escaping
   // needed. netStatic's fields are jsSingleQuoteEscape()d, not just relying
   // on handleSaveNetwork's IPAddress::fromString() validation below: config
-  // Import (webserver_security.cpp -> network_serialize.cpp) writes
+  // Import (config_backup.cpp -> network_serialize.cpp) writes
   // WifiCredentials' static-IP fields straight from an uploaded file with
   // no format validation at all, bypassing that check entirely - an
   // imported non-IP value here would otherwise break out of this

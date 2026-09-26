@@ -439,7 +439,7 @@ static void setupTime() {
   // "disabled" sentinel here - esp_sntp_set_sync_interval(0) means resync
   // continuously, exactly the "hammer the NTP server" outcome
   // handleSaveNetwork's own comment says a blank/zero/negative field must
-  // never produce; Import (webserver_security.cpp's applyConfigImport)
+  // never produce; Import (config_backup.cpp's applyConfigImport)
   // writes this field with no clamp of its own at all.
   unsigned long safeSyncIntervalMs = g_wifiCredentials.ntpSyncIntervalMs;
   if (safeSyncIntervalMs == 0) safeSyncIntervalMs = 3600000UL; // 1h - same fallback network_store.cpp's own load-time default uses
@@ -828,7 +828,7 @@ static void startMonitoring() {
   // (webserver_network.cpp's handleSaveNetwork already does this) - same
   // "hand-edited/imported NVS blob bypasses the form entirely" reasoning
   // as this project's numeric config clamps: config Import
-  // (webserver_security.cpp) writes WifiCredentials::hostname straight
+  // (config_backup.cpp) writes WifiCredentials::hostname straight
   // from an uploaded file via saveWifiCredentials, with no filtering of
   // its own. An unsanitized character here wouldn't crash anything - it
   // would just silently fail to resolve (see sanitizeHostname's own

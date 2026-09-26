@@ -174,7 +174,7 @@ bool deleteCamera(const String& name);
 bool updateCamera(const String& originalName, const CameraConfig& cam);
 
 // Wholesale replace of the entire persisted list (config import - see
-// webserver_security.cpp's applyConfigImport) - unlike calling saveCameras()
+// config_backup.cpp's applyConfigImport) - unlike calling saveCameras()
 // directly, this takes the same mutex addCamera/updateCamera/deleteCamera
 // do, so an import landing at the same moment as a concurrent dashboard
 // edit can't lose either change to the other.

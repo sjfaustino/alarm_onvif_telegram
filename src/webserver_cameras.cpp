@@ -544,7 +544,7 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
     // deviceServiceUrl is attacker-controllable two ways that bypass any
     // admin typing entirely - a rogue camera's WS-Discovery ProbeMatch
     // reply (renderCameraDiscoveryStatus, this file) feeds it directly,
-    // and Import (webserver_security.cpp's applyConfigImport) writes it
+    // and Import (config_backup.cpp's applyConfigImport) writes it
     // from an uploaded file with only a non-empty check. Unescaped, either
     // one plants a stored XSS payload that fires in the admin's own
     // session on every future page load.

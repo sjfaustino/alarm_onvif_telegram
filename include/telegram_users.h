@@ -40,7 +40,7 @@ struct TelegramUser {
   bool canReset = false;
 
   // May send /backup (sends the current config export - see
-  // webserver_security.h's buildConfigExport - as a Telegram document).
+  // config_backup.h's buildConfigExport - as a Telegram document).
   // Independent of canCommand/canSnap/canReset and, like canReset, NOT
   // granted to the auto-seeded Admin user by default (see
   // loadTelegramUsers()) - the export's machine-readable section includes
@@ -51,7 +51,7 @@ struct TelegramUser {
   bool canBackup = false;
 
   // May send /restore (uploads a config-export file back to the bot and
-  // applies it - webserver_security.h's applyConfigImport, the same
+  // applies it - config_backup.h's applyConfigImport, the same
   // machinery the dashboard's own Security page Import uses). Independent
   // of every permission above and, like canReset/canBackup, NOT granted
   // to the auto-seeded Admin user by default - applying a config
@@ -99,7 +99,7 @@ bool deleteTelegramUser(const String& name);
 bool updateTelegramUser(const String& originalName, const TelegramUser& user);
 
 // Wholesale replace of the entire persisted list (config import - see
-// webserver_security.cpp's applyConfigImport) - unlike calling
+// config_backup.cpp's applyConfigImport) - unlike calling
 // saveTelegramUsers() directly, this takes the same mutex
 // addTelegramUser/updateTelegramUser/deleteTelegramUser do, so an import
 // landing at the same moment as a concurrent dashboard edit can't lose

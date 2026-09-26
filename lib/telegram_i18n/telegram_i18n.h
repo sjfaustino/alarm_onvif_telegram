@@ -208,8 +208,8 @@ String trBackupFailed(TelegramLang lang);
 String trRestorePrompt(TelegramLang lang);
 String trRestoreExpired(TelegramLang lang);
 // resultSummary is already-composed, language-neutral prose (counts of
-// what was imported/skipped) - same webserver_security.h
-// renderImportResultBanner text the dashboard's own Import shows, reused
+// what was imported/skipped) - same summarizeImportResult
+// (config_import_summary.h) text the dashboard's own Import shows, reused
 // as-is rather than re-translated a second time.
 String trRestoreResult(TelegramLang lang, const String& resultSummary);
 String trHelpText(TelegramLang lang, uint16_t eventLogCapacity, uint16_t maxDurationMinutes,

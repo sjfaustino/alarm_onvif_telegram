@@ -33,6 +33,7 @@ this way:
 | `background_job_state`       | `webserver_cameras.cpp`                | The start/finish state-transition rules behind `BackgroundJob<T>` (`include/background_job.h`) - shared by the Cameras page's "Test all cameras"/"Search network for cameras" buttons and the Network page's "Search WiFi networks" button, which each used to (or would have) hand-written their own copy of this logic |
 | `wifi_scan`                  | `webserver_network.cpp`                | Dedupes a raw WiFi scan result list down to one entry per SSID (keeping the strongest signal) and sorts strongest-first, for the Network page's "Search WiFi networks" button |
 | `telegram_multipart`         | `telegram_transport.cpp`               | `sendPhoto`'s multipart/form-data request builder (`buildMultipart`) - boundary/head/tail/Content-Length construction |
+| `config_import_summary`      | `config_backup.cpp`                    | `summarizeImportResult` - the import result banner (dashboard) and `/restore` reply (Telegram) from one source, differing only in how they point at the pre-import backup |
 | `format_utils`               | `main.cpp` + `webserver.cpp` (duplicated) | `formatUptime`, `formatElapsedSince`, `htmlEscape`, `urlEncode`, `extractHost` - `formatUptime` was independently hand-written in both files (byte-identical, silently able to drift) before this |
 
 ### Why the serialization modules are schema-versioned

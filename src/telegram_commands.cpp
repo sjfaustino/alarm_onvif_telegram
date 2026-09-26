@@ -9,7 +9,7 @@
 #include "event_log_store.h"
 #include "snapshot_history.h"
 #include "sd_store.h"
-#include "webserver_security.h"
+#include "config_backup.h"
 #include <esp_task_wdt.h>
 #include <ArduinoJson.h>
 #include <WiFi.h>
@@ -1026,14 +1026,7 @@ static void handleTelegramDocument(const TelegramUser& sender, const TelegramUpd
   }
 
   ConfigImportApplyResult result = applyConfigImport(content);
-  String summary = renderImportResultBanner(result);
-  // The dashboard's own Import banner embeds one HTML link (to
-  // /import/backup) - meaningless (and would show as literal, unrendered
-  // markup) in a plain-text Telegram message, so it's swapped for
-  // equivalent plain-text guidance here. Targeted, not a general HTML
-  // stripper: this is the one and only piece of markup
-  // renderImportResultBanner ever emits (see its own comment).
-  summary.replace("<a href=\"/import/backup\">download it</a>", "download it from the dashboard's Security page");
+  String summary = summarizeImportResult(result, ImportSummaryFormat::PlainText);
   Serial.printf("[Telegram] Restore applied for user \"%s\": %s\n", sender.name.c_str(), summary.c_str());
   logEvent("Config restored via Telegram by " + sender.name);
   sendTelegramMessageTo(sender.chatId, trRestoreResult(sender.language, summary));

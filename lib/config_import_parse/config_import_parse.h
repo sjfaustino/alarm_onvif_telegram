@@ -10,12 +10,12 @@
 #include "power_monitor.h" // PowerMonitorSettings
 
 // Pure text-in/struct-out parser for the machine-readable blocks
-// buildConfigExport() (webserver_security.cpp) appends after each of its
+// buildConfigExport() (config_backup.cpp) appends after each of its
 // prose sections - the other half of the config export/import feature.
 // Split out so it's natively unit-testable (test/test_config_import_parse)
 // without <Preferences.h>, which only exists on-device; applying the
 // result to NVS (saveCameras/saveTelegramUsers/saveWifiCredentials/
-// saveSdSettings) is webserver_security.cpp's job, not this one's.
+// saveSdSettings) is config_backup.cpp's job, not this one's.
 //
 // Each block is self-delimiting: a "### <SECTION> v<N>" marker line, then
 // data lines (camera_serialize.h/telegram_user_serialize.h/
@@ -38,7 +38,7 @@ struct ConfigImportResult {
   std::vector<CameraConfig> cameras;
 
   // True if two or more entries in `cameras` share a name
-  // (case-insensitive). Import is a wholesale replace (webserver_security.h's
+  // (case-insensitive). Import is a wholesale replace (config_backup.h's
   // applyConfigImport), so this is the only path capable of putting a fresh
   // duplicate into NVS at all - camera_store.cpp's own addCamera only ever
   // guards a new name against what's already stored, one at a time. Every

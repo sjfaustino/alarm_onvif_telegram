@@ -3,7 +3,7 @@
 #include "network_store.h"
 
 // Pure (de)serialization between WifiCredentials and a single-line record -
-// used only by the config export/import feature (webserver_security.cpp),
+// used only by the config export/import feature (config_backup.cpp),
 // not by network_store.cpp's own NVS persistence (which stores each field
 // as its own Preferences key, not a joined record). Split out so it can be
 // unit-tested natively (test/test_network_serialize) without <Preferences.h>,

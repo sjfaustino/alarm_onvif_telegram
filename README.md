@@ -521,6 +521,7 @@ include/
   webserver_gallery.h, webserver_firmware.h, webserver_maintenance.h, webserver_storage.h,
   webserver_security.h
                      # each panel's own rendering/form-handling
+  config_backup.h   # config export/import and the one-slot pre-import backup (dashboard + Telegram)
   secrets.h.example # template for secrets.h (copy, fill in, gitignored)
   telegram_ca.h      # Telegram's root CA for TLS pinning (committed, not secret)
   build_version.h    # extern FIRMWARE_VERSION - its own translation unit (build_version.cpp)
@@ -549,6 +550,7 @@ src/
   webserver_security.cpp
                      # each panel's rendering/form-handling, split out of what used to be one
                      # 946-line webserver.cpp
+  config_backup.cpp  # config export/import/backup - no HTML, shared with Telegram /backup, /restore
   telegram_transport.cpp # TLS sends to the Bot API (message/photo/document/keyboard), the
                            # project-wide Telegram send mutex, local-clock helpers
   snapshot_fetch.cpp     # camera snapshot HTTP GET into a PSRAM buffer
@@ -572,6 +574,7 @@ lib/                 # pure-logic modules with no hardware dependencies, split o
                            # never included
   config_import_parse/    # parses the Security page's exported config text back into
                            # CameraConfig/TelegramUser/WifiCredentials/SdSettings for Import
+  config_import_summary/  # import result -> human-readable summary (HTML banner or plain text)
   background_job_state/   # pure start/finish/failed-to-start transition rules behind
                            # BackgroundJob<T> (include/background_job.h)
   subscription_health/    # alert-once/re-arm decision logic behind the stuck-subscription

@@ -27,7 +27,7 @@
 // running) - exactly the unthrottled multi-camera Telegram burst class
 // this project has already been burned by once (see git history around
 // "Serialize Telegram TLS sends to fix multi-camera burst SSL failures").
-// Import (webserver_security.cpp) writes this field with no clamp of its
+// Import (config_backup.cpp) writes this field with no clamp of its
 // own at all.
 static unsigned long safeAlertCooldownMs(const CameraConfig& cfg) {
   unsigned long ms = cfg.alertCooldownMs;

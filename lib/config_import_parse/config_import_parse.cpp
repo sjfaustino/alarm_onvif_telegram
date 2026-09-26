@@ -32,7 +32,7 @@ static bool usersHaveDuplicateIdentity(const std::vector<TelegramUser>& users) {
   return false;
 }
 
-// Same separator config_export's SDSETTINGS line uses (webserver_security.cpp) -
+// Same separator config_export's SDSETTINGS line uses (config_backup.cpp) -
 // few enough primitive fields that this stays a tiny inline parser rather
 // than its own schema-versioned lib module the way cameras/users/network
 // (all string-bearing) warrant - but still version-tagged, same discipline,
