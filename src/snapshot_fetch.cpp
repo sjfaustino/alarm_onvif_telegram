@@ -133,6 +133,9 @@ uint8_t* fetchOneSnapshot(const CameraConfig& cfg, CameraState& st, size_t& outL
       http.begin(snapshotUri);
       http.setTimeout(HTTP_TIMEOUT_MS);
       http.collectHeaders(kCollectedHeaders, 2);
+      // end() keeps the Basic credentials, and while they're set HTTPClient
+      // sends them and silently drops an added Authorization header.
+      http.setAuthorization("");
       http.addHeader("Authorization", authorization);
       code = http.GET();
     }

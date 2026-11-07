@@ -38,6 +38,10 @@ firmware behaves the same except where noted below.
   records failed allocations and saves a heap-low record that survives reboots.
 
 ### Fixed
+- Snapshots from cameras that require Digest auth (D12, D13, D20) still
+  failed with HTTP 401: the Digest retry never sent its header, because
+  HTTPClient drops an added Authorization header while Basic credentials
+  are set.
 - A camera list save that failed part-way (NVS nearly full) left old and new
   pieces mixed, which corrupted one camera's record so that camera vanished.
   The list now lives in a LittleFS file on the unused 1.5 MB data
