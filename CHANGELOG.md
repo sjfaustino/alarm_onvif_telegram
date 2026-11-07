@@ -8,8 +8,16 @@ config exports - see [Releases](README.md#releases) for how to cut one.
 
 ## [Unreleased]
 
-A cleanup release: the code is reorganised and much better tested, and the
-firmware behaves the same except where noted below.
+## [1.1.0] - 2026-11-07
+
+The code is reorganised and much better tested, and running it on a live board
+with 14 cameras turned up the crash, memory, subscription and storage fixes
+below.
+
+**Upgrading:** on its first boot, 1.1.0 moves the camera list from NVS to a
+LittleFS file and erases the NVS copy. Downgrading to 1.0.0 afterwards would
+find no cameras and re-seed them from `secrets.h`, so take a config export
+first if you might go back.
 
 ### Changed
 - `HumanShapeDetect` (person detection on Vatilon cameras) now triggers person
@@ -38,8 +46,7 @@ firmware behaves the same except where noted below.
   records failed allocations and saves a heap-low record that survives reboots.
 
 ### Fixed
-- Snapshots from cameras that require Digest auth (D12, D13, D20) still
-  failed with HTTP 401: the Digest retry never sent its header, because
+- Snapshots from cameras that require Digest auth still failed with HTTP 401: the Digest retry never sent its header, because
   HTTPClient drops an added Authorization header while Basic credentials
   are set.
 - A camera list save that failed part-way (NVS nearly full) left old and new
@@ -89,11 +96,12 @@ firmware behaves the same except where noted below.
 - `startWebServer` (750 lines) split: each dashboard page now registers its own
   routes. Form labels and pin fallbacks now come from `config.h` constants.
 - `scripts/check_comment_only.sh` proves a change touched only comments.
-- Native test count: 454 -> 489.
+- Native test count: 454 -> 565.
 
 ## [1.0.0] - 2026-09-20
 
 Baseline for this changelog. For earlier history, see `git log v1.0.0`.
 
-[Unreleased]: https://github.com/sjfaustino/alarm_onvif_telegram/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/sjfaustino/alarm_onvif_telegram/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/sjfaustino/alarm_onvif_telegram/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/sjfaustino/alarm_onvif_telegram/releases/tag/v1.0.0
