@@ -12,6 +12,9 @@ A cleanup release: the code is reorganised and much better tested, and the
 firmware behaves the same except where noted below.
 
 ### Changed
+- A camera with no snapshot address (Tapo cameras offer none over ONVIF) now
+  sends its motion alert as text, with the same caption plus "(no photo
+  available)". It used to send nothing at all.
 - Boot no longer waits 5 seconds for a serial terminal; alerts start sooner after
   every reboot (`BOOT_SETTLE_MS`, 250 ms, leaves time for SD and the RTC).
 - A camera task that stops making progress for 10 minutes now triggers a
