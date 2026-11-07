@@ -460,6 +460,16 @@ static void parseEvents(const CameraConfig& cfg, CameraState& st, const String& 
   }
 }
 
+// Resubscribe backoff cap, further limited to half the camera's offline
+// threshold. A fault still counts as contact, but only once per retry: with
+// both at 5 minutes, backed-off cameras false-alarmed as OFFLINE.
+static const unsigned long RETRY_BACKOFF_MAX_MS = 300000UL; // 5 minutes between retries
+
+static unsigned long nextRetryDelayMs(const CameraConfig& cfg, unsigned long previousDelayMs) {
+  unsigned long cap = detectorSafeBackoffCapMs(RETRY_BACKOFF_MAX_MS, cfg.offlineThresholdMs, RETRY_INTERVAL_MS);
+  return nextBackoffDelayMs(previousDelayMs, RETRY_INTERVAL_MS, cap);
+}
+
 bool cameraPullMessages(const CameraConfig& cfg, CameraState& st) {
   if (!st.subscriptionActive || st.pullPointUrl.length() == 0) return false; // same-task read, no lock needed
 
@@ -471,17 +481,24 @@ bool cameraPullMessages(const CameraConfig& cfg, CameraState& st) {
 
   if (response.length() == 0) return false;
 
-  if (response.indexOf("PullMessagesResponse") >= 0) {
+  PullResponseKind kind = classifyPullResponse(response);
+  if (kind == PullResponseKind::Success) {
+    // Only a good poll proves the subscription works: a camera can accept a
+    // subscribe and then refuse every poll, so neither signal is set on subscribe.
+    st.lastSubscribedMs = millis();
+    st.retryStreak = 0;
+    st.retryDelayMs = 0;
     st.pullAmbiguousStreak = 0;
     parseEvents(cfg, st, response);
     return true;
   }
 
-  if (response.indexOf("ResourceUnknownFault") >= 0 || responseHasFault(response)) {
-    Serial.printf("[%s] PullPoint gone, will resubscribe.\n", cfg.name.c_str());
+  if (kind == PullResponseKind::Fault) {
     { CameraStateLock lock(st); st.subscriptionActive = false; }
     st.pullPointUrl = "";
     st.pullAmbiguousStreak = 0;
+    st.retryDelayMs = nextRetryDelayMs(cfg, st.retryDelayMs);
+    Serial.printf("[%s] PullMessages refused - resubscribing in %lus.\n", cfg.name.c_str(), st.retryDelayMs / 1000UL);
     return false;
   }
 
@@ -533,11 +550,6 @@ bool cameraSetupSequence(const CameraConfig& cfg, CameraState& st) {
   if (!cameraCreatePullPoint(cfg, st)) return false;
   return true;
 }
-
-// Resubscribe backoff cap, further limited to half the camera's offline
-// threshold. A fault still counts as contact, but only once per retry: with
-// both at 5 minutes, backed-off cameras false-alarmed as OFFLINE.
-static const unsigned long RETRY_BACKOFF_MAX_MS = 300000UL; // 5 minutes between retries
 
 // ============================================================
 // Per-camera task, pinned to core 1 (away from WiFi and loopTask on core 0).
@@ -634,10 +646,6 @@ void cameraTaskFn(void* pvParameters) {
       continue;
     }
 
-    // Refreshed every pass while subscribed, even when polling is skipped
-    // below, so subscription health doesn't go stale while snapshots are busy.
-    if (st.subscriptionActive) st.lastSubscribedMs = millis();
-
     // A snapshot GET is in flight to this camera; skip SOAP this pass rather
     // than open a second connection. The health checks below still run.
     bool snapshotBusy;
@@ -660,8 +668,6 @@ void cameraTaskFn(void* pvParameters) {
         // Both paths set subscriptionActive on success.
         if (st.subscriptionActive) {
           Serial.printf("[%s] Subscription recovered.\n", cfg.name.c_str());
-          st.retryStreak = 0;
-          st.retryDelayMs = 0;
           // Read by the dashboard, so locked.
           {
             CameraStateLock lock(st);
@@ -671,10 +677,7 @@ void cameraTaskFn(void* pvParameters) {
             if (st.reconnectHistoryCount < EVENT_HISTORY_RING_SIZE) st.reconnectHistoryCount++;
           }
         } else {
-          // See RETRY_BACKOFF_MAX_MS.
-          unsigned long retryBackoffCap =
-              detectorSafeBackoffCapMs(RETRY_BACKOFF_MAX_MS, cfg.offlineThresholdMs, RETRY_INTERVAL_MS);
-          st.retryDelayMs = nextBackoffDelayMs(st.retryDelayMs, RETRY_INTERVAL_MS, retryBackoffCap);
+          st.retryDelayMs = nextRetryDelayMs(cfg, st.retryDelayMs);
           st.retryStreak++;
           Serial.printf("[%s] Still not subscribed after %u consecutive attempt(s) - next retry in %lus.\n",
                         cfg.name.c_str(), (unsigned)st.retryStreak, st.retryDelayMs / 1000UL);

@@ -31,6 +31,10 @@ firmware behaves the same except where noted below.
   records failed allocations and saves a heap-low record that survives reboots.
 
 ### Fixed
+- A camera that accepted a subscription but refused every poll stayed marked
+  subscribed while delivering no events, if its fault mentioned
+  `PullMessagesResponse` in a header. It now resubscribes with backoff, and raises
+  the "not subscribed" alert if polls keep failing.
 - A huge outage threshold or pulse duration on the Hardware pages wrapped to a
   tiny value instead of being capped.
 

@@ -207,9 +207,13 @@ String soapPost(const char* cameraName, const String& url, const String& action,
     Serial.printf("       ^ %s\n", HTTPClient::errorToString(code).c_str());
   }
 
-  if (VERBOSE_SOAP_LOG || isFault) {
+  // One line per fault: full envelopes every few seconds would push everything
+  // else out of the /debug/log ring within a minute.
+  if (VERBOSE_SOAP_LOG) {
     Serial.println("---- RESPONSE ----");
     Serial.println(response);
+  } else if (isFault) {
+    Serial.printf("       ^ %s\n", soapFaultSummary(response).c_str());
   }
 
   http.end();

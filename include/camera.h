@@ -106,8 +106,9 @@ struct CameraState {
   unsigned long lastTaskBeatMs = 0;
   bool taskStallAlerted = false;
 
-  // Refreshed every loop pass while subscribed. Catches a camera that keeps
-  // answering (lastContactMs stays fresh) but can never hold a subscription.
+  // Refreshed by each successful poll. Catches a camera that keeps answering
+  // (lastContactMs stays fresh) but can't deliver events, including one that
+  // accepts subscribes and then refuses every poll.
   unsigned long lastSubscribedMs = 0;
   bool subscriptionLostAlerted = false; // avoid repeat alerts until subscribed again - see checkMotionWatchdog's motionWatchdogTripped for the same pattern
 

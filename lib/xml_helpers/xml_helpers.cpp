@@ -1,3 +1,4 @@
+#include <cstring>
 #include "xml_helpers.h"
 #include <cctype>
 
@@ -104,4 +105,47 @@ bool responseHasFault(const String& response) {
     p = response.indexOf("<Fault", p + 1);
   }
   return false;
+}
+
+// Text of the first element with this local name at or after `from`, with or
+// without a prefix or attributes; "" if there's none. *pos gets its position.
+static String elementTextAfter(const String& xml, const char* localName, int from, int* pos = nullptr) {
+  String prefixed = String(":") + localName;
+  String bare = String("<") + localName;
+  size_t nameLen = strlen(localName) + 1;
+  for (int p = from; p >= 0;) {
+    int a = xml.indexOf(prefixed, p);
+    int b = xml.indexOf(bare, p);
+    int hit = (a >= 0 && (b < 0 || a < b)) ? a : b;
+    if (hit < 0) return "";
+    char next = (hit + nameLen < xml.length()) ? xml[hit + nameLen] : '\0';
+    if (next == '>' || next == ' ') {
+      int open = xml.indexOf('>', hit);
+      int close = xml.indexOf("</", open);
+      if (open < 0 || close < 0) return "";
+      if (pos) *pos = hit;
+      return xml.substring(open + 1, close);
+    }
+    p = hit + 1;
+  }
+  return "";
+}
+
+String soapFaultSummary(const String& response) {
+  int fault = response.indexOf(":Fault");
+  if (fault < 0) fault = response.indexOf("<Fault");
+  if (fault >= 0) {
+    // SOAP 1.2: Code/Value, refined by Subcode/Value. SOAP 1.1: faultcode.
+    String code;
+    int subcode = -1;
+    if (elementTextAfter(response, "Subcode", fault, &subcode).length() > 0) {
+      code = elementTextAfter(response, "Value", subcode);
+    }
+    if (code.length() == 0) code = elementTextAfter(response, "Value", fault);
+    if (code.length() == 0) code = elementTextAfter(response, "faultcode", fault);
+    String reason = elementTextAfter(response, "Text", fault);
+    if (reason.length() == 0) reason = elementTextAfter(response, "faultstring", fault);
+    if (code.length() > 0 || reason.length() > 0) return code + ": " + reason;
+  }
+  return response.substring(0, 200);
 }

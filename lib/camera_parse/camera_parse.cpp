@@ -128,3 +128,11 @@ String firstTopic(const String& xml) {
   result.trim();
   return result;
 }
+
+PullResponseKind classifyPullResponse(const String& xml) {
+  if (xml.indexOf(":PullMessagesResponse") >= 0 || xml.indexOf("<PullMessagesResponse") >= 0) {
+    return PullResponseKind::Success;
+  }
+  if (xml.indexOf("ResourceUnknownFault") >= 0 || responseHasFault(xml)) return PullResponseKind::Fault;
+  return PullResponseKind::Unrecognized;
+}

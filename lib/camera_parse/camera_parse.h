@@ -46,6 +46,13 @@ CameraEventClassification classifyCameraEvent(const String& xml);
 // anyTrue).
 bool topicReportedTrue(const String& xml, const String& topicKeyword);
 
+enum class PullResponseKind { Success, Fault, Unrecognized };
+
+// Success needs a real PullMessagesResponse element. Some cameras put that name
+// in a fault's wsa:Action header URL too, so a plain substring match reads a
+// refusal as success and the camera silently stops delivering events.
+PullResponseKind classifyPullResponse(const String& xml);
+
 // Whether a motion topic (MotionAlarm, CellMotionDetector, PeopleDetect,
 // VehicleDetect) itself reported true. Checking anyTrue alone fired motion
 // alerts off unrelated topics like SignalLoss.

@@ -34,14 +34,18 @@ def get(path):
 
 
 def log(follow):
+    # Each response is at most 16 KB, so keep reading until caught up.
     since = 0
     while True:
         with get(f"/debug/log?since={since}") as r:
             if int(r.headers.get("X-Log-Oldest", 0)) > since > 0:
                 print("--- log lines were missed ---")
             since = int(r.headers["X-Log-Next"])
-            sys.stdout.write(r.read().decode(errors="replace"))
-            sys.stdout.flush()
+            body = r.read()
+        sys.stdout.write(body.decode(errors="replace"))
+        sys.stdout.flush()
+        if body:
+            continue
         if not follow:
             return
         time.sleep(2)
