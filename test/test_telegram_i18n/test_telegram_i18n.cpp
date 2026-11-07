@@ -206,6 +206,21 @@ void test_trHeapLowWarning(void) {
   assertDiffersAndContains(en, pt, "12345");
 }
 
+void test_trCameraTaskStalled_names_camera_and_minutes(void) {
+  String en = trCameraTaskStalled(TelegramLang::English, "D01", 12);
+  String pt = trCameraTaskStalled(TelegramLang::Portuguese, "D01", 12);
+  TEST_ASSERT_TRUE(en.indexOf("D01") >= 0 && en.indexOf("12 min") >= 0);
+  TEST_ASSERT_TRUE(pt.indexOf("D01") >= 0 && pt.indexOf("12 min") >= 0);
+  TEST_ASSERT_FALSE(en == pt);
+}
+
+void test_trCameraTaskRecovered_differs_by_language(void) {
+  String en = trCameraTaskRecovered(TelegramLang::English, "D01");
+  String pt = trCameraTaskRecovered(TelegramLang::Portuguese, "D01");
+  TEST_ASSERT_TRUE(en.indexOf("D01") >= 0 && pt.indexOf("D01") >= 0);
+  TEST_ASSERT_FALSE(en == pt);
+}
+
 void test_trCameraTaskSpawnFailure(void) {
   String en = trCameraTaskSpawnFailure(TelegramLang::English, "D01");
   String pt = trCameraTaskSpawnFailure(TelegramLang::Portuguese, "D01");
@@ -609,6 +624,8 @@ int main(int argc, char** argv) {
   RUN_TEST(test_trWifiWeakWarning);
   RUN_TEST(test_trHeapLowWarning);
   RUN_TEST(test_trCameraTaskSpawnFailure);
+  RUN_TEST(test_trCameraTaskStalled_names_camera_and_minutes);
+  RUN_TEST(test_trCameraTaskRecovered_differs_by_language);
   RUN_TEST(test_trInternetOutageAlert_and_trBridgeOutageAlert);
   RUN_TEST(test_trPowerStatusLine_on_vs_off);
   RUN_TEST(test_trPowerLost_and_trPowerRestored);

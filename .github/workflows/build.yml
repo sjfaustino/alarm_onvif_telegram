@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+  schedule:
+    # Weekly, so a change in the runner or tooling surfaces without waiting for
+    # the next push (a Python update once broke builds with no push to reveal it).
+    - cron: "0 6 * * 1"
 
 jobs:
   test:
@@ -28,7 +33,7 @@ jobs:
           key: pio-native-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
 
       - name: Install PlatformIO
-        run: pip install --upgrade platformio
+        run: pip install platformio==6.1.19
 
       - name: Stub out secrets
         # secrets.h is gitignored (real credentials never live in the repo),
@@ -68,7 +73,7 @@ jobs:
           key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
 
       - name: Install PlatformIO
-        run: pip install --upgrade platformio
+        run: pip install platformio==6.1.19
 
       - name: Stub out secrets
         # secrets.h is gitignored (real credentials never live in the repo) -

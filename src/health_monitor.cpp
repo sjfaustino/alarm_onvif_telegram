@@ -8,6 +8,7 @@
 #include "config.h"
 #include "event_log_store.h"
 #include "heap_health.h"
+#include "task_stall.h"
 #include "sd_store.h"
 #include "telegram.h"
 #include "telegram_i18n.h"
@@ -141,6 +142,35 @@ void checkWifiSignal() {
   } else {
     Serial.printf("WiFi signal back above %d dBm (%d dBm).\n", WIFI_RSSI_WARN_DBM, (int)rssi);
     logEvent("WiFi signal back above " + String(WIFI_RSSI_WARN_DBM) + " dBm (" + String(rssi) + " dBm)");
+  }
+}
+
+void checkCameraTasks() {
+  for (size_t i = 0; i < g_cameras.size(); i++) {
+    // Disabled slots may have no mutex yet.
+    if (!g_cameras[i].enabled) continue;
+    TaskStallResult r;
+    unsigned long sinceBeatMs;
+    {
+      // If the stuck task holds this lock, loop() hangs here and the 90s
+      // watchdog reboots the board - the right outcome for that case too.
+      CameraStateLock lock(g_cameraStates[i]);
+      sinceBeatMs = millis() - g_cameraStates[i].lastTaskBeatMs;
+      r = evaluateTaskStall(g_cameraStates[i].taskRunning, sinceBeatMs, CAMERA_TASK_STALL_MS,
+                            g_cameraStates[i].taskStallAlerted);
+      g_cameraStates[i].taskStallAlerted = r.alerted;
+    }
+    String name = g_cameras[i].name;
+    if (r.shouldAlert) {
+      unsigned long minutes = sinceBeatMs / 60000UL;
+      Serial.printf("[%s] WARNING: camera task stalled for %lu min.\n", name.c_str(), minutes);
+      logEvent(name + ": camera task stalled for " + String(minutes) + " min - may not be monitoring");
+      sendTelegramMessage([name, minutes](TelegramLang lang) { return trCameraTaskStalled(lang, name, minutes); });
+    } else if (r.recovered) {
+      Serial.printf("[%s] Camera task running again.\n", name.c_str());
+      logEvent(name + ": camera task running again");
+      sendTelegramMessage([name](TelegramLang lang) { return trCameraTaskRecovered(lang, name); });
+    }
   }
 }
 

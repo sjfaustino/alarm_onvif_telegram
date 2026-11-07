@@ -199,6 +199,22 @@ String trHeapLowWarning(TelegramLang lang, uint32_t baselineBytes, uint32_t maxA
          "happening (a motion burst, several cameras reconnecting, ...).";
 }
 
+String trCameraTaskStalled(TelegramLang lang, const String& cameraName, unsigned long minutes) {
+  if (lang == TelegramLang::Portuguese) {
+    return "\xE2\x9A\xA0\xEF\xB8\x8F " + cameraName + ": a tarefa de monitoriza\xC3\xA7\xC3\xA3o parece bloqueada h\xC3\xA1 " +
+           String(minutes) + " min - pode n\xC3\xA3o estar a detetar alarmes. Se continuar, reinicie a placa (/reset).";
+  }
+  return "\xE2\x9A\xA0\xEF\xB8\x8F " + cameraName + ": its monitoring task looks stuck for " + String(minutes) +
+         " min - it may not be detecting alarms. If this doesn't clear, reboot the board (/reset).";
+}
+
+String trCameraTaskRecovered(TelegramLang lang, const String& cameraName) {
+  if (lang == TelegramLang::Portuguese) {
+    return "\xE2\x9C\x85 " + cameraName + ": a tarefa de monitoriza\xC3\xA7\xC3\xA3o voltou a funcionar.";
+  }
+  return "\xE2\x9C\x85 " + cameraName + ": its monitoring task is running again.";
+}
+
 String trCameraTaskSpawnFailure(TelegramLang lang, const String& cameraName) {
   if (lang == TelegramLang::Portuguese) {
     return "\xE2\x9A\xA0\xEF\xB8\x8F " + cameraName + ": falha ao iniciar a tarefa de monitoriza\xC3\xA7\xC3\xA3o "

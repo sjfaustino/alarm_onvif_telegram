@@ -52,6 +52,8 @@ String trSdUsageWarning(TelegramLang lang, unsigned pct);
 String trWifiWeakWarning(TelegramLang lang, int rssi);
 String trHeapLowWarning(TelegramLang lang, uint32_t baselineBytes, uint32_t maxAllocBytes);
 String trCameraTaskSpawnFailure(TelegramLang lang, const String& cameraName);
+String trCameraTaskStalled(TelegramLang lang, const String& cameraName, unsigned long minutes);
+String trCameraTaskRecovered(TelegramLang lang, const String& cameraName);
 // hasFallbackTime: RTC or router time still in use vs. no time source at all.
 String trNtpSyncFailed(TelegramLang lang, bool hasFallbackTime);
 String trInternetOutageAlert(TelegramLang lang);

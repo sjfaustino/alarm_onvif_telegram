@@ -1,31 +1,140 @@
 #include <unity.h>
 #include "fixtures.h"
-#include "golden.h"
+#include "html_form_reader.h"
 #include "config.h"
 
 void setUp(void) {}
 void tearDown(void) {}
 
-// ---- Rendering: byte-identical to the captured pre-refactor output ----
+// ---- Rendering: what a browser submits, and what the page promises ----
 
-void test_render_add_default(void) {
-  TEST_ASSERT_EQUAL_STRING(kGoldenAddDefault, renderCameraForm(fixtureAddDefault(), false).c_str());
+static CameraConfig submit(const CameraConfig& c, bool isEdit) {
+  return parseCameraForm(BrowserSubmission(renderCameraForm(c, isEdit)));
 }
 
-void test_render_edit_hostile(void) {
-  TEST_ASSERT_EQUAL_STRING(kGoldenEditHostile, renderCameraForm(fixtureEditHostile(), true).c_str());
+// Every value distinct, so a field wired to the wrong member can't pass.
+void test_round_trip_keeps_every_field(void) {
+  CameraConfig c = fixtureEditHostile();
+  CameraConfig r = submit(c, true);
+  TEST_ASSERT_EQUAL_STRING(c.name.c_str(), r.name.c_str());
+  TEST_ASSERT_EQUAL_STRING(c.deviceServiceUrl.c_str(), r.deviceServiceUrl.c_str());
+  TEST_ASSERT_EQUAL_STRING(c.user.c_str(), r.user.c_str());
+  TEST_ASSERT_EQUAL_STRING(c.snapshotUriOverride.c_str(), r.snapshotUriOverride.c_str());
+  TEST_ASSERT_EQUAL_STRING(c.preferredProfileKeyword.c_str(), r.preferredProfileKeyword.c_str());
+  TEST_ASSERT_EQUAL_STRING(c.notes.c_str(), r.notes.c_str());
+  TEST_ASSERT_EQUAL_UINT16(c.snapshotMaxWidth, r.snapshotMaxWidth);
+  TEST_ASSERT_EQUAL_UINT16(c.snapshotMaxHeight, r.snapshotMaxHeight);
+  TEST_ASSERT_EQUAL_UINT32(c.alertCooldownMs, r.alertCooldownMs);
+  TEST_ASSERT_EQUAL_UINT32(c.offlineThresholdMs, r.offlineThresholdMs);
+  TEST_ASSERT_EQUAL_UINT(c.snapshotBurstCount, r.snapshotBurstCount);
+  TEST_ASSERT_EQUAL_UINT32(c.pollIntervalMs, r.pollIntervalMs);
+  TEST_ASSERT_EQUAL_UINT16(c.quietStartMinute, r.quietStartMinute);
+  TEST_ASSERT_EQUAL_UINT16(c.quietEndMinute, r.quietEndMinute);
+  TEST_ASSERT_EQUAL_UINT16(c.motionWatchdogHours, r.motionWatchdogHours);
+  TEST_ASSERT_EQUAL_UINT16(c.timelapseIntervalMin, r.timelapseIntervalMin);
+  TEST_ASSERT_EQUAL_UINT16(c.retentionDays, r.retentionDays);
 }
 
-void test_render_add_hostile(void) {
-  TEST_ASSERT_EQUAL_STRING(kGoldenAddHostile, renderCameraForm(fixtureEditHostile(), false).c_str());
+// A swapped table entry reads and writes the same wrong member, so a round trip
+// can't see it. These tie each field's name to its setting, in both directions.
+void test_each_checkbox_name_controls_its_own_setting(void) {
+  const struct { const char* name; bool CameraConfig::*flag; } boxes[] = {
+      {"enabled", &CameraConfig::enabled},
+      {"useWSSecurity", &CameraConfig::useWSSecurity},
+      {"includeInitialTerminationTime", &CameraConfig::includeInitialTerminationTime},
+      {"includeReplyToAnonymous", &CameraConfig::includeReplyToAnonymous},
+      {"quietHoursEnabled", &CameraConfig::quietHoursEnabled},
+      {"timelapseSendToTelegram", &CameraConfig::timelapseSendToTelegram},
+      {"personAlertsEnabled", &CameraConfig::personAlertsEnabled},
+      {"vehicleAlertsEnabled", &CameraConfig::vehicleAlertsEnabled},
+      {"petAlertsEnabled", &CameraConfig::petAlertsEnabled},
+      {"petAlertsTextOnly", &CameraConfig::petAlertsTextOnly},
+      {"motionDigestEnabled", &CameraConfig::motionDigestEnabled}};
+  for (auto& on : boxes) {
+    CameraConfig c;
+    for (auto& b : boxes) c.*b.flag = false;
+    c.*on.flag = true;
+    BrowserSubmission sent(renderCameraForm(c, false));
+    MapParams only;
+    only.values = {{on.name, "on"}};
+    CameraConfig parsed = parseCameraForm(only);
+    for (auto& b : boxes) {
+      bool expected = b.flag == on.flag;
+      TEST_ASSERT_EQUAL_MESSAGE(expected, sent.has(b.name), b.name);
+      TEST_ASSERT_EQUAL_MESSAGE(expected, parsed.*b.flag, b.name);
+    }
+  }
 }
 
-void test_render_wrap_no_warning(void) {
-  TEST_ASSERT_EQUAL_STRING(kGoldenWrapNoWarning, renderCameraForm(fixtureWrapNoWarning(), true).c_str());
+void test_each_value_field_name_shows_its_own_setting(void) {
+  CameraConfig c = fixtureEditHostile();
+  BrowserSubmission sent(renderCameraForm(c, true));
+  TEST_ASSERT_EQUAL_STRING(c.name.c_str(), sent.get("name", "").c_str());
+  TEST_ASSERT_EQUAL_STRING(c.deviceServiceUrl.c_str(), sent.get("deviceServiceUrl", "").c_str());
+  TEST_ASSERT_EQUAL_STRING(c.user.c_str(), sent.get("user", "").c_str());
+  TEST_ASSERT_EQUAL_STRING(c.snapshotUriOverride.c_str(), sent.get("snapshotUriOverride", "").c_str());
+  TEST_ASSERT_EQUAL_STRING(c.preferredProfileKeyword.c_str(), sent.get("preferredProfileKeyword", "").c_str());
+  TEST_ASSERT_EQUAL_STRING(c.notes.c_str(), sent.get("notes", "").c_str());
+  TEST_ASSERT_EQUAL_STRING("640", sent.get("snapshotMaxWidth", "").c_str());
+  TEST_ASSERT_EQUAL_STRING("480", sent.get("snapshotMaxHeight", "").c_str());
+  TEST_ASSERT_EQUAL_STRING("45", sent.get("alertCooldownSec", "").c_str());
+  TEST_ASSERT_EQUAL_STRING("10", sent.get("offlineThresholdMin", "").c_str());
+  TEST_ASSERT_EQUAL_STRING("3", sent.get("snapshotBurstCount", "").c_str());
+  TEST_ASSERT_EQUAL_STRING("750", sent.get("pollIntervalMs", "").c_str());
+  TEST_ASSERT_EQUAL_STRING("09:30", sent.get("quietStart", "").c_str());
+  TEST_ASSERT_EQUAL_STRING("17:05", sent.get("quietEnd", "").c_str());
+  TEST_ASSERT_EQUAL_STRING("2", sent.get("motionWatchdogHours", "").c_str());
+  TEST_ASSERT_EQUAL_STRING("15", sent.get("timelapseIntervalMin", "").c_str());
+  TEST_ASSERT_EQUAL_STRING("90", sent.get("retentionDays", "").c_str());
 }
 
-void test_render_wrap_warning(void) {
-  TEST_ASSERT_EQUAL_STRING(kGoldenWrapWarning, renderCameraForm(fixtureWrapWarning(), true).c_str());
+void test_blank_add_form_submits_the_defaults(void) {
+  CameraConfig d;
+  CameraConfig r = submit(fixtureAddDefault(), false);
+  TEST_ASSERT_EQUAL(d.enabled, r.enabled);
+  TEST_ASSERT_EQUAL(d.useWSSecurity, r.useWSSecurity);
+  TEST_ASSERT_EQUAL(d.personAlertsEnabled, r.personAlertsEnabled);
+  TEST_ASSERT_EQUAL(d.petAlertsEnabled, r.petAlertsEnabled);
+  TEST_ASSERT_EQUAL_UINT32(d.alertCooldownMs, r.alertCooldownMs);
+  TEST_ASSERT_EQUAL_UINT32(d.pollIntervalMs, r.pollIntervalMs);
+  TEST_ASSERT_EQUAL_UINT16(0, r.snapshotMaxWidth);  // shown blank, reads back as unset
+}
+
+void test_no_field_name_is_used_twice(void) {
+  BrowserSubmission b(renderCameraForm(fixtureEditHostile(), true));
+  TEST_ASSERT_EQUAL(0, (int)b.duplicates().size());
+}
+
+void test_hostile_text_is_escaped(void) {
+  String html = renderCameraForm(fixtureEditHostile(), true);
+  TEST_ASSERT_EQUAL(-1, html.indexOf("<b>side</b>"));
+  TEST_ASSERT_EQUAL(-1, html.indexOf("D01 <"));
+  TEST_ASSERT_TRUE(html.indexOf("D01 &lt;&quot;Front&quot;") >= 0);
+}
+
+void test_edit_form_has_original_name_and_cancel_add_form_does_not(void) {
+  String edit = renderCameraForm(fixtureEditHostile(), true);
+  String add = renderCameraForm(fixtureEditHostile(), false);
+  TEST_ASSERT_EQUAL_STRING(fixtureEditHostile().name.c_str(), BrowserSubmission(edit).get("originalName", "").c_str());
+  TEST_ASSERT_FALSE(BrowserSubmission(add).has("originalName"));
+  TEST_ASSERT_TRUE(edit.indexOf(">Cancel<") >= 0);
+  TEST_ASSERT_EQUAL(-1, add.indexOf(">Cancel<"));
+}
+
+void test_labels_state_the_real_limits(void) {
+  String html = renderCameraForm(fixtureAddDefault(), false);
+  TEST_ASSERT_TRUE(html.indexOf("max " + String(CAMERA_ALERT_COOLDOWN_MAX_MS / 1000UL)) >= 0);
+  TEST_ASSERT_TRUE(html.indexOf("max " + String(CAMERA_OFFLINE_THRESHOLD_MAX_MS / 60000UL)) >= 0);
+  TEST_ASSERT_TRUE(html.indexOf("(1-" + String(CAMERA_SNAPSHOT_BURST_MAX) + ")") >= 0);
+  TEST_ASSERT_TRUE(html.indexOf(String(CAMERA_POLL_INTERVAL_MIN_MS) + "-" + String(CAMERA_POLL_INTERVAL_MAX_MS)) >= 0);
+}
+
+void test_watchdog_warning_only_when_shorter_than_quiet_hours(void) {
+  const char* warning = "shorter than or equal to the quiet hours window";
+  TEST_ASSERT_TRUE(renderCameraForm(fixtureEditHostile(), true).indexOf(warning) >= 0);  // same-day window
+  TEST_ASSERT_TRUE(renderCameraForm(fixtureWrapWarning(), true).indexOf(warning) >= 0);  // wraps midnight
+  TEST_ASSERT_EQUAL(-1, renderCameraForm(fixtureWrapNoWarning(), true).indexOf(warning));
+  TEST_ASSERT_EQUAL(-1, renderCameraForm(fixtureAddDefault(), false).indexOf(warning));
 }
 
 void test_render_never_echoes_password(void) {
@@ -180,11 +289,15 @@ void test_hhmm_round_trip(void) {
 
 int main(int, char**) {
   UNITY_BEGIN();
-  RUN_TEST(test_render_add_default);
-  RUN_TEST(test_render_edit_hostile);
-  RUN_TEST(test_render_add_hostile);
-  RUN_TEST(test_render_wrap_no_warning);
-  RUN_TEST(test_render_wrap_warning);
+  RUN_TEST(test_round_trip_keeps_every_field);
+  RUN_TEST(test_each_checkbox_name_controls_its_own_setting);
+  RUN_TEST(test_each_value_field_name_shows_its_own_setting);
+  RUN_TEST(test_blank_add_form_submits_the_defaults);
+  RUN_TEST(test_no_field_name_is_used_twice);
+  RUN_TEST(test_hostile_text_is_escaped);
+  RUN_TEST(test_edit_form_has_original_name_and_cancel_add_form_does_not);
+  RUN_TEST(test_labels_state_the_real_limits);
+  RUN_TEST(test_watchdog_warning_only_when_shorter_than_quiet_hours);
   RUN_TEST(test_render_never_echoes_password);
   RUN_TEST(test_parse_empty_form_uses_defaults);
   RUN_TEST(test_parse_all_fields);
