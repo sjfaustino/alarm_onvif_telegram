@@ -29,6 +29,14 @@ void reapStoppedCameraTasks() {
   xSemaphoreGive(g_reapMutex);
 }
 
+bool cameraTaskAlive(size_t index) {
+  xSemaphoreTake(g_reapMutex, portMAX_DELAY);
+  TaskHandle_t handle = index < g_cameraStates.size() ? g_cameraStates[index].taskHandle : nullptr;
+  bool alive = handle && eTaskGetState(handle) != eSuspended;
+  xSemaphoreGive(g_reapMutex);
+  return alive;
+}
+
 // Starts a task for an existing slot (boot, live re-enable, or live add).
 void spawnCameraTask(size_t index) {
   cameraStateInit(g_cameraStates[index]); // must run before any other task can see this camera - see camera.h
@@ -81,6 +89,13 @@ bool stagePendingNewCamera(const CameraConfig& cam) {
   xSemaphoreGive(g_pendingNewCameraMutex);
   delete old;
   return true;
+}
+
+bool isPendingNewCamera(const String& name) {
+  xSemaphoreTake(g_pendingNewCameraMutex, portMAX_DELAY);
+  bool pending = g_pendingNewCamera && g_pendingNewCamera->name.equalsIgnoreCase(name);
+  xSemaphoreGive(g_pendingNewCameraMutex);
+  return pending;
 }
 
 void applyPendingNewCameraIfAny() {

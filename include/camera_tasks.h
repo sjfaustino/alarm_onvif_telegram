@@ -15,6 +15,11 @@ extern std::vector<CameraState> g_cameraStates;
 // its config/state.
 void spawnCameraTask(size_t index);
 
+// Whether g_cameras[index] has a task that hasn't stopped (it may still be
+// starting). A task stops when disabled live, or at once if it has no
+// credentials, while the slot stays enabled.
+bool cameraTaskAlive(size_t index);
+
 // Deletes camera tasks that have stopped (disabled or deleted live, or missing
 // credentials). Call every loop() tick; cheap.
 void reapStoppedCameraTasks();
@@ -23,6 +28,9 @@ void reapStoppedCameraTasks();
 // used up (the caller then says a reboot is needed). One pending slot, last
 // write wins - PsychicHttp handles one save at a time.
 bool stagePendingNewCamera(const CameraConfig& cam);
+
+// Whether a camera of this name is staged and not yet started by loop().
+bool isPendingNewCamera(const String& name);
 
 // Called every loop() tick to apply a staged camera. Only loop()'s task may
 // change the vectors' size: several loop()-task readers (heartbeat, bridge

@@ -9,6 +9,10 @@
 #include <esp_core_dump.h>
 #include <esp_heap_caps.h>
 #include <esp_partition.h>
+#include <algorithm>
+#include <map>
+#include <nvs.h>
+#include <nvs_flash.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
@@ -92,6 +96,59 @@ static void addCoreDump(JsonDocument& doc) {
   if (s) heap_caps_free(s);
 }
 
+// NVS usage per namespace, and the largest values: NVS is small (20 KB), and a
+// full one fails saves. Entries are 32 bytes; a string or blob takes one per 32
+// bytes plus one, roughly.
+static void addNvs(JsonDocument& doc) {
+  JsonObject out = doc["nvs"].to<JsonObject>();
+  nvs_stats_t stats;
+  if (nvs_get_stats(NULL, &stats) == ESP_OK) {
+    out["totalEntries"] = stats.total_entries;
+    out["usedEntries"] = stats.used_entries;
+    out["freeEntries"] = stats.free_entries;
+    out["availableEntries"] = stats.available_entries; // free, minus the page kept for compaction
+  }
+  struct Usage { size_t keys = 0, bytes = 0, entries = 0; };
+  std::map<String, Usage> byNamespace;
+  struct Value { String ns, key; size_t bytes; };
+  std::vector<Value> values;
+  nvs_iterator_t it = nullptr;
+  esp_err_t res = nvs_entry_find(NVS_DEFAULT_PART_NAME, NULL, NVS_TYPE_ANY, &it);
+  while (res == ESP_OK) {
+    nvs_entry_info_t info;
+    nvs_entry_info(it, &info);
+    size_t len = 0;
+    if (info.type == NVS_TYPE_STR || info.type == NVS_TYPE_BLOB) {
+      nvs_handle_t h;
+      if (nvs_open(info.namespace_name, NVS_READONLY, &h) == ESP_OK) {
+        if (info.type == NVS_TYPE_STR) nvs_get_str(h, info.key, NULL, &len);
+        else nvs_get_blob(h, info.key, NULL, &len);
+        nvs_close(h);
+      }
+      values.push_back({info.namespace_name, info.key, len});
+    }
+    Usage& u = byNamespace[info.namespace_name];
+    u.keys++;
+    u.bytes += len;
+    u.entries += 1 + (len + 31) / 32;
+    res = nvs_entry_next(&it);
+  }
+  nvs_release_iterator(it);
+  for (auto& kv : byNamespace) {
+    JsonObject n = out["namespaces"][kv.first].to<JsonObject>();
+    n["keys"] = kv.second.keys;
+    n["bytes"] = kv.second.bytes;
+    n["approxEntries"] = kv.second.entries;
+  }
+  std::sort(values.begin(), values.end(), [](const Value& a, const Value& b) { return a.bytes > b.bytes; });
+  for (size_t i = 0; i < values.size() && i < 10; i++) {
+    JsonObject v = out["largest"].add<JsonObject>();
+    v["namespace"] = values[i].ns;
+    v["key"] = values[i].key;
+    v["bytes"] = values[i].bytes;
+  }
+}
+
 void registerDebugRoutes(PsychicHttpServer& server) {
   server.on("/debug/status", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) -> esp_err_t {
     if (!authorized(request)) return response->send(403, "text/plain", "Forbidden");
@@ -124,6 +181,7 @@ void registerDebugRoutes(PsychicHttpServer& server) {
     addTasks(doc);
     addCameras(doc);
     addCoreDump(doc);
+    addNvs(doc);
 
     String json;
     serializeJson(doc, json);

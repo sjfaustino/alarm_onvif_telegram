@@ -38,6 +38,15 @@ firmware behaves the same except where noted below.
   records failed allocations and saves a heap-low record that survives reboots.
 
 ### Fixed
+- A camera list save that failed part-way (NVS nearly full) left old and new
+  pieces mixed, which corrupted one camera's record so that camera vanished.
+  The list is now saved as one NVS blob, which is replaced only once fully
+  written; a failed save changes nothing and says the storage is full,
+  instead of "a camera with that name already exists".
+- Editing a camera whose task had stopped (no username/password) said
+  "applying live" but changed nothing until a reboot. The save now restarts
+  it, and the table shows such a camera as STOPPED, and a just-added one as
+  STARTING rather than "reboot to apply".
 - With 8 cameras enabled, free internal RAM fell to 6.7 KB during a Telegram
   photo send. Camera task stacks (10 KB each) now live in PSRAM, leaving internal
   RAM for TLS. The Telegram user list is kept in RAM so those tasks never read
