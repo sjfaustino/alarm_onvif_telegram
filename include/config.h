@@ -21,8 +21,8 @@ static const unsigned long PULL_INTERVAL_MS         = 2000UL;
 static const unsigned long SUBSCRIPTION_LIFETIME_MS = 4UL * 60UL * 1000UL;
 static const unsigned long RENEW_MARGIN_MS          = 60UL * 1000UL;
 static const unsigned long RETRY_INTERVAL_MS        = 10000UL;
-// Consecutive unrecognized PullMessages responses before a forced resubscribe
-// (~10s at the default 2s poll).
+// Consecutive PullMessages calls with no usable answer before a forced
+// resubscribe (~10s at the default 2s poll).
 static const uint8_t        PULL_MESSAGES_AMBIGUOUS_LIMIT = 5;
 // Reserved up front for g_cameras/g_cameraStates so adding a camera live never
 // reallocates them; tasks hold raw pointers into both (see camera_tasks.h).
@@ -36,6 +36,12 @@ static const unsigned long CAMERA_POLL_INTERVAL_MAX_MS = 30000UL; // 30s
 // Generous: a big photo burst to many recipients can legitimately take minutes.
 static const unsigned long CAMERA_TASK_STALL_MS = 10UL * 60UL * 1000UL;
 static const unsigned long CAMERA_TASK_CHECK_INTERVAL_MS = 30UL * 1000UL;
+// How often a failed or stale NTP setup is retried (see ntp_policy.h).
+static const unsigned long NTP_RETRY_MS = 5UL * 60UL * 1000UL;
+// Log bytes kept in PSRAM for /debug/log.
+static const size_t DEBUG_LOG_RING_BYTES = 64UL * 1024UL;
+// At most one heap-low record is written to NVS per this interval.
+static const unsigned long HEAP_LOW_SAVE_GAP_MS = 60UL * 1000UL;
 // Retry cadence for a subscribed camera whose snapshot URI isn't resolved yet.
 // Well above the poll rate: a camera with no Media service fails this forever.
 static const unsigned long SNAPSHOT_URI_RETRY_INTERVAL_MS = 5UL * 60UL * 1000UL; // 5 minutes

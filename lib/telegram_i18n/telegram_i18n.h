@@ -22,6 +22,10 @@ enum class MotionDetectionKind { Generic, Person, Vehicle };
 // appends the "(i/N)" burst suffix.
 String trMotionCaption(TelegramLang lang, const String& cameraName, const String& timestamp, bool isPetEvent,
                         MotionDetectionKind kind = MotionDetectionKind::Generic);
+// Appended to a motion caption sent as text because the camera has no snapshot
+// address.
+String trNoPhotoNote(TelegramLang lang);
+
 // Pet alert, text-only delivery mode (CameraConfig::petAlertsTextOnly) - no photo.
 String trPetAlertText(TelegramLang lang, const String& cameraName, const String& timestamp);
 String trTimelapseCaption(TelegramLang lang, const String& cameraName, const String& timestamp);

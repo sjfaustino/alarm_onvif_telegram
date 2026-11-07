@@ -12,6 +12,13 @@ A cleanup release: the code is reorganised and much better tested, and the
 firmware behaves the same except where noted below.
 
 ### Changed
+- `HumanShapeDetect` (person detection on Vatilon cameras) now triggers person
+  alerts like `PeopleDetect`.
+- Snapshot URLs that answer Basic auth with a Digest challenge now get a Digest
+  login.
+- A camera with no snapshot address (Tapo cameras offer none over ONVIF) now
+  sends its motion alert as text, with the same caption plus "(no photo
+  available)". It used to send nothing at all.
 - Boot no longer waits 5 seconds for a serial terminal; alerts start sooner after
   every reboot (`BOOT_SETTLE_MS`, 250 ms, leaves time for SD and the RTC).
 - A camera task that stops making progress for 10 minutes now triggers a
@@ -25,7 +32,41 @@ firmware behaves the same except where noted below.
   are never exported. Previously they claimed no passwords were exported and
   asked for camera passwords to be re-entered after an import.
 
+### Added
+- Remote diagnostics, off unless `DEBUG_TOKEN` is set: `/debug/status`, `/debug/log`
+  and crash dump download, with `scripts/board.py` as a client. The board also
+  records failed allocations and saves a heap-low record that survives reboots.
+
 ### Fixed
+- Snapshots from cameras that require Digest auth (D12, D13, D20) still
+  failed with HTTP 401: the Digest retry never sent its header, because
+  HTTPClient drops an added Authorization header while Basic credentials
+  are set.
+- A camera list save that failed part-way (NVS nearly full) left old and new
+  pieces mixed, which corrupted one camera's record so that camera vanished.
+  The list now lives in a LittleFS file on the unused 1.5 MB data
+  partition, replaced only once the new copy is fully written, and moves
+  there from NVS on the first boot. A failed save changes nothing and says
+  so, instead of "a camera with that name already exists".
+- Editing a camera whose task had stopped (no username/password) said
+  "applying live" but changed nothing until a reboot. The save now restarts
+  it, and the table shows such a camera as STOPPED, and a just-added one as
+  STARTING rather than "reboot to apply".
+- With 8 cameras enabled, free internal RAM fell to 6.7 KB during a Telegram
+  photo send. Camera task stacks (10 KB each) now live in PSRAM, leaving internal
+  RAM for TLS. The Telegram user list is kept in RAM so those tasks never read
+  flash.
+- A camera whose poll connections kept dropping stayed "subscribed" and
+  delivered nothing, polling the dead subscription forever. Five polls in a row
+  with no usable reply now trigger a resubscribe, with backoff.
+- A crash (lwIP assert "Required to lock TCPIP core functionality", caught in a
+  core dump from the live board) when an NTP lookup was pending as the board's
+  IP state changed. SNTP is now only given an already-resolved address, retried
+  every 5 minutes if the lookup fails or syncing stops.
+- A camera that accepted a subscription but refused every poll stayed marked
+  subscribed while delivering no events, if its fault mentioned
+  `PullMessagesResponse` in a header. It now resubscribes with backoff, and raises
+  the "not subscribed" alert if polls keep failing.
 - A huge outage threshold or pulse duration on the Hardware pages wrapped to a
   tiny value instead of being capped.
 

@@ -91,7 +91,7 @@ CameraEventClassification classifyCameraEvent(const String& xml) {
   ev.anyTrue = xml.indexOf("Value=\"true\"") >= 0 || xml.indexOf("Value='true'") >= 0;
   ev.motionAlarm   = xml.indexOf("MotionAlarm") >= 0;
   ev.cellMotion    = xml.indexOf("CellMotionDetector") >= 0;
-  ev.peopleDetect  = xml.indexOf("PeopleDetect") >= 0;
+  ev.peopleDetect  = xml.indexOf("PeopleDetect") >= 0 || xml.indexOf("HumanShapeDetect") >= 0;
   ev.vehicleDetect = xml.indexOf("VehicleDetect") >= 0;
   ev.dogCatDetect  = xml.indexOf("DogCatDetect") >= 0;
   ev.signalLoss    = xml.indexOf("SignalLoss") >= 0;
@@ -106,7 +106,7 @@ bool topicReportedTrue(const String& xml, const String& topicKeyword) {
 bool motionEventFired(const String& xml, const CameraEventClassification& ev) {
   if (ev.motionAlarm && topicReportedTrue(xml, "MotionAlarm")) return true;
   if (ev.cellMotion && topicReportedTrue(xml, "CellMotionDetector")) return true;
-  if (ev.peopleDetect && topicReportedTrue(xml, "PeopleDetect")) return true;
+  if (ev.peopleDetect && personTopicReportedTrue(xml)) return true;
   if (ev.vehicleDetect && topicReportedTrue(xml, "VehicleDetect")) return true;
   // DogCatDetect is gated per camera in parseEvents instead.
   return false;
@@ -127,4 +127,16 @@ String firstTopic(const String& xml) {
   String result = xml.substring(tagEnd + 1, contentEnd);
   result.trim();
   return result;
+}
+
+PullResponseKind classifyPullResponse(const String& xml) {
+  if (xml.indexOf(":PullMessagesResponse") >= 0 || xml.indexOf("<PullMessagesResponse") >= 0) {
+    return PullResponseKind::Success;
+  }
+  if (xml.indexOf("ResourceUnknownFault") >= 0 || responseHasFault(xml)) return PullResponseKind::Fault;
+  return PullResponseKind::Unrecognized;
+}
+
+bool personTopicReportedTrue(const String& xml) {
+  return topicReportedTrue(xml, "PeopleDetect") || topicReportedTrue(xml, "HumanShapeDetect");
 }

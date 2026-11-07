@@ -36,3 +36,4 @@ void registerHardwareRoutes(PsychicHttpServer& server);
 void registerStorageRoutes(PsychicHttpServer& server);
 void registerCapabilitiesRoutes(PsychicHttpServer& server);
 void registerSecurityRoutes(PsychicHttpServer& server);
+void registerDebugRoutes(PsychicHttpServer& server);

@@ -1,6 +1,7 @@
 #pragma once
 #include <Arduino.h>
 #include <freertos/semphr.h> // SemaphoreHandle_t, for CameraState::stateMutex
+#include <freertos/task.h>   // TaskHandle_t, for CameraState::taskHandle
 #include "config.h"
 #include "camera_store.h" // CameraConfig
 #include "snapshot_source.h" // SnapshotSource
@@ -50,8 +51,8 @@ struct CameraState {
   uint8_t retryStreak     = 0;
   unsigned long retryDelayMs = 0;
 
-  // Consecutive unrecognized PullMessages responses; at
-  // PULL_MESSAGES_AMBIGUOUS_LIMIT the task resubscribes.
+  // Consecutive PullMessages calls with no usable answer (unrecognized or no
+  // reply); at PULL_MESSAGES_AMBIGUOUS_LIMIT the task resubscribes.
   uint8_t pullAmbiguousStreak = 0;
   uint32_t lastAlert      = 0;
   bool     hasAlerted     = false; // disambiguates lastAlert==0 from "alerted at boot" (see triggerMotionAlert)
@@ -103,11 +104,15 @@ struct CameraState {
   // Task liveness for checkCameraTasks. taskRunning is true from task start
   // until it exits; lastTaskBeatMs is refreshed at the top of every loop pass.
   bool taskRunning = false;
+  // Set by spawnCameraTask, cleared when the stopped task is deleted. Guarded by
+  // camera_tasks.cpp's reap mutex, not stateMutex.
+  TaskHandle_t taskHandle = nullptr;
   unsigned long lastTaskBeatMs = 0;
   bool taskStallAlerted = false;
 
-  // Refreshed every loop pass while subscribed. Catches a camera that keeps
-  // answering (lastContactMs stays fresh) but can never hold a subscription.
+  // Refreshed by each successful poll. Catches a camera that keeps answering
+  // (lastContactMs stays fresh) but can't deliver events, including one that
+  // accepts subscribes and then refuses every poll.
   unsigned long lastSubscribedMs = 0;
   bool subscriptionLostAlerted = false; // avoid repeat alerts until subscribed again - see checkMotionWatchdog's motionWatchdogTripped for the same pattern
 

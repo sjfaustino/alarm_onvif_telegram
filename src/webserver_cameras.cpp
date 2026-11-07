@@ -52,8 +52,8 @@ static String renderCameraHealthSummary(const std::vector<CameraConfig>& cams,
                                          std::vector<CameraState>* liveStates) {
   if (cams.empty()) return "";
 
-  size_t disabledCount = 0, notRunningCount = 0, onlineCount = 0, notSubscribedCount = 0,
-         offlineCount = 0, mutedCount = 0;
+  size_t disabledCount = 0, notRunningCount = 0, startingCount = 0, stoppedCount = 0, onlineCount = 0,
+         notSubscribedCount = 0, offlineCount = 0, mutedCount = 0;
   unsigned long nowMs = millis();
   bool haveLastMotion = false;
   unsigned long lastMotionAgoMs = 0;
@@ -64,7 +64,12 @@ static String renderCameraHealthSummary(const std::vector<CameraConfig>& cams,
 
     int idx = findLiveCameraIndex(liveCameras, c.name);
     bool isLive = idx >= 0 && liveStates && idx < (int)liveStates->size();
-    if (!isLive) { notRunningCount++; continue; } // enabled, but no reboot yet to spawn its task
+    if (!isLive) {
+      if (isPendingNewCamera(c.name)) startingCount++; // just added; loop() starts it shortly
+      else notRunningCount++;                          // added while capacity was full
+      continue;
+    }
+    if (!cameraTaskAlive(idx)) { stoppedCount++; continue; }
 
     CameraState& st = (*liveStates)[idx];
     bool offline, subscribed, alertsEnabled, hasAlerted;
@@ -101,6 +106,12 @@ static String renderCameraHealthSummary(const std::vector<CameraConfig>& cams,
   }
   if (notSubscribedCount > 0) {
     html += "<span class=\"badge badge-warn\">" + String((unsigned)notSubscribedCount) + " not subscribed</span> ";
+  }
+  if (startingCount > 0) {
+    html += "<span class=\"badge badge-warn\">" + String((unsigned)startingCount) + " starting</span> ";
+  }
+  if (stoppedCount > 0) {
+    html += "<span class=\"badge badge-warn\">" + String((unsigned)stoppedCount) + " stopped</span> ";
   }
   if (notRunningCount > 0) {
     html += "<span class=\"badge badge-warn\">" + String((unsigned)notRunningCount) +
@@ -183,7 +194,13 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
       }
       // OFFLINE (not answering), NOT SUBSCRIBED (answering but no
       // subscription) and ONLINE are different problems, hence three states.
-      if (offline) {
+      // STOPPED: the task exited, which only a save (or reboot) restarts.
+      if (!cameraTaskAlive(idx)) {
+        liveStatus = "<span class=\"badge badge-warn\">STOPPED</span> - " +
+                     String(c.user.length() == 0 || c.pass.length() == 0
+                                ? "no username/password; add them and save to restart"
+                                : "save this camera to restart it");
+      } else if (offline) {
         liveStatus = "<span class=\"badge badge-offline\">OFFLINE</span>";
       } else if (subscribed) {
         liveStatus = "<span class=\"badge badge-on\">ONLINE</span>";
@@ -257,6 +274,8 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
       }
     } else if (!c.enabled) {
       liveStatus = "<span class=\"badge badge-off\">DISABLED</span>";
+    } else if (isPendingNewCamera(c.name)) {
+      liveStatus = "<span class=\"badge badge-warn\">STARTING</span> - refresh in a few seconds";
     } else {
       liveStatus = "<span class=\"badge badge-warn\">NOT RUNNING</span> - reboot to apply";
     }
@@ -486,8 +505,14 @@ bool saveCameraSubmission(CameraConfig cam, const String& originalName, String& 
   }
 
   if (originalName.length() == 0) {
-    if (!addCamera(cam)) {
+    CameraSaveResult added = addCamera(cam);
+    if (added == CameraSaveResult::NameTaken) {
       banner = "A camera named \"" + htmlEscape(cam.name) + "\" already exists - camera not added.";
+      return false;
+    }
+    if (added != CameraSaveResult::Saved) {
+      banner = "Could not save \"" + htmlEscape(cam.name) + "\" - saving to storage failed. Nothing "
+               "was changed; the Serial log says why.";
       return false;
     }
     // New camera: staged for loop() to add live, unless MAX_CAMERAS is used up
@@ -515,13 +540,22 @@ bool saveCameraSubmission(CameraConfig cam, const String& originalName, String& 
 
   // By original name (a rename keeps the slot). A live task exists exactly
   // when the slot's in-memory enabled is true.
+  // By the task, not the slot's enabled flag: a task with no credentials exits
+  // with the slot still enabled, and this save is what restarts it.
   int idx = findLiveCameraIndex(liveCameras, originalName);
-  bool wasRunning = (idx >= 0) && liveStates && idx < (int)liveStates->size() && (*liveCameras)[idx].enabled;
+  bool wasRunning = (idx >= 0) && liveStates && idx < (int)liveStates->size() && cameraTaskAlive(idx);
 
-  if (!updateCamera(originalName, cam)) {
+  CameraSaveResult updated = updateCamera(originalName, cam);
+  if (updated != CameraSaveResult::Saved) {
     xSemaphoreGive(g_saveMutex);
-    banner = "Could not save \"" + htmlEscape(cam.name) +
-             "\" - a different camera already uses that name.";
+    if (updated == CameraSaveResult::NameTaken) {
+      banner = "Could not save \"" + htmlEscape(cam.name) + "\" - a different camera already uses that name.";
+    } else if (updated == CameraSaveResult::NotFound) {
+      banner = "Could not save \"" + htmlEscape(originalName) + "\" - it no longer exists.";
+    } else {
+      banner = "Could not save \"" + htmlEscape(cam.name) + "\" - saving to storage failed. Nothing "
+               "was changed; the Serial log says why.";
+    }
     return false;
   }
 
@@ -535,7 +569,7 @@ bool saveCameraSubmission(CameraConfig cam, const String& originalName, String& 
       requestLiveConfigReload((*liveStates)[idx], cam);
       applyNote = "\"" + cam.name + "\" updated - applying live, reconnecting now (no reboot needed).";
     } else if (!wasRunning && cam.enabled) {
-      // Newly enabled: stage the config via pendingConfig (other tasks read
+      // Newly enabled, or its task had stopped: stage the config via pendingConfig (other tasks read
       // enabled/name unlocked, so don't write the slot directly) and create
       // the lock first.
       cameraStateInit((*liveStates)[idx]);

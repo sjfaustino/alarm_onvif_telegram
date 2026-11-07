@@ -206,6 +206,11 @@ void test_trHeapLowWarning(void) {
   assertDiffersAndContains(en, pt, "12345");
 }
 
+void test_trNoPhotoNote_differs_by_language(void) {
+  TEST_ASSERT_EQUAL_STRING("(no photo available)", trNoPhotoNote(TelegramLang::English).c_str());
+  TEST_ASSERT_FALSE(trNoPhotoNote(TelegramLang::English) == trNoPhotoNote(TelegramLang::Portuguese));
+}
+
 void test_trCameraTaskStalled_names_camera_and_minutes(void) {
   String en = trCameraTaskStalled(TelegramLang::English, "D01", 12);
   String pt = trCameraTaskStalled(TelegramLang::Portuguese, "D01", 12);
@@ -625,6 +630,7 @@ int main(int argc, char** argv) {
   RUN_TEST(test_trHeapLowWarning);
   RUN_TEST(test_trCameraTaskSpawnFailure);
   RUN_TEST(test_trCameraTaskStalled_names_camera_and_minutes);
+  RUN_TEST(test_trNoPhotoNote_differs_by_language);
   RUN_TEST(test_trCameraTaskRecovered_differs_by_language);
   RUN_TEST(test_trInternetOutageAlert_and_trBridgeOutageAlert);
   RUN_TEST(test_trPowerStatusLine_on_vs_off);

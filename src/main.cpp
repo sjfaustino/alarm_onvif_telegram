@@ -9,6 +9,7 @@
 #include "camera_store.h"
 #include "network_store.h"
 #include "telegram.h"
+#include "telegram_users.h"
 #include "webserver.h"
 #include "format_utils.h"
 #include "event_log_store.h"
@@ -24,6 +25,7 @@
 #include "time_sync.h"
 #include "boot_checks.h"
 #include "health_monitor.h"
+#include "diagnostics.h"
 
 static unsigned long lastHeartbeatMs = 0;
 static unsigned long lastCommandPollMs = 0;
@@ -148,6 +150,7 @@ static void startMonitoring() {
 void setup() {
   Serial.begin(115200);
   delay(BOOT_SETTLE_MS);
+  initDiagnostics();
   Serial.println("\n========================================");
   Serial.println("MULTI-CAMERA ONVIF MOTION MONITOR");
   Serial.println("========================================");
@@ -201,6 +204,10 @@ void setup() {
   // Self-gating one-time recovery; safe to leave in.
   restoreMissingCamerasFromSeed();
 
+  // Loads the Telegram users into RAM now, while only this task runs: camera
+  // tasks (PSRAM stacks) must never be the first to read them from NVS.
+  loadTelegramUsers();
+
   // Reserve MAX_CAMERAS before any task exists: tasks hold raw pointers into
   // these vectors, and the headroom lets a live add push_back without
   // reallocating.
@@ -240,6 +247,7 @@ void loop() {
 
   // Only this task may grow g_cameras (see camera_tasks.h).
   applyPendingNewCameraIfAny();
+  reapStoppedCameraTasks();
 
   // No WiFi gate: a stall is worth logging even if the alert has to queue.
   if (g_monitoringStarted && millis() - lastCameraTaskCheckMs >= CAMERA_TASK_CHECK_INTERVAL_MS) {
@@ -258,6 +266,12 @@ void loop() {
       if (!g_monitoringStarted) startMonitoring();
       else setupTime();
     }
+  }
+
+  // Name lookup can block for seconds when the internet is down.
+  if (g_monitoringStarted && WiFi.status() == WL_CONNECTED) {
+    maintainTimeSync();
+    esp_task_wdt_reset();
   }
 
   // Each send below can wait up to 45s for the Telegram mutex, and the 6h/1h/

@@ -133,7 +133,7 @@ bool cameraGetEventServiceCapabilities(const CameraConfig& cfg, CameraState& st)
 // The topic keywords acted on anywhere; one list so advertised-topic scans and
 // live-event matching can't drift.
 static const char* const kKnownEventTopics[] = {
-    "PeopleDetect", "VehicleDetect", "DogCatDetect", "MotionAlarm", "CellMotionDetector",
+    "PeopleDetect", "HumanShapeDetect", "VehicleDetect", "DogCatDetect", "MotionAlarm", "CellMotionDetector",
     "TamperDetector", "SignalLoss",
 };
 
@@ -423,7 +423,7 @@ static void parseEvents(const CameraConfig& cfg, CameraState& st, const String& 
     // Checked separately: one batch can report person and vehicle together,
     // and each has its own opt-out. Collapsing to one kind first once let a
     // muted person alert swallow a wanted vehicle alert.
-    bool personDetected = ev.peopleDetect && topicReportedTrue(xml, "PeopleDetect");
+    bool personDetected = ev.peopleDetect && personTopicReportedTrue(xml);
     bool vehicleDetected = ev.vehicleDetect && topicReportedTrue(xml, "VehicleDetect");
     bool plainMotionDetected = (ev.motionAlarm && topicReportedTrue(xml, "MotionAlarm")) ||
                                (ev.cellMotion && topicReportedTrue(xml, "CellMotionDetector"));
@@ -460,6 +460,16 @@ static void parseEvents(const CameraConfig& cfg, CameraState& st, const String& 
   }
 }
 
+// Resubscribe backoff cap, further limited to half the camera's offline
+// threshold. A fault still counts as contact, but only once per retry: with
+// both at 5 minutes, backed-off cameras false-alarmed as OFFLINE.
+static const unsigned long RETRY_BACKOFF_MAX_MS = 300000UL; // 5 minutes between retries
+
+static unsigned long nextRetryDelayMs(const CameraConfig& cfg, unsigned long previousDelayMs) {
+  unsigned long cap = detectorSafeBackoffCapMs(RETRY_BACKOFF_MAX_MS, cfg.offlineThresholdMs, RETRY_INTERVAL_MS);
+  return nextBackoffDelayMs(previousDelayMs, RETRY_INTERVAL_MS, cap);
+}
+
 bool cameraPullMessages(const CameraConfig& cfg, CameraState& st) {
   if (!st.subscriptionActive || st.pullPointUrl.length() == 0) return false; // same-task read, no lock needed
 
@@ -469,32 +479,44 @@ bool cameraPullMessages(const CameraConfig& cfg, CameraState& st) {
                 "<tev:MessageLimit>20</tev:MessageLimit></tev:PullMessages>";
   String response = cameraSoapCall(cfg, st, st.pullPointUrl, st.pullPointUrl, action, body);
 
-  if (response.length() == 0) return false;
-
-  if (response.indexOf("PullMessagesResponse") >= 0) {
+  PullResponseKind kind = classifyPullResponse(response);
+  if (kind == PullResponseKind::Success) {
+    // Only a good poll proves the subscription works: a camera can accept a
+    // subscribe and then refuse every poll, so neither signal is set on subscribe.
+    st.lastSubscribedMs = millis();
+    st.retryStreak = 0;
+    st.retryDelayMs = 0;
     st.pullAmbiguousStreak = 0;
     parseEvents(cfg, st, response);
     return true;
   }
 
-  if (response.indexOf("ResourceUnknownFault") >= 0 || responseHasFault(response)) {
-    Serial.printf("[%s] PullPoint gone, will resubscribe.\n", cfg.name.c_str());
+  if (kind == PullResponseKind::Fault) {
     { CameraStateLock lock(st); st.subscriptionActive = false; }
     st.pullPointUrl = "";
     st.pullAmbiguousStreak = 0;
+    st.retryDelayMs = nextRetryDelayMs(cfg, st.retryDelayMs);
+    // The delay counts from the previous attempt, which may already be long past.
+    unsigned long sinceRetry = millis() - st.lastRetry;
+    unsigned long waitMs = sinceRetry >= st.retryDelayMs ? 0 : st.retryDelayMs - sinceRetry;
+    Serial.printf("[%s] PullMessages refused - resubscribing in %lus.\n", cfg.name.c_str(), waitMs / 1000UL);
     return false;
   }
 
-  // Unrecognized response (neither success nor fault). Resubscribe after
-  // PULL_MESSAGES_AMBIGUOUS_LIMIT in a row instead of polling a dead pull
-  // point forever.
+  // No usable answer: unrecognized, or no reply at all (a Tapo TC65 accepted
+  // subscriptions and then dropped every poll's connection). Resubscribe after
+  // PULL_MESSAGES_AMBIGUOUS_LIMIT in a row rather than polling a dead pull point
+  // forever, with backoff: abandoned subscriptions linger on the camera until they
+  // expire, and some cameras only have a few slots.
   if (++st.pullAmbiguousStreak >= PULL_MESSAGES_AMBIGUOUS_LIMIT) {
-    Serial.printf("[%s] PullMessages returned an unrecognized response %u time(s) in a row - "
-                  "treating the subscription as dead, will resubscribe.\n",
-                  cfg.name.c_str(), (unsigned)st.pullAmbiguousStreak);
     { CameraStateLock lock(st); st.subscriptionActive = false; }
     st.pullPointUrl = "";
     st.pullAmbiguousStreak = 0;
+    st.retryDelayMs = nextRetryDelayMs(cfg, st.retryDelayMs);
+    unsigned long sinceRetry = millis() - st.lastRetry;
+    unsigned long waitMs = sinceRetry >= st.retryDelayMs ? 0 : st.retryDelayMs - sinceRetry;
+    Serial.printf("[%s] No usable PullMessages response %u time(s) in a row - resubscribing in %lus.\n",
+                  cfg.name.c_str(), (unsigned)PULL_MESSAGES_AMBIGUOUS_LIMIT, waitMs / 1000UL);
   }
   return false;
 }
@@ -534,11 +556,6 @@ bool cameraSetupSequence(const CameraConfig& cfg, CameraState& st) {
   return true;
 }
 
-// Resubscribe backoff cap, further limited to half the camera's offline
-// threshold. A fault still counts as contact, but only once per retry: with
-// both at 5 minutes, backed-off cameras false-alarmed as OFFLINE.
-static const unsigned long RETRY_BACKOFF_MAX_MS = 300000UL; // 5 minutes between retries
-
 // ============================================================
 // Per-camera task, pinned to core 1 (away from WiFi and loopTask on core 0).
 // Never returns except on a stop request or missing credentials.
@@ -564,7 +581,7 @@ void cameraTaskFn(void* pvParameters) {
     String cameraName = cfg.name;
     sendTelegramMessage([cameraName](TelegramLang lang) { return trMissingCredentials(lang, cameraName, false); });
     { CameraStateLock lock(st); st.taskRunning = false; }
-    vTaskDelete(nullptr);
+    vTaskSuspend(nullptr); // deleted by reapStoppedCameraTasks (camera_tasks.h); never resumes
     return;
   }
 
@@ -597,7 +614,7 @@ void cameraTaskFn(void* pvParameters) {
       Serial.printf("[%s] Stopped via dashboard (disabled/deleted) - task exiting, no reboot needed.\n",
                     cfg.name.c_str());
       logEvent(cfg.name + ": monitoring stopped live (disabled/deleted via dashboard)");
-      vTaskDelete(nullptr);
+      vTaskSuspend(nullptr); // deleted by reapStoppedCameraTasks (camera_tasks.h); never resumes
       return;
     }
 
@@ -634,10 +651,6 @@ void cameraTaskFn(void* pvParameters) {
       continue;
     }
 
-    // Refreshed every pass while subscribed, even when polling is skipped
-    // below, so subscription health doesn't go stale while snapshots are busy.
-    if (st.subscriptionActive) st.lastSubscribedMs = millis();
-
     // A snapshot GET is in flight to this camera; skip SOAP this pass rather
     // than open a second connection. The health checks below still run.
     bool snapshotBusy;
@@ -660,8 +673,6 @@ void cameraTaskFn(void* pvParameters) {
         // Both paths set subscriptionActive on success.
         if (st.subscriptionActive) {
           Serial.printf("[%s] Subscription recovered.\n", cfg.name.c_str());
-          st.retryStreak = 0;
-          st.retryDelayMs = 0;
           // Read by the dashboard, so locked.
           {
             CameraStateLock lock(st);
@@ -671,10 +682,7 @@ void cameraTaskFn(void* pvParameters) {
             if (st.reconnectHistoryCount < EVENT_HISTORY_RING_SIZE) st.reconnectHistoryCount++;
           }
         } else {
-          // See RETRY_BACKOFF_MAX_MS.
-          unsigned long retryBackoffCap =
-              detectorSafeBackoffCapMs(RETRY_BACKOFF_MAX_MS, cfg.offlineThresholdMs, RETRY_INTERVAL_MS);
-          st.retryDelayMs = nextBackoffDelayMs(st.retryDelayMs, RETRY_INTERVAL_MS, retryBackoffCap);
+          st.retryDelayMs = nextRetryDelayMs(cfg, st.retryDelayMs);
           st.retryStreak++;
           Serial.printf("[%s] Still not subscribed after %u consecutive attempt(s) - next retry in %lus.\n",
                         cfg.name.c_str(), (unsigned)st.retryStreak, st.retryDelayMs / 1000UL);

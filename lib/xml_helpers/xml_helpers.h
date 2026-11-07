@@ -15,4 +15,8 @@ String findAttributeValue(const String& xml, const String& elementName, const St
 // only at a name boundary ("id" doesn't match inside "profileid").
 String findAttributeInTag(const String& tag, const String& attributeName);
 
+// One line for the log, e.g. "ter:NotAuthorized: Authority failure", from a SOAP
+// 1.2 or 1.1 fault. Falls back to the start of the response.
+String soapFaultSummary(const String& response);
+
 bool responseHasFault(const String& response);

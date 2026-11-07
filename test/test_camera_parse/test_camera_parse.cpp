@@ -378,6 +378,60 @@ void test_firstTopic_returns_empty_when_no_topic_element(void) {
   TEST_ASSERT_EQUAL_STRING("", firstTopic("<wsnt:NotificationMessage></wsnt:NotificationMessage>").c_str());
 }
 
+// Seen from a live camera: a refusal whose Action header names the success
+// response. Reading it as success left the camera "subscribed" but deaf.
+void test_classifyPullResponse_fault_with_response_name_in_action_header(void) {
+  const char* xml = "<SOAP-ENV:Envelope><SOAP-ENV:Header><wsa5:Action SOAP-ENV:mustUnderstand=\"1\">"
+    "http://www.onvif.org/ver10/events/wsdl/PullPointSubscription/PullMessagesResponse</wsa5:Action>"
+    "</SOAP-ENV:Header><SOAP-ENV:Body><SOAP-ENV:Fault><SOAP-ENV:Code><SOAP-ENV:Value>SOAP-ENV:Sender"
+    "</SOAP-ENV:Value><SOAP-ENV:Subcode><SOAP-ENV:Value>ter:NotAuthorized</SOAP-ENV:Value></SOAP-ENV:Subcode>"
+    "</SOAP-ENV:Code><SOAP-ENV:Reason><SOAP-ENV:Text xml:lang=\"en\">Authority failure</SOAP-ENV:Text>"
+    "</SOAP-ENV:Reason></SOAP-ENV:Fault></SOAP-ENV:Body></SOAP-ENV:Envelope>";
+  TEST_ASSERT_TRUE(classifyPullResponse(xml) == PullResponseKind::Fault);
+}
+
+void test_classifyPullResponse_real_responses_are_success(void) {
+  TEST_ASSERT_TRUE(classifyPullResponse("<s:Body><tev:PullMessagesResponse><tev:CurrentTime/>"
+                                        "</tev:PullMessagesResponse></s:Body>") == PullResponseKind::Success);
+  TEST_ASSERT_TRUE(classifyPullResponse("<Body><PullMessagesResponse xmlns=\"x\"/></Body>") ==
+                   PullResponseKind::Success);
+}
+
+// An event topic that merely contains ":Fault" mustn't drop a working subscription.
+void test_classifyPullResponse_success_with_fault_like_topic_stays_success(void) {
+  TEST_ASSERT_TRUE(classifyPullResponse("<tev:PullMessagesResponse><wsnt:Topic>tns1:FaultDetected</wsnt:Topic>"
+                                        "</tev:PullMessagesResponse>") == PullResponseKind::Success);
+}
+
+void test_classifyPullResponse_resource_unknown_is_fault(void) {
+  TEST_ASSERT_TRUE(classifyPullResponse("<a>ResourceUnknownFault</a>") == PullResponseKind::Fault);
+}
+
+void test_classifyPullResponse_other_text_is_unrecognized(void) {
+  TEST_ASSERT_TRUE(classifyPullResponse("<html>busy</html>") == PullResponseKind::Unrecognized);
+}
+
+// No reply at all (a dropped connection) counts toward resubscribing too.
+void test_classifyPullResponse_empty_is_unrecognized(void) {
+  TEST_ASSERT_TRUE(classifyPullResponse("") == PullResponseKind::Unrecognized);
+}
+
+// Vatilon cameras report person detection as tns1:UserAlarm/HumanShapeDetect.
+void test_human_shape_detect_counts_as_person(void) {
+  const char* xml = "<wsnt:NotificationMessage>" "<tt:Message><wsnt:Topic>tns1:UserAlarm/HumanShapeDetect</wsnt:Topic><tt:Data><tt:SimpleItem Name=\"State\" Value=\"true\"/></tt:Data></tt:Message>" "</wsnt:NotificationMessage>";
+  CameraEventClassification ev = classifyCameraEvent(xml);
+  TEST_ASSERT_TRUE(ev.peopleDetect);
+  TEST_ASSERT_TRUE(personTopicReportedTrue(xml));
+  TEST_ASSERT_TRUE(motionEventFired(xml, ev));
+}
+
+void test_human_shape_detect_false_is_not_a_person(void) {
+  const char* xml = "<wsnt:NotificationMessage><tt:Message><wsnt:Topic>tns1:UserAlarm/HumanShapeDetect</wsnt:Topic>"
+                    "<tt:Data><tt:SimpleItem Name=\"State\" Value=\"false\"/></tt:Data></tt:Message></wsnt:NotificationMessage>";
+  TEST_ASSERT_FALSE(personTopicReportedTrue(xml));
+  TEST_ASSERT_FALSE(motionEventFired(xml, classifyCameraEvent(xml)));
+}
+
 int main(int argc, char** argv) {
   UNITY_BEGIN();
   RUN_TEST(test_parseProfiles_finds_token_and_name);
@@ -418,5 +472,13 @@ int main(int argc, char** argv) {
   RUN_TEST(test_firstTopic_extracts_content_with_dialect_attribute);
   RUN_TEST(test_firstTopic_extracts_content_without_attributes);
   RUN_TEST(test_firstTopic_returns_empty_when_no_topic_element);
+  RUN_TEST(test_classifyPullResponse_fault_with_response_name_in_action_header);
+  RUN_TEST(test_classifyPullResponse_real_responses_are_success);
+  RUN_TEST(test_classifyPullResponse_success_with_fault_like_topic_stays_success);
+  RUN_TEST(test_classifyPullResponse_resource_unknown_is_fault);
+  RUN_TEST(test_classifyPullResponse_other_text_is_unrecognized);
+  RUN_TEST(test_classifyPullResponse_empty_is_unrecognized);
+  RUN_TEST(test_human_shape_detect_counts_as_person);
+  RUN_TEST(test_human_shape_detect_false_is_not_a_person);
   return UNITY_END();
 }

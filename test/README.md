@@ -30,6 +30,10 @@ this way:
 | `hardware_form`              | `webserver_hardware.cpp`               | Hardware page parsing and pin-clash validation, including the overflow-safe duration clamp |
 | `camera_clamps`              | `telegram_alerts.cpp` + `camera.cpp`   | Limits re-applied when stored camera settings are used |
 | `task_stall`                 | `health_monitor.cpp`                   | Alert-once/re-arm decision for stuck camera tasks |
+| `ntp_policy`                 | `time_sync.cpp`                        | When to re-resolve the NTP server and restart SNTP |
+| `http_digest`                | `snapshot_fetch.cpp`                   | MD5 and HTTP Digest answers, for snapshot URLs that refuse Basic auth |
+| `log_ring`                   | `log_tee.cpp`                          | The `/debug/log` byte ring: polling by position, eviction, wrap |
+| `debug_token`                | `webserver_debug.cpp`                  | Token check guarding the `/debug` routes |
 | `telegram_user_serialize`    | `telegram_users.cpp`                   | `TelegramUser` <-> NVS blob (de)serialization (also schema-versioned), and `telegramUserWantsCamera` |
 | `telegram_parse`             | `telegram_commands.cpp`                | `parseTelegramUpdates` (ArduinoJson, replacing hand-rolled brace-counting) and the `/on`/`/off`/`/snap` camera-name prefix matching |
 | `backoff`                    | `main.cpp` + `camera.cpp` (duplicated) | The doubling-with-a-cap retry delay formula, previously hand-written twice and prone to drifting apart |

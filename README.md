@@ -592,6 +592,11 @@ lib/                 # pure-logic modules with no hardware dependencies, split o
   hardware_form/          # Hardware page forms: parsing, pin-clash validation
   camera_clamps/          # limits re-applied when stored camera settings are used
   task_stall/             # alert-once logic for stuck camera tasks
+  ntp_policy/             # when to re-resolve the NTP server and restart SNTP
+  http_digest/            # HTTP Digest auth for snapshot URLs (MD5, tested against the RFCs)
+  log_ring/               # the /debug/log byte ring
+  debug_token/            # /debug route token check
+  html_form_reader/       # test helper: submits rendered form HTML like a browser
   telegram_user_serialize/ # TelegramUser <-> NVS blob (de)serialization, schema-versioned
   telegram_parse/         # Telegram JSON escaping, /on,/off,/snap camera-name matching, and
                            # /on,/off timer-token parsing (minutes or HH:MM)
@@ -639,6 +644,29 @@ The firmware version comes from git tags (`git describe`), so releasing is:
 
 The board then reports exactly `1.1.0`. Builds between tags report e.g.
 `1.1.0-3-gabc1234`, and `-dirty` means uncommitted changes were built.
+
+## Remote debugging
+
+The board can be diagnosed with no cable attached. Add a long random
+`#define DEBUG_TOKEN "..."` to `include/secrets.h` to enable the `/debug` routes;
+without it they return 403. Builds without your `secrets.h`, including CI's, have
+them off. Logs and crash dumps can contain passwords, which is why these routes
+have their own token rather than relying on the optional dashboard login.
+
+`scripts/board.py` wraps them (`BOARD_HOST` overrides the address):
+
+| Command | What it does |
+|---|---|
+| `status` | Version, reset reason, heap, failed allocations, per-task stack use, camera state, crash summary, and the saved heap-low record |
+| `log [--follow]` | The last 64 KB of `Serial` output, each line stamped with uptime |
+| `coredump [FILE]` | Downloads the stored crash dump |
+| `flash FILE --yes` | OTA upload, which **reboots the board** |
+
+`flash` keeps a copy of the build's ELF in `.pio/flashed/`, since a crash dump can
+only be decoded with the ELF of the build that crashed.
+
+Rollback only catches firmware that fails to boot. A build that boots but can't
+join the network stays installed until someone reaches the board.
 
 ## Testing
 

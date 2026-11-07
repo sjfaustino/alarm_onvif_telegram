@@ -14,9 +14,79 @@
 #include "http_date_parse.h" // parseHttpDate - seedSystemClockFromRouterHttpDate
 #include "telegram.h"
 #include "telegram_i18n.h"
+#include "ntp_policy.h"
 
 // Alert once per NTP outage; re-armed by the next successful sync.
 static bool g_ntpSyncFailedAlerted = false;
+
+// SNTP is only ever given an IP address. Given a hostname it does its own DNS
+// lookup, and if that is still pending when Arduino's hostByName() clears the
+// DNS cache (it does, without lwIP's lock, whenever the board's IP state
+// changes), SNTP's callback runs on the wrong thread and lwIP asserts. A core
+// dump from the live board showed exactly that crash.
+//
+// SNTP keeps a pointer to the server string, so addresses alternate between two
+// buffers: the one in use stays valid until SNTP has switched to the other.
+static char g_ntpAddress[2][48];
+static int g_ntpAddressSlot = 0;
+static bool g_sntpStarted = false;
+static unsigned long g_lastSntpAttemptMs = 0;
+// Written by SNTP's callback on the lwIP thread.
+static volatile bool g_syncedSinceStart = false;
+static volatile unsigned long g_lastNtpSyncMs = 0;
+
+static void onTimeSynced(struct timeval*) {
+  g_lastNtpSyncMs = millis();
+  g_syncedSinceStart = true;
+}
+
+// Clamped at use: imported configs bypass the form, and an interval of 0 means
+// resync continuously.
+static unsigned long safeSyncIntervalMs() {
+  unsigned long ms = g_wifiCredentials.ntpSyncIntervalMs;
+  if (ms == 0) ms = 3600000UL; // 1h - same fallback network_store.cpp's own load-time default uses
+  unsigned long maxMs = NTP_SYNC_MAX_MINUTES * 60000UL;
+  return ms > maxMs ? maxMs : ms;
+}
+
+// Resolves the configured server and (re)starts SNTP with its address. False if
+// the name doesn't resolve (e.g. no internet); SNTP is then left as it was.
+static bool startSntp() {
+  g_lastSntpAttemptMs = millis();
+  IPAddress ip;
+  if (WiFi.hostByName(g_wifiCredentials.ntpServer.c_str(), ip) != 1) {
+    Serial.printf("[time] Can't resolve NTP server %s - will retry.\n", g_wifiCredentials.ntpServer.c_str());
+    return false;
+  }
+  g_ntpAddressSlot ^= 1;
+  strlcpy(g_ntpAddress[g_ntpAddressSlot], ip.toString().c_str(), sizeof(g_ntpAddress[0]));
+  g_syncedSinceStart = false;
+  sntp_set_time_sync_notification_cb(onTimeSynced);
+  configTime(0, 0, g_ntpAddress[g_ntpAddressSlot]);
+  esp_sntp_set_sync_interval(safeSyncIntervalMs()); // must follow configTime()
+
+  // configTime() resets TZ to UTC. The system clock stays UTC; TZ only affects
+  // local-time display.
+  if (g_wifiCredentials.posixTz.length() > 0) {
+    setenv("TZ", g_wifiCredentials.posixTz.c_str(), 1);
+    tzset();
+  }
+  g_sntpStarted = true;
+  Serial.printf("[time] SNTP using %s (%s).\n", g_ntpAddress[g_ntpAddressSlot], g_wifiCredentials.ntpServer.c_str());
+  return true;
+}
+
+void maintainTimeSync() {
+  if (g_syncedSinceStart && g_ntpSyncFailedAlerted) {
+    g_ntpSyncFailedAlerted = false; // re-arm - see its own comment
+    logEvent("NTP time synchronized again");
+  }
+  unsigned long now = millis();
+  if (shouldRestartSntp(g_sntpStarted, g_syncedSinceStart, now - g_lastNtpSyncMs, now - g_lastSntpAttemptMs,
+                        safeSyncIntervalMs(), NTP_RETRY_MS)) {
+    startSntp();
+  }
+}
 
 // Before WiFi. The RTC stores UTC, and timeGmUtc replaces the missing timegm()
 // (mktime would apply a TZ that isn't set yet anyway).
@@ -93,24 +163,13 @@ static bool seedSystemClockFromRouterHttpDate() {
 
 void setupTime() {
   Serial.printf("Synchronizing UTC time from %s...\n", g_wifiCredentials.ntpServer.c_str());
-  configTime(0, 0, g_wifiCredentials.ntpServer.c_str());
-  // Must follow configTime(). Clamped at use: imported configs bypass the
-  // form, and an interval of 0 means resync continuously.
-  unsigned long safeSyncIntervalMs = g_wifiCredentials.ntpSyncIntervalMs;
-  if (safeSyncIntervalMs == 0) safeSyncIntervalMs = 3600000UL; // 1h - same fallback network_store.cpp's own load-time default uses
-  unsigned long maxSyncIntervalMs = NTP_SYNC_MAX_MINUTES * 60000UL;
-  if (safeSyncIntervalMs > maxSyncIntervalMs) safeSyncIntervalMs = maxSyncIntervalMs;
-  esp_sntp_set_sync_interval(safeSyncIntervalMs);
-
-  // The system clock stays UTC; TZ only affects local-time display.
+  bool started = startSntp();
   if (g_wifiCredentials.posixTz.length() > 0) {
-    setenv("TZ", g_wifiCredentials.posixTz.c_str(), 1);
-    tzset();
     Serial.printf("Local timezone for alert captions: %s\n", g_wifiCredentials.posixTz.c_str());
   }
 
   struct tm timeinfo;
-  for (int i = 0; i < 20; i++) {
+  for (int i = 0; started && i < 20; i++) {
     if (getLocalTime(&timeinfo, 1000)) {
       char buf[25];
       strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &timeinfo);

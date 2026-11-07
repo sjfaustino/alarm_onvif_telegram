@@ -93,6 +93,12 @@ void test_full_sequence(void) {
   TEST_ASSERT_FALSE(r5.shouldAlert); // already alerted this boot
 }
 
+void test_shouldPersistHeapLow_needs_a_pending_record_and_the_gap(void) {
+  TEST_ASSERT_FALSE(shouldPersistHeapLow(false, 100000, 60000));
+  TEST_ASSERT_FALSE(shouldPersistHeapLow(true, 59999, 60000));
+  TEST_ASSERT_TRUE(shouldPersistHeapLow(true, 60000, 60000));
+}
+
 int main(int argc, char** argv) {
   UNITY_BEGIN();
   RUN_TEST(test_first_call_baselines_and_logs_but_is_not_a_new_low);
@@ -103,5 +109,6 @@ int main(int argc, char** argv) {
   RUN_TEST(test_new_low_crossing_threshold_alerts_once);
   RUN_TEST(test_further_drop_after_already_alerted_logs_but_does_not_re_alert);
   RUN_TEST(test_full_sequence);
+  RUN_TEST(test_shouldPersistHeapLow_needs_a_pending_record_and_the_gap);
   return UNITY_END();
 }

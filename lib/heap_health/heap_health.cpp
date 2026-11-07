@@ -32,3 +32,7 @@ HeapHealthResult evaluateHeapHealth(uint32_t minFreeHeapNow, bool hasBaseline, u
   r.shouldAlert = !alreadyAlerted && minFreeHeapNow < warnBytes;
   return r;
 }
+
+bool shouldPersistHeapLow(bool pending, unsigned long msSinceLastSave, unsigned long minGapMs) {
+  return pending && msSinceLastSave >= minGapMs;
+}

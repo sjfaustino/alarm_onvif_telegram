@@ -199,6 +199,10 @@ String trHeapLowWarning(TelegramLang lang, uint32_t baselineBytes, uint32_t maxA
          "happening (a motion burst, several cameras reconnecting, ...).";
 }
 
+String trNoPhotoNote(TelegramLang lang) {
+  return lang == TelegramLang::Portuguese ? "(sem foto dispon\xC3\xADvel)" : "(no photo available)";
+}
+
 String trCameraTaskStalled(TelegramLang lang, const String& cameraName, unsigned long minutes) {
   if (lang == TelegramLang::Portuguese) {
     return "\xE2\x9A\xA0\xEF\xB8\x8F " + cameraName + ": a tarefa de monitoriza\xC3\xA7\xC3\xA3o parece bloqueada h\xC3\xA1 " +

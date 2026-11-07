@@ -22,13 +22,23 @@ static const char* NVS_KEY_SCHEMA = "schema"; // see telegram_user_serialize.h's
 // Separates records; fields use telegram_user_serialize's separators.
 static const char RECORD_SEP = '\x1E';
 
+// RAM copy of the list, so alert paths never read NVS: camera task stacks live
+// in PSRAM, and the flash driver asserts if such a task touches flash. Loaded on
+// first use (at boot, before camera tasks start) and replaced on every save that
+// reaches NVS. Lock order: g_usersMutex, then g_cacheMutex.
+static SemaphoreHandle_t g_cacheMutex = xSemaphoreCreateMutex();
+static std::vector<TelegramUser> g_cache;
+static bool g_cacheLoaded = false;
+
+static bool persistTelegramUsers(const std::vector<TelegramUser>& users);
+
 static String chunkKey(uint16_t index) {
   char key[16];
   snprintf(key, sizeof(key), "list%u", (unsigned)index);
   return String(key);
 }
 
-std::vector<TelegramUser> loadTelegramUsers() {
+static std::vector<TelegramUser> loadTelegramUsersFromNvs() {
   Preferences prefs;
   // Read-write (see loadDashboardAuth).
   prefs.begin(NVS_NAMESPACE, false);
@@ -60,7 +70,7 @@ std::vector<TelegramUser> loadTelegramUsers() {
     admin.canCommand = true;
     admin.canSnap = true;
     users.push_back(admin);
-    if (!saveTelegramUsers(users)) {
+    if (!persistTelegramUsers(users)) {
       Serial.println("[telegram_users] ERROR: failed to persist the first-boot Admin user seed to "
                       "NVS - this boot will still use it, but it wasn't saved and won't survive a reboot.");
     } else {
@@ -111,13 +121,33 @@ std::vector<TelegramUser> loadTelegramUsers() {
   } else if (storedVersion != TELEGRAM_USER_SCHEMA_VERSION) {
     Serial.printf("[telegram_users] Migrating %u user record(s) from schema %u to %u.\n",
                   (unsigned)users.size(), (unsigned)storedVersion, (unsigned)TELEGRAM_USER_SCHEMA_VERSION);
-    saveTelegramUsers(users);
+    persistTelegramUsers(users);
   }
 
   return users;
 }
 
+std::vector<TelegramUser> loadTelegramUsers() {
+  xSemaphoreTake(g_cacheMutex, portMAX_DELAY);
+  if (!g_cacheLoaded) {
+    g_cache = loadTelegramUsersFromNvs();
+    g_cacheLoaded = true;
+  }
+  std::vector<TelegramUser> users = g_cache;
+  xSemaphoreGive(g_cacheMutex);
+  return users;
+}
+
 bool saveTelegramUsers(const std::vector<TelegramUser>& users) {
+  if (!persistTelegramUsers(users)) return false; // NVS still holds the old list, and so does the copy
+  xSemaphoreTake(g_cacheMutex, portMAX_DELAY);
+  g_cache = users;
+  g_cacheLoaded = true;
+  xSemaphoreGive(g_cacheMutex);
+  return true;
+}
+
+static bool persistTelegramUsers(const std::vector<TelegramUser>& users) {
   String blob;
   for (size_t i = 0; i < users.size(); i++) {
     if (i > 0) blob += RECORD_SEP;

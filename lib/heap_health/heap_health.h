@@ -15,5 +15,9 @@ struct HeapHealthResult {
 
 // hasBaseline/previousBaseline: the caller's state from the last call. The
 // minimum never rises within a boot, so the alert never re-arms.
+// Whether to write a pending heap-low record to NVS now: rate-limited to limit
+// flash wear, but the newest record still lands once the gap has passed.
+bool shouldPersistHeapLow(bool pending, unsigned long msSinceLastSave, unsigned long minGapMs);
+
 HeapHealthResult evaluateHeapHealth(uint32_t minFreeHeapNow, bool hasBaseline, uint32_t previousBaseline,
                                      uint32_t warnBytes, bool alreadyAlerted);

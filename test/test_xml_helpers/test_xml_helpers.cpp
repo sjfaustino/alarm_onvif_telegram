@@ -153,6 +153,52 @@ void test_responseHasFault_no_false_positive_on_similarly_named_element(void) {
   TEST_ASSERT_FALSE(responseHasFault("<Envelope><Body><FaultInfo>not a fault</FaultInfo></Body></Envelope>"));
 }
 
+void test_soapFaultSummary_soap12_prefers_subcode_and_handles_attributes(void) {
+  const char* xml = "<SOAP-ENV:Envelope><SOAP-ENV:Header><wsa5:Action SOAP-ENV:mustUnderstand=\"1\">"
+    "http://www.onvif.org/ver10/events/wsdl/PullPointSubscription/PullMessagesResponse</wsa5:Action>"
+    "</SOAP-ENV:Header><SOAP-ENV:Body><SOAP-ENV:Fault><SOAP-ENV:Code><SOAP-ENV:Value>SOAP-ENV:Sender"
+    "</SOAP-ENV:Value><SOAP-ENV:Subcode><SOAP-ENV:Value>ter:NotAuthorized</SOAP-ENV:Value></SOAP-ENV:Subcode>"
+    "</SOAP-ENV:Code><SOAP-ENV:Reason><SOAP-ENV:Text xml:lang=\"en\">Authority failure</SOAP-ENV:Text>"
+    "</SOAP-ENV:Reason></SOAP-ENV:Fault></SOAP-ENV:Body></SOAP-ENV:Envelope>";
+  TEST_ASSERT_EQUAL_STRING("ter:NotAuthorized: Authority failure", soapFaultSummary(xml).c_str());
+}
+
+void test_soapFaultSummary_soap12_without_subcode(void) {
+  TEST_ASSERT_EQUAL_STRING("env:Sender: Bad",
+                           soapFaultSummary("<env:Fault><env:Code><env:Value>env:Sender</env:Value></env:Code>"
+                                            "<env:Reason><env:Text>Bad</env:Text></env:Reason></env:Fault>")
+                               .c_str());
+}
+
+// Seen from a live camera: a reason element with no text.
+void test_soapFaultSummary_empty_reason_has_no_dangling_separator(void) {
+  TEST_ASSERT_EQUAL_STRING("SOAP-ENV:Sender",
+                           soapFaultSummary("<SOAP-ENV:Fault><SOAP-ENV:Code><SOAP-ENV:Value>SOAP-ENV:Sender</SOAP-ENV:Value>"
+                                            "</SOAP-ENV:Code><SOAP-ENV:Reason><SOAP-ENV:Text xml:lang=\"en\"/>"
+                                            "</SOAP-ENV:Reason></SOAP-ENV:Fault>")
+                               .c_str());
+}
+
+void test_soapFaultSummary_soap11(void) {
+  TEST_ASSERT_EQUAL_STRING("s:Client: Denied",
+                           soapFaultSummary("<s:Fault><faultcode>s:Client</faultcode>"
+                                            "<faultstring>Denied</faultstring></s:Fault>")
+                               .c_str());
+}
+
+void test_soapFaultSummary_ignores_matching_names_before_the_fault(void) {
+  TEST_ASSERT_EQUAL_STRING("c: r", soapFaultSummary("<a:Value>header</a:Value><a:Text>header</a:Text>"
+                                                    "<a:Fault><faultcode>c</faultcode><faultstring>r</faultstring></a:Fault>")
+                                       .c_str());
+}
+
+void test_soapFaultSummary_unparseable_falls_back_to_a_short_prefix(void) {
+  String longBody;
+  for (int i = 0; i < 500; i++) longBody += "x";
+  TEST_ASSERT_EQUAL(200, (int)soapFaultSummary(longBody).length());
+  TEST_ASSERT_EQUAL_STRING("<a:Fault/>", soapFaultSummary("<a:Fault/>").c_str());
+}
+
 int main(int argc, char** argv) {
   UNITY_BEGIN();
   RUN_TEST(test_xmlEscape_escapes_all_five_entities);
@@ -177,5 +223,11 @@ int main(int argc, char** argv) {
   RUN_TEST(test_responseHasFault_false_on_normal_response);
   RUN_TEST(test_responseHasFault_detects_unprefixed_default_namespace_fault);
   RUN_TEST(test_responseHasFault_no_false_positive_on_similarly_named_element);
+  RUN_TEST(test_soapFaultSummary_soap12_prefers_subcode_and_handles_attributes);
+  RUN_TEST(test_soapFaultSummary_soap12_without_subcode);
+  RUN_TEST(test_soapFaultSummary_soap11);
+  RUN_TEST(test_soapFaultSummary_empty_reason_has_no_dangling_separator);
+  RUN_TEST(test_soapFaultSummary_ignores_matching_names_before_the_fault);
+  RUN_TEST(test_soapFaultSummary_unparseable_falls_back_to_a_short_prefix);
   return UNITY_END();
 }

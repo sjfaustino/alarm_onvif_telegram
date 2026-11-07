@@ -100,14 +100,16 @@ std::vector<CameraConfig> loadCameras();
 // Overwrites the entire persisted camera list.
 bool saveCameras(const std::vector<CameraConfig>& cameras);
 
+enum class CameraSaveResult { Saved, NameTaken, NotFound, WriteFailed };
+
 // Load-mutate-save helpers. Cameras are keyed by name: add fails on a
-// duplicate, delete on a missing name.
-bool addCamera(const CameraConfig& cam);
+// duplicate, delete on a missing name. A failed write leaves the stored list
+// unchanged.
+CameraSaveResult addCamera(const CameraConfig& cam);
 bool deleteCamera(const String& name);
 
-// Replaces originalName with cam (handles renames). Fails if not found or
-// cam.name collides.
-bool updateCamera(const String& originalName, const CameraConfig& cam);
+// Replaces originalName with cam (handles renames).
+CameraSaveResult updateCamera(const String& originalName, const CameraConfig& cam);
 
 // Replaces the whole list under the store mutex (config import), so it can't
 // race a dashboard edit.
