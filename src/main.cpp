@@ -36,6 +36,7 @@ static unsigned long lastSdUsageCheckMs = 0;
 static unsigned long lastNetWatchdogCheckMs = 0;
 static unsigned long lastBridgeWatchdogCheckMs = 0;
 static unsigned long lastPowerMonitorCheckMs = 0;
+static unsigned long lastCameraTaskCheckMs = 0;
 static unsigned long lastTelegramRetryFlushMs = 0;
 
 // Set once startMonitoring() has run (may be later than setup()).
@@ -146,7 +147,7 @@ static void startMonitoring() {
 
 void setup() {
   Serial.begin(115200);
-  delay(5000); // time to open the serial terminal before the boot log starts scrolling
+  delay(BOOT_SETTLE_MS);
   Serial.println("\n========================================");
   Serial.println("MULTI-CAMERA ONVIF MOTION MONITOR");
   Serial.println("========================================");
@@ -239,6 +240,13 @@ void loop() {
 
   // Only this task may grow g_cameras (see camera_tasks.h).
   applyPendingNewCameraIfAny();
+
+  // No WiFi gate: a stall is worth logging even if the alert has to queue.
+  if (g_monitoringStarted && millis() - lastCameraTaskCheckMs >= CAMERA_TASK_CHECK_INTERVAL_MS) {
+    lastCameraTaskCheckMs = millis();
+    checkCameraTasks();
+    esp_task_wdt_reset();
+  }
 
   // Only loop() calls WiFi.begin(); camera tasks just read the status.
   if (WiFi.status() != WL_CONNECTED && wifiReconnectDue()) {

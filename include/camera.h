@@ -100,6 +100,12 @@ struct CameraState {
   // Baselined to task start so the first timelapse doesn't fire immediately.
   unsigned long lastTimelapseMs = 0;
 
+  // Task liveness for checkCameraTasks. taskRunning is true from task start
+  // until it exits; lastTaskBeatMs is refreshed at the top of every loop pass.
+  bool taskRunning = false;
+  unsigned long lastTaskBeatMs = 0;
+  bool taskStallAlerted = false;
+
   // Refreshed every loop pass while subscribed. Catches a camera that keeps
   // answering (lastContactMs stays fresh) but can never hold a subscription.
   unsigned long lastSubscribedMs = 0;
@@ -147,7 +153,8 @@ struct CameraState {
   // subscriptionActive, isOffline, alertsEnabled, hasAlerted, lastAlert,
   // snapshotUri, streamUri, mjpegUri, supportedEventTopics, unusedEventTopics,
   // the digest*Count fields, user, pass, scheduledRevert*, pendingConfig,
-  // stopRequested, snapshotInFlight, lastContactMs, totalReconnects, and the
+  // stopRequested, snapshotInFlight, lastContactMs, totalReconnects,
+  // taskRunning, lastTaskBeatMs, taskStallAlerted, and the
   // snapshot/reconnect/offline/motionLatency rings. Everything else belongs to
   // the owning camera task alone.
   SemaphoreHandle_t stateMutex = nullptr;
