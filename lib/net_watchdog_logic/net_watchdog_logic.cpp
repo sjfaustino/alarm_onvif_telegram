@@ -1,7 +1,9 @@
 #include "net_watchdog_logic.h"
+#include "config.h" // SD_*_PIN, RTC_*_PIN
 
 bool isReservedOrUnsafePin(int pin) {
-  static const int kReservedByThisProject[] = {10, 12, 13, 11, 8, 9}; // SD_CS/SCK/MISO/MOSI, RTC_SDA/SCL
+  static const int kReservedByThisProject[] = {SD_CS_PIN,   SD_SCK_PIN,  SD_MISO_PIN,
+                                               SD_MOSI_PIN, RTC_SDA_PIN, RTC_SCL_PIN};
   for (int reserved : kReservedByThisProject) {
     if (pin == reserved) return true;
   }

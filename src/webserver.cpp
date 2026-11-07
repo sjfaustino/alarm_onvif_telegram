@@ -897,9 +897,7 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
     settings.enabled = request->hasParam("enabled");
     settings.activeLow = request->hasParam("activeLow");
 
-    // Fallback matches NET_WATCHDOG_PIN_DEFAULT (getParam takes a const
-    // char*).
-    settings.pin = request->getParam("pin", "4").toInt();
+    settings.pin = request->getParam("pin", String(NET_WATCHDOG_PIN_DEFAULT).c_str()).toInt();
 
     // Clamped here and again at use in net_watchdog.cpp.
     long thresholdMinutes = request->getParam("outageThresholdMinutes", "5").toInt();
@@ -956,8 +954,7 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
     settings.cameraA = request->getParam("cameraA", "");
     settings.cameraB = request->getParam("cameraB", "");
 
-    // Fallback matches BRIDGE_WATCHDOG_PIN_DEFAULT.
-    settings.pin = request->getParam("pin", "5").toInt();
+    settings.pin = request->getParam("pin", String(BRIDGE_WATCHDOG_PIN_DEFAULT).c_str()).toInt();
 
     // Clamped here and again at use in bridge_watchdog.cpp.
     long thresholdMinutes = request->getParam("outageThresholdMinutes", "5").toInt();
@@ -1016,8 +1013,7 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
     settings.enabled = request->hasParam("enabled");
     settings.activeHigh = request->hasParam("activeHigh");
 
-    // Fallback matches POWER_MONITOR_PIN_DEFAULT.
-    settings.pin = request->getParam("pin", "6").toInt();
+    settings.pin = request->getParam("pin", String(POWER_MONITOR_PIN_DEFAULT).c_str()).toInt();
 
     String banner;
     NetWatchdogSettings netSettings = loadNetWatchdogSettings();
@@ -1058,9 +1054,8 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
     if (intervalHours < 0) intervalHours = 0;
     if (intervalHours > (long)SD_CHECK_INTERVAL_MAX_HOURS) intervalHours = (long)SD_CHECK_INTERVAL_MAX_HOURS;
     settings.checkIntervalHours = (uint32_t)intervalHours;
-    // Clamped here and again at use. Fallback matches
-    // SD_RETENTION_DAYS_DEFAULT.
-    long retentionDays = request->getParam("retentionDays", "30").toInt();
+    // Clamped here and again at use.
+    long retentionDays = request->getParam("retentionDays", String(SD_RETENTION_DAYS_DEFAULT).c_str()).toInt();
     if (retentionDays < 0) retentionDays = 0;
     if (retentionDays > (long)SD_RETENTION_MAX_DAYS) retentionDays = (long)SD_RETENTION_MAX_DAYS;
     settings.retentionDays = (uint16_t)retentionDays;

@@ -126,6 +126,22 @@ String pollLabel() {
          "others)";
 }
 
+String cooldownLabel() {
+  return "Alert cooldown, seconds, max " + String(CAMERA_ALERT_COOLDOWN_MAX_MS / 1000UL) +
+         " (minimum time between Telegram alerts for this camera)";
+}
+
+String offlineLabel() {
+  return "Offline threshold, minutes, max " + String(CAMERA_OFFLINE_THRESHOLD_MAX_MS / 60000UL) +
+         " (no response for this long -> OFFLINE alert)";
+}
+
+String burstLabel() {
+  return "Snapshots per alert (1-" + String(CAMERA_SNAPSHOT_BURST_MAX) +
+         ") - how many consecutive photos to send when motion fires, each a fresh fetch from the camera; raise it "
+         "to see more of what led up to the alert";
+}
+
 constexpr Field html(const char* markup) {
   Field f{};
   f.kind = Kind::Html;
@@ -178,16 +194,13 @@ constexpr Field kFields[] = {
   // Cooldown/offline: a non-positive entry means the default (0 would
   // alert every poll); the caps stop seconds*1000 / minutes*60000
   // overflowing 32 bits. Re-clamped at use too.
-  number("alertCooldownSec",
-         "Alert cooldown, seconds, max 86400 (minimum time between Telegram alerts for this camera)",
-         NUM_MEMBER(alertCooldownMs), 1000UL, 1, (long)(CAMERA_ALERT_COOLDOWN_MAX_MS / 1000UL), true),
-  number("offlineThresholdMin",
-         "Offline threshold, minutes, max 10080 (no response for this long -> OFFLINE alert)",
+  withLabel(number("alertCooldownSec", "",
+         NUM_MEMBER(alertCooldownMs), 1000UL, 1, (long)(CAMERA_ALERT_COOLDOWN_MAX_MS / 1000UL), true), &cooldownLabel),
+  withLabel(number("offlineThresholdMin", "",
          NUM_MEMBER(offlineThresholdMs), 60000UL, 1, (long)(CAMERA_OFFLINE_THRESHOLD_MAX_MS / 60000UL), true),
-  number("snapshotBurstCount",
-         "Snapshots per alert (1-10) - how many consecutive photos to send when motion fires, each a fresh "
-         "fetch from the camera; raise it to see more of what led up to the alert",
-         NUM_MEMBER(snapshotBurstCount), 1, 1, (long)CAMERA_SNAPSHOT_BURST_MAX, false),
+         &offlineLabel),
+  withLabel(number("snapshotBurstCount", "",
+         NUM_MEMBER(snapshotBurstCount), 1, 1, (long)CAMERA_SNAPSHOT_BURST_MAX, false), &burstLabel),
   // A too-low poll interval is raised to the floor, not discarded.
   withLabel(number("pollIntervalMs", "",
          NUM_MEMBER(pollIntervalMs), 1, (long)CAMERA_POLL_INTERVAL_MIN_MS, (long)CAMERA_POLL_INTERVAL_MAX_MS,
