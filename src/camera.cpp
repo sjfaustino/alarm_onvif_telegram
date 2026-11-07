@@ -498,7 +498,10 @@ bool cameraPullMessages(const CameraConfig& cfg, CameraState& st) {
     st.pullPointUrl = "";
     st.pullAmbiguousStreak = 0;
     st.retryDelayMs = nextRetryDelayMs(cfg, st.retryDelayMs);
-    Serial.printf("[%s] PullMessages refused - resubscribing in %lus.\n", cfg.name.c_str(), st.retryDelayMs / 1000UL);
+    // The delay counts from the previous attempt, which may already be long past.
+    unsigned long sinceRetry = millis() - st.lastRetry;
+    unsigned long waitMs = sinceRetry >= st.retryDelayMs ? 0 : st.retryDelayMs - sinceRetry;
+    Serial.printf("[%s] PullMessages refused - resubscribing in %lus.\n", cfg.name.c_str(), waitMs / 1000UL);
     return false;
   }
 

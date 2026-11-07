@@ -592,6 +592,7 @@ lib/                 # pure-logic modules with no hardware dependencies, split o
   hardware_form/          # Hardware page forms: parsing, pin-clash validation
   camera_clamps/          # limits re-applied when stored camera settings are used
   task_stall/             # alert-once logic for stuck camera tasks
+  ntp_policy/             # when to re-resolve the NTP server and restart SNTP
   log_ring/               # the /debug/log byte ring
   debug_token/            # /debug route token check
   html_form_reader/       # test helper: submits rendered form HTML like a browser

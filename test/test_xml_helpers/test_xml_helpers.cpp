@@ -170,6 +170,15 @@ void test_soapFaultSummary_soap12_without_subcode(void) {
                                .c_str());
 }
 
+// Seen from a live camera: a reason element with no text.
+void test_soapFaultSummary_empty_reason_has_no_dangling_separator(void) {
+  TEST_ASSERT_EQUAL_STRING("SOAP-ENV:Sender",
+                           soapFaultSummary("<SOAP-ENV:Fault><SOAP-ENV:Code><SOAP-ENV:Value>SOAP-ENV:Sender</SOAP-ENV:Value>"
+                                            "</SOAP-ENV:Code><SOAP-ENV:Reason><SOAP-ENV:Text xml:lang=\"en\"/>"
+                                            "</SOAP-ENV:Reason></SOAP-ENV:Fault>")
+                               .c_str());
+}
+
 void test_soapFaultSummary_soap11(void) {
   TEST_ASSERT_EQUAL_STRING("s:Client: Denied",
                            soapFaultSummary("<s:Fault><faultcode>s:Client</faultcode>"
@@ -217,6 +226,7 @@ int main(int argc, char** argv) {
   RUN_TEST(test_soapFaultSummary_soap12_prefers_subcode_and_handles_attributes);
   RUN_TEST(test_soapFaultSummary_soap12_without_subcode);
   RUN_TEST(test_soapFaultSummary_soap11);
+  RUN_TEST(test_soapFaultSummary_empty_reason_has_no_dangling_separator);
   RUN_TEST(test_soapFaultSummary_ignores_matching_names_before_the_fault);
   RUN_TEST(test_soapFaultSummary_unparseable_falls_back_to_a_short_prefix);
   return UNITY_END();

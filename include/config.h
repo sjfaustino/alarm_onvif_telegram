@@ -36,6 +36,8 @@ static const unsigned long CAMERA_POLL_INTERVAL_MAX_MS = 30000UL; // 30s
 // Generous: a big photo burst to many recipients can legitimately take minutes.
 static const unsigned long CAMERA_TASK_STALL_MS = 10UL * 60UL * 1000UL;
 static const unsigned long CAMERA_TASK_CHECK_INTERVAL_MS = 30UL * 1000UL;
+// How often a failed or stale NTP setup is retried (see ntp_policy.h).
+static const unsigned long NTP_RETRY_MS = 5UL * 60UL * 1000UL;
 // Log bytes kept in PSRAM for /debug/log.
 static const size_t DEBUG_LOG_RING_BYTES = 64UL * 1024UL;
 // At most one heap-low record is written to NVS per this interval.

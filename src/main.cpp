@@ -262,6 +262,12 @@ void loop() {
     }
   }
 
+  // Name lookup can block for seconds when the internet is down.
+  if (g_monitoringStarted && WiFi.status() == WL_CONNECTED) {
+    maintainTimeSync();
+    esp_task_wdt_reset();
+  }
+
   // Each send below can wait up to 45s for the Telegram mutex, and the 6h/1h/
   // 15min intervals line up on the same tick every 6 hours. Resetting the
   // watchdog after each keeps the stacked waits under its 90s timeout.

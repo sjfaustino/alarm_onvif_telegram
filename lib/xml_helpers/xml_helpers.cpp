@@ -145,7 +145,8 @@ String soapFaultSummary(const String& response) {
     if (code.length() == 0) code = elementTextAfter(response, "faultcode", fault);
     String reason = elementTextAfter(response, "Text", fault);
     if (reason.length() == 0) reason = elementTextAfter(response, "faultstring", fault);
-    if (code.length() > 0 || reason.length() > 0) return code + ": " + reason;
+    if (code.length() > 0 && reason.length() > 0) return code + ": " + reason;
+    if (code.length() > 0 || reason.length() > 0) return code + reason;
   }
   return response.substring(0, 200);
 }

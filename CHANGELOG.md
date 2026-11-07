@@ -31,6 +31,10 @@ firmware behaves the same except where noted below.
   records failed allocations and saves a heap-low record that survives reboots.
 
 ### Fixed
+- A crash (lwIP assert "Required to lock TCPIP core functionality", caught in a
+  core dump from the live board) when an NTP lookup was pending as the board's
+  IP state changed. SNTP is now only given an already-resolved address, retried
+  every 5 minutes if the lookup fails or syncing stops.
 - A camera that accepted a subscription but refused every poll stayed marked
   subscribed while delivering no events, if its fault mentioned
   `PullMessagesResponse` in a header. It now resubscribes with backoff, and raises
