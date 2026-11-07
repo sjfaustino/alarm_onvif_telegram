@@ -3,6 +3,7 @@
 #include "format_utils.h"
 #include "sd_store.h"
 #include "config.h" // ACTIVITY_LOG_MAX_BYTES
+#include "webserver_internal.h"
 
 String renderActivityPanel() {
   std::vector<EventLogEntry> events = recentEvents(); // oldest-first
@@ -30,4 +31,19 @@ String renderActivityPanel() {
   }
   html += "</table>";
   return html;
+}
+
+void registerActivityRoutes(PsychicHttpServer& server) {
+  server.on("/activity", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
+    return response->send(200, "text/html", renderShell(Tab::Activity, "", renderActivityPanel()).c_str());
+  });
+
+  server.on("/activity/download", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) -> esp_err_t {
+    String content;
+    if (!readActivityLogFile(&content)) {
+      return response->send(200, "text/plain", "SD storage isn't active - nothing persisted to download.");
+    }
+    response->addHeader("Content-Disposition", "attachment; filename=\"activity-log.txt\"");
+    return response->send(200, "text/plain", content.c_str());
+  });
 }

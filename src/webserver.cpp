@@ -1,42 +1,24 @@
 #include "webserver.h"
-#include "config.h" // SD_CHECK_INTERVAL_MAX_HOURS
+#include "webserver_internal.h"
 #include "build_version.h" // FIRMWARE_VERSION
 #include "webserver_network.h"
 #include "webserver_cameras.h"
 #include "webserver_users.h"
-#include "webserver_firmware.h"
-#include "webserver_maintenance.h"
-#include "webserver_hardware.h"
-#include "webserver_security.h"
-#include "config_backup.h"
-#include "webserver_activity.h"
-#include "webserver_gallery.h"
 #include "webserver_storage.h"
-#include "webserver_capabilities.h"
 #include "ui_settings.h"
-#include "rtc_store.h"
-#include "net_watchdog.h"
-#include "bridge_watchdog.h"
-#include "power_monitor.h"
-#include "net_watchdog_logic.h" // isReservedOrUnsafePin, watchdogPinsConflict
-#include "event_log_store.h"
-#include "snapshot_history.h"
-#include "sd_store.h"
-#include "telegram_users.h"
-#include "telegram.h" // setAllCamerasAlertState - /cameras/mute-all, /unmute-all
 #include "auth_store.h"
+#include "sd_store.h" // waitForSdIdle
 #include "backoff.h"
 #include "format_utils.h"
 #include <PsychicHttp.h>
-#include <Update.h>
 #include <WiFi.h> // WiFi.localIP() - the startup "listening on" log line
 
-// Routing, the dashboard shell and OTA upload state. Each panel's content
-// lives in its own webserver_<panel>.cpp.
+// Server setup, login middleware and the dashboard shell. Each page's content
+// and routes live in its own webserver_<page>.cpp.
 
 static PsychicHttpServer server;
-static std::vector<CameraConfig>* g_liveCameras = nullptr;
-static std::vector<CameraState>*  g_liveStates  = nullptr;
+std::vector<CameraConfig>* g_liveCameras = nullptr;
+std::vector<CameraState>*  g_liveStates  = nullptr;
 
 // Only enforces a login once username and password are both set, so an
 // unconfigured board is open. Updated live by the Security page.
@@ -144,8 +126,6 @@ static RateLimitMiddleware g_rateLimitMiddleware;
 // Dashboard shell: server-rendered pages, everything embedded in the firmware.
 // ============================================================
 
-enum class Tab { None, Network, Cameras, Users, Activity, Gallery, Firmware, Maintenance, Storage, Security,
-                  HardwareInternet, HardwareBridge, HardwarePower, Capabilities };
 
 // Checked on every render so the page auto-refreshes while a job runs.
 static bool tabHasActiveBackgroundJob(Tab active) {
@@ -171,7 +151,7 @@ static const char* tabListingUrl(Tab active) {
   }
 }
 
-static String renderShell(Tab active, const String& banner, const String& contentHtml) {
+String renderShell(Tab active, const String& banner, const String& contentHtml) {
   String html;
   // Theme is a saved setting (ui_settings.h), not the OS preference.
   bool darkMode = loadUiSettings().darkMode;
@@ -390,30 +370,26 @@ static String renderShell(Tab active, const String& banner, const String& conten
 
 // Restart from a short task after the response is sent; restarting inside the
 // handler drops the connection first. Used by OTA and Maintenance.
-static void delayedRebootTask(void*) {
+void delayedRebootTask(void*) {
   vTaskDelay(pdMS_TO_TICKS(1000));
   // Don't restart mid SD write: FAT isn't journaled.
   waitForSdIdle();
   ESP.restart();
 }
 
-// ============================================================
-// Firmware upload (OTA). Update writes to the inactive app partition and only
-// marks it bootable once verified, so a failed upload changes nothing.
-// ============================================================
-
-static bool   g_otaError = false;
-static String g_otaErrorMsg;
-
 // Banner text matching what actually happened (started, already running, or
 // failed to start).
-static String backgroundJobBanner(BackgroundJobStartOutcome outcome, const String& startedText,
+String backgroundJobBanner(BackgroundJobStartOutcome outcome, const String& startedText,
                                    const String& alreadyRunningText, const String& failedText) {
   switch (outcome) {
     case BackgroundJobStartOutcome::AlreadyRunning: return alreadyRunningText;
     case BackgroundJobStartOutcome::FailedToStart:  return failedText;
     default:                                        return startedText;
   }
+}
+
+void applyDashboardLogin(const DashboardAuth& auth) {
+  g_authMiddleware.setUsername(auth.username.c_str()).setPassword(auth.password.c_str());
 }
 
 void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraState>* liveStates) {
@@ -447,721 +423,17 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
     return response->redirect(redirectUrl.c_str());
   });
 
-  server.on("/network", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
-    // From a scan result's Add link; escaped when rendered.
-    String prefillSsid = request->getParam("prefillSsid", "");
-    return response->send(
-        200, "text/html", renderShell(Tab::Network, "", renderNetworkPanel(prefillSsid)).c_str());
-  });
-
-  server.on("/network/save", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
-    String banner;
-    handleSaveNetwork(request, banner);
-    return response->send(200, "text/html", renderShell(Tab::Network, banner, renderNetworkPanel()).c_str());
-  });
-
-  server.on("/network/rtc/save", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
-    RtcSettings settings;
-    settings.enabled = request->hasParam("enabled");
-    String banner = saveRtcSettings(settings)
-        ? "Saved - reboot the board to apply."
-        : "Failed to save - NVS write error (see Serial log). Setting was NOT changed.";
-    return response->send(200, "text/html", renderShell(Tab::Network, banner, renderNetworkPanel()).c_str());
-  });
-
-  server.on("/network/scan", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
-    // Background task; returns immediately.
-    String banner = backgroundJobBanner(
-        startWifiScanAsync(), "Scanning for WiFi networks in the background.",
-        "A WiFi scan is already running in the background - reload in a moment to see its result.",
-        "Could not start the WiFi scan - the device is low on memory right now. Try again in a moment.");
-    return response->send(200, "text/html", renderShell(Tab::Network, banner, renderNetworkPanel()).c_str());
-  });
-
-  server.on("/cameras", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
-    // One-time banner from /cameras/save. Escaped here, where it's rendered:
-    // this route can be requested directly, and trusting a pre-escaped value
-    // once allowed ?note=<script> (reflected XSS). The save builds it raw.
-    String note = htmlEscape(request->getParam("note", ""));
-
-    // From a discovery result's Add link; escaped when rendered.
-    String prefillUrl = request->getParam("prefillUrl", "");
-    CameraConfig prefill;
-    CameraConfig* prefillPtr = nullptr;
-    if (prefillUrl.length() > 0) {
-      prefill.name = request->getParam("prefillName", "");
-      prefill.deviceServiceUrl = prefillUrl;
-      prefillPtr = &prefill;
-    }
-    return response->send(
-        200, "text/html",
-        renderShell(Tab::Cameras, note, renderCamerasPanel(prefillPtr, false, g_liveCameras, g_liveStates))
-            .c_str());
-  });
-
-  server.on("/cameras/edit", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
-    String name = request->getParam("name", "");
-    for (auto& c : loadCameras()) {
-      if (c.name.equalsIgnoreCase(name)) {
-        CameraConfig prefill = c;
-        prefill.pass = ""; // never populate a password field with the real value
-        return response->send(
-            200, "text/html",
-            renderShell(Tab::Cameras, "", renderCamerasPanel(&prefill, true, g_liveCameras, g_liveStates)).c_str());
-      }
-    }
-    return response->redirect("/cameras");
-  });
-
-  server.on("/cameras/save", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
-    CameraConfig submitted = parseCameraForm(request);
-    String originalName = request->getParam("originalName", "");
-    originalName.trim();
-
-    String banner;
-    String applyNote;
-    if (!saveCameraSubmission(submitted, originalName, banner, applyNote, g_liveCameras, g_liveStates)) {
-      submitted.pass = "";
-      return response->send(
-          200, "text/html",
-          renderShell(Tab::Cameras, banner,
-                      renderCamerasPanel(&submitted, originalName.length() > 0, g_liveCameras, g_liveStates))
-              .c_str());
-    }
-    // Redirect (POST-redirect-GET) even with a note, so refresh doesn't
-    // resubmit.
-    String redirectUrl = "/cameras";
-    if (applyNote.length() > 0) redirectUrl += "?note=" + urlEncode(applyNote);
-    return response->redirect(redirectUrl.c_str());
-  });
-
-  server.on("/cameras/test", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
-    CameraConfig submitted = parseCameraForm(request);
-    String originalName = request->getParam("originalName", "");
-    originalName.trim();
-    bool isEdit = originalName.length() > 0;
-
-    CameraConfig testCfg = submitted;
-    if (isEdit && testCfg.pass.length() == 0) {
-      for (auto& existing : loadCameras()) {
-        if (existing.name.equalsIgnoreCase(originalName)) { testCfg.pass = existing.pass; break; }
-      }
-    }
-    // Background task; testCfg (with the resolved password) is copied.
-    String banner = backgroundJobBanner(
-        startTestConnectionAsync(testCfg),
-        "Testing camera connection in the background - reload this page in a moment to see the result.",
-        "A connection test is already running in the background - reload in a moment to see its result.",
-        "Could not start the connection test - the device is low on memory right now. Try again in a moment.");
-
-    submitted.pass = "";
-    return response->send(
-        200, "text/html",
-        renderShell(Tab::Cameras, banner, renderCamerasPanel(&submitted, isEdit, g_liveCameras, g_liveStates))
-            .c_str());
-  });
-
-  server.on("/cameras/discover", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
-    // Background task; returns immediately.
-    String banner = backgroundJobBanner(
-        startCameraDiscoveryAsync(), "Searching the network for cameras in the background.",
-        "A network search is already running in the background - reload in a moment to see its result.",
-        "Could not start the network search - the device is low on memory right now. Try again in a moment.");
-    return response->send(
-        200, "text/html",
-        renderShell(Tab::Cameras, banner, renderCamerasPanel(nullptr, false, g_liveCameras, g_liveStates))
-            .c_str());
-  });
-
-  server.on("/cameras/test-all", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
-    // Background task; returns immediately.
-    String banner = backgroundJobBanner(
-        startTestAllCamerasAsync(), "Test started in the background.",
-        "A test is already running in the background - reload in a moment to see its result.",
-        "Could not start the test - the device is low on memory right now. Try again in a moment.");
-    return response->send(
-        200, "text/html",
-        renderShell(Tab::Cameras, banner, renderCamerasPanel(nullptr, false, g_liveCameras, g_liveStates))
-            .c_str());
-  });
-
-  server.on("/cameras/test-alert", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
-    String name = request->getParam("name", "");
-    name.trim();
-
-    // Unknown values fall back to Generic; "pet" sets isPetEvent instead.
-    String kindParam = request->getParam("kind", "generic");
-    MotionDetectionKind kind = MotionDetectionKind::Generic;
-    bool isPetEvent = false;
-    if (kindParam == "person") kind = MotionDetectionKind::Person;
-    else if (kindParam == "vehicle") kind = MotionDetectionKind::Vehicle;
-    else if (kindParam == "pet") isPetEvent = true;
-
-    CameraConfig cfg;
-    bool found = false;
-    for (auto& c : loadCameras()) {
-      if (c.name.equalsIgnoreCase(name)) { cfg = c; found = true; break; }
-    }
-
-    int idx = -1;
-    if (g_liveCameras) {
-      for (size_t i = 0; i < g_liveCameras->size(); i++) {
-        if ((*g_liveCameras)[i].name.equalsIgnoreCase(name)) { idx = (int)i; break; }
-      }
-    }
-
-    String banner;
-    if (!found || idx < 0 || !g_liveStates || idx >= (int)g_liveStates->size() || !(*g_liveCameras)[idx].enabled) {
-      // No live CameraState to send through.
-      banner = "Camera \"" + htmlEscape(name) + "\" isn't currently running (disabled, or added since "
-               "the last reboot) - nothing to test. Not sent.";
-    } else {
-      // Background task. Passes the live CameraState (not a copy) for its
-      // resolved snapshot URI and credentials.
-      banner = backgroundJobBanner(
-          startTestAlertAsync(cfg, (*g_liveStates)[idx], kind, isPetEvent),
-          "Sending test alert in the background - reload this page in a moment to see the result.",
-          "A test alert is already being sent in the background - reload in a moment to see its result.",
-          "Could not start sending the test alert - the device is low on memory right now. Try again in "
-          "a moment.");
-    }
-    return response->send(
-        200, "text/html",
-        renderShell(Tab::Cameras, banner, renderCamerasPanel(nullptr, false, g_liveCameras, g_liveStates))
-            .c_str());
-  });
-
-  server.on("/cameras/mute-all", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
-    String duration = request->getParam("duration", "");
-    duration.trim();
-    String result = setAllCamerasAlertState(g_liveCameras->data(), g_liveStates->data(), g_liveCameras->size(),
-                                             false, duration, "the dashboard", TelegramLang::English);
-    // Escape the result: a failure echoes the submitted duration text, and
-    // banners are inserted unescaped (this was a reflected XSS).
-    return response->send(
-        200, "text/html",
-        renderShell(Tab::Cameras, htmlEscape(result), renderCamerasPanel(nullptr, false, g_liveCameras, g_liveStates))
-            .c_str());
-  });
-
-  server.on("/cameras/unmute-all", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
-    // Unmute all is permanent, like a bare /on all.
-    String result = setAllCamerasAlertState(g_liveCameras->data(), g_liveStates->data(), g_liveCameras->size(),
-                                             true, "", "the dashboard", TelegramLang::English);
-    // Escaped for consistency with mute-all, in case a duration is ever added.
-    return response->send(
-        200, "text/html",
-        renderShell(Tab::Cameras, htmlEscape(result), renderCamerasPanel(nullptr, false, g_liveCameras, g_liveStates))
-            .c_str());
-  });
-
-  server.on("/cameras/quiet-hours-all", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
-    String result = applyQuietHoursToAllCameras(request, g_liveCameras, g_liveStates);
-    return response->send(
-        200, "text/html",
-        renderShell(Tab::Cameras, result, renderCamerasPanel(nullptr, false, g_liveCameras, g_liveStates))
-            .c_str());
-  });
-
-  server.on("/cameras/person-alerts-all", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
-    String result = applyPersonAlertsToAllCameras(request, g_liveCameras, g_liveStates);
-    return response->send(
-        200, "text/html",
-        renderShell(Tab::Cameras, result, renderCamerasPanel(nullptr, false, g_liveCameras, g_liveStates))
-            .c_str());
-  });
-
-  server.on("/cameras/vehicle-alerts-all", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
-    String result = applyVehicleAlertsToAllCameras(request, g_liveCameras, g_liveStates);
-    return response->send(
-        200, "text/html",
-        renderShell(Tab::Cameras, result, renderCamerasPanel(nullptr, false, g_liveCameras, g_liveStates))
-            .c_str());
-  });
-
-  server.on("/cameras/pet-alerts-all", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
-    String result = applyPetAlertsToAllCameras(request, g_liveCameras, g_liveStates);
-    return response->send(
-        200, "text/html",
-        renderShell(Tab::Cameras, result, renderCamerasPanel(nullptr, false, g_liveCameras, g_liveStates))
-            .c_str());
-  });
-
-  // One history entry (SD or PSRAM ring, per snapshot_history.h); age 0 =
-  // newest. Behind rate limiting and auth like every route - it's camera
-  // footage.
-  server.on("/cameras/snapshot", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) -> esp_err_t {
-    String name = request->getParam("name", "");
-    long age = request->getParam("age", "0").toInt();
-    int idx = -1;
-    if (g_liveCameras) {
-      for (size_t i = 0; i < g_liveCameras->size(); i++) {
-        if ((*g_liveCameras)[i].name.equalsIgnoreCase(name)) { idx = (int)i; break; }
-      }
-    }
-    if (idx < 0 || !g_liveStates || idx >= (int)g_liveStates->size() || age < 0) {
-      return response->send(404, "text/plain", "No such camera.");
-    }
-
-    // The bytes are copied out, so nothing is held during send().
-    uint8_t* copy = nullptr;
-    size_t len = 0;
-    bool ok = readCameraSnapshot((*g_liveCameras)[idx], (*g_liveStates)[idx], (size_t)age, &copy, &len);
-    if (!ok || !copy || len == 0) {
-      return response->send(404, "text/plain", "No snapshot captured yet for this camera.");
-    }
-    esp_err_t result = response->send(200, "image/jpeg", copy, len);
-    free(copy);
-    return result;
-  });
-
-  server.on("/delete", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
-    String name = request->getParam("name", "");
-    // Stop the task before removing the record, or it keeps alerting on a
-    // camera the dashboard no longer lists.
-    stopLiveCameraIfRunning(name, g_liveCameras, g_liveStates);
-    deleteCamera(name);
-    return response->redirect("/cameras");
-  });
-
-  server.on("/users", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
-    // From an unknown-chat Add link; escaped when rendered.
-    String prefillChatId = request->getParam("prefillChatId", "");
-    TelegramUser prefill;
-    TelegramUser* prefillPtr = nullptr;
-    if (prefillChatId.length() > 0) {
-      prefill.chatId = prefillChatId;
-      prefill.allCameras = true; // friendlier default for a brand-new user, same as the blank Add form
-      prefillPtr = &prefill;
-    }
-    return response->send(200, "text/html", renderShell(Tab::Users, "", renderUsersPanel(prefillPtr, false)).c_str());
-  });
-
-  server.on("/users/edit", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
-    String name = request->getParam("name", "");
-    for (auto& u : loadTelegramUsers()) {
-      if (u.name.equalsIgnoreCase(name)) {
-        TelegramUser prefill = u;
-        return response->send(200, "text/html",
-                               renderShell(Tab::Users, "", renderUsersPanel(&prefill, true)).c_str());
-      }
-    }
-    return response->redirect("/users");
-  });
-
-  server.on("/users/save", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
-    TelegramUser submitted = parseUserForm(request);
-    String originalName = request->getParam("originalName", "");
-    originalName.trim();
-
-    String banner;
-    if (!saveUserSubmission(submitted, originalName, banner)) {
-      return response->send(200, "text/html",
-                             renderShell(Tab::Users, banner,
-                                         renderUsersPanel(&submitted, originalName.length() > 0)).c_str());
-    }
-    return response->redirect("/users");
-  });
-
-  server.on("/users/delete", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
-    String name = request->getParam("name", "");
-    deleteTelegramUser(name);
-    return response->redirect("/users");
-  });
-
-  server.on("/users/test", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
-    // Background task; returns immediately.
-    String banner = backgroundJobBanner(
-        startTestMessageAsync(), "Sending a test message in the background.",
-        "A test message is already being sent in the background - reload in a moment to see its result.",
-        "Could not start sending the test message - the device is low on memory right now. Try again in a "
-        "moment.");
-    return response->send(
-        200, "text/html",
-        renderShell(Tab::Users, banner, renderUsersPanel(nullptr, false)).c_str());
-  });
-
-  server.on("/activity", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
-    return response->send(200, "text/html", renderShell(Tab::Activity, "", renderActivityPanel()).c_str());
-  });
-
-  server.on("/activity/download", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) -> esp_err_t {
-    String content;
-    if (!readActivityLogFile(&content)) {
-      return response->send(200, "text/plain", "SD storage isn't active - nothing persisted to download.");
-    }
-    response->addHeader("Content-Disposition", "attachment; filename=\"activity-log.txt\"");
-    return response->send(200, "text/plain", content.c_str());
-  });
-
-  server.on("/gallery", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
-    String camera = request->getParam("camera", "");
-    String source = request->getParam("source", "");
-    String date = request->getParam("date", "");
-    long page = request->getParam("page", "0").toInt();
-    if (page < 0) page = 0; // a negative/garbage param falls back to the newest page, not undefined behavior
-    return response->send(
-        200, "text/html",
-        renderShell(Tab::Gallery, "",
-                    renderGalleryPanel(camera, (size_t)page, source, date, g_liveCameras, g_liveStates))
-            .c_str());
-  });
-
-  server.on("/firmware", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
-    return response->send(200, "text/html", renderShell(Tab::Firmware, "", renderFirmwarePanel()).c_str());
-  });
-
-  static PsychicUploadHandler* otaHandler = new PsychicUploadHandler();
-  otaHandler->onUpload([](PsychicRequest* request, const String& filename, uint64_t index, uint8_t* data,
-                           size_t len, bool last) -> esp_err_t {
-    if (index == 0) {
-      g_otaError = false;
-      g_otaErrorMsg = "";
-      Serial.printf("[Firmware] Upload started: %s\n", filename.c_str());
-      // An upload that dropped mid-way never gets its final chunk, leaving
-      // Update "running" and refusing every later attempt until reboot.
-      // index==0 is the start of a new upload, so clear any leftover state.
-      if (Update.isRunning()) {
-        Serial.println("[Firmware] A previous upload never finished (dropped connection?) - "
-                        "aborting it before starting this one.");
-        Update.abort();
-      }
-      if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
-        g_otaError = true;
-        g_otaErrorMsg = Update.errorString();
-        Serial.printf("[Firmware] Update.begin failed: %s\n", g_otaErrorMsg.c_str());
-      }
-    }
-    if (!g_otaError && len > 0 && Update.write(data, len) != len) {
-      g_otaError = true;
-      g_otaErrorMsg = Update.errorString();
-      Serial.printf("[Firmware] Update.write failed: %s\n", g_otaErrorMsg.c_str());
-    }
-    if (last) {
-      if (!g_otaError && !Update.end(true)) {
-        g_otaError = true;
-        g_otaErrorMsg = Update.errorString();
-      }
-      Serial.printf("[Firmware] Upload finished (%s).\n", g_otaError ? "FAILED" : "OK - rebooting");
-    }
-    return ESP_OK; // keep accepting bytes even after a failure, so the upload doesn't just hang client-side
-  });
-  otaHandler->onRequest([](PsychicRequest* request, PsychicResponse* response) -> esp_err_t {
-    if (g_otaError) {
-      String banner = "Firmware update FAILED: " + g_otaErrorMsg + " - current firmware keeps running.";
-      return response->send(200, "text/html", renderShell(Tab::Firmware, banner, renderFirmwarePanel()).c_str());
-    }
-    esp_err_t result = response->send(
-        200, "text/html",
-        renderShell(Tab::Firmware, "Firmware accepted - rebooting now, this page will stop responding.",
-                    "<p class=\"hint\">Reconnect in about 15 seconds.</p>")
-            .c_str());
-    // The image is committed and the response already promised a reboot; if
-    // the task can't be created, the update won't apply until some later
-    // reboot. All we can do is log it.
-    if (xTaskCreate(delayedRebootTask, "otaReboot", 2048, nullptr, 1, nullptr) != pdPASS) {
-      Serial.println("[Firmware] ERROR: failed to start the post-update reboot task (out of memory?) - "
-                      "the new firmware is flashed but the board will NOT reboot on its own. Reboot "
-                      "manually from the Maintenance page once memory frees up.");
-    }
-    return result;
-  });
-  server.on("/firmware/update", HTTP_POST, otaHandler);
-
-  server.on("/maintenance", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
-    return response->send(200, "text/html", renderShell(Tab::Maintenance, "", renderMaintenancePanel()).c_str());
-  });
-
-  server.on("/maintenance/reboot", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) -> esp_err_t {
-    Serial.println("[Maintenance] Reboot requested via dashboard.");
-    esp_err_t result = response->send(
-        200, "text/html",
-        renderShell(Tab::Maintenance, "Rebooting now - reconnect in about 15-20 seconds.",
-                    renderMaintenancePanel())
-            .c_str());
-    // Same as the OTA reboot above: log only.
-    if (xTaskCreate(delayedRebootTask, "maintReboot", 2048, nullptr, 1, nullptr) != pdPASS) {
-      Serial.println("[Maintenance] ERROR: failed to start the reboot task (out of memory?) - the "
-                      "board will NOT reboot. Try again once memory frees up, or power-cycle manually.");
-    }
-    return result;
-  });
-
-  server.on("/hardware/internet", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
-    return response->send(200, "text/html",
-                           renderShell(Tab::HardwareInternet, "", renderInternetWatchdogPage()).c_str());
-  });
-
-  server.on("/hardware/internet/save", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
-    NetWatchdogSettings settings;
-    settings.enabled = request->hasParam("enabled");
-    settings.activeLow = request->hasParam("activeLow");
-
-    // Fallback matches NET_WATCHDOG_PIN_DEFAULT (getParam takes a const
-    // char*).
-    settings.pin = request->getParam("pin", "4").toInt();
-
-    // Clamped here and again at use in net_watchdog.cpp.
-    long thresholdMinutes = request->getParam("outageThresholdMinutes", "5").toInt();
-    if (thresholdMinutes < 1) thresholdMinutes = 1;
-    unsigned long thresholdMs = (unsigned long)thresholdMinutes * 60000UL;
-    if (thresholdMs > NET_WATCHDOG_THRESHOLD_MAX_MS) thresholdMs = NET_WATCHDOG_THRESHOLD_MAX_MS;
-    settings.outageThresholdMs = thresholdMs;
-
-    long pulseSeconds = request->getParam("pulseSeconds", "10").toInt();
-    if (pulseSeconds < 1) pulseSeconds = 1;
-    unsigned long pulseMs = (unsigned long)pulseSeconds * 1000UL;
-    if (pulseMs > NET_WATCHDOG_PULSE_MAX_MS) pulseMs = NET_WATCHDOG_PULSE_MAX_MS;
-    settings.pulseDurationMs = pulseMs;
-
-    String banner;
-    BridgeWatchdogSettings bridgeSettings = loadBridgeWatchdogSettings();
-    PowerMonitorSettings powerSettings = loadPowerMonitorSettings();
-    if (settings.enabled && isReservedOrUnsafePin(settings.pin)) {
-      banner = "Pin " + String(settings.pin) + " is reserved by another peripheral on this board or "
-               "unsafe to use for general GPIO - pick a different one. Not saved.";
-    } else if (watchdogPinsConflict(settings.enabled, settings.pin, bridgeSettings.enabled, bridgeSettings.pin)) {
-      banner = "Pin " + String(settings.pin) + " is already used by the Camera Bridge Watchdog - pick "
-               "a different one. Not saved.";
-    } else if (watchdogPinsConflict(settings.enabled, settings.pin, powerSettings.enabled, powerSettings.pin)) {
-      banner = "Pin " + String(settings.pin) + " is already used by the 220V Power Monitor - pick a "
-               "different one. Not saved.";
-    } else {
-      banner = saveNetWatchdogSettings(settings)
-          ? "Saved - the enable checkbox and pin need a reboot to apply; the threshold and pulse "
-            "duration are active immediately."
-          : "Failed to save - NVS write error (see Serial log). Setting was NOT changed.";
-    }
-    return response->send(200, "text/html",
-                           renderShell(Tab::HardwareInternet, banner, renderInternetWatchdogPage()).c_str());
-  });
-
-  server.on("/hardware/internet/pulse", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
-    String banner = netWatchdogManualPulse()
-        ? "Relay pulsed."
-        : "Internet Watchdog isn't active (disabled, or the configured pin wasn't accepted at boot) - nothing to pulse.";
-    return response->send(200, "text/html",
-                           renderShell(Tab::HardwareInternet, banner, renderInternetWatchdogPage()).c_str());
-  });
-
-  server.on("/hardware/bridge", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
-    return response->send(200, "text/html",
-                           renderShell(Tab::HardwareBridge, "", renderBridgeWatchdogPage(g_liveCameras)).c_str());
-  });
-
-  server.on("/hardware/bridge/save", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
-    BridgeWatchdogSettings settings;
-    settings.enabled = request->hasParam("enabled");
-    settings.activeLow = request->hasParam("activeLow");
-    settings.cameraA = request->getParam("cameraA", "");
-    settings.cameraB = request->getParam("cameraB", "");
-
-    // Fallback matches BRIDGE_WATCHDOG_PIN_DEFAULT.
-    settings.pin = request->getParam("pin", "5").toInt();
-
-    // Clamped here and again at use in bridge_watchdog.cpp.
-    long thresholdMinutes = request->getParam("outageThresholdMinutes", "5").toInt();
-    if (thresholdMinutes < 1) thresholdMinutes = 1;
-    unsigned long thresholdMs = (unsigned long)thresholdMinutes * 60000UL;
-    if (thresholdMs > BRIDGE_WATCHDOG_THRESHOLD_MAX_MS) thresholdMs = BRIDGE_WATCHDOG_THRESHOLD_MAX_MS;
-    settings.outageThresholdMs = thresholdMs;
-
-    long pulseSeconds = request->getParam("pulseSeconds", "10").toInt();
-    if (pulseSeconds < 1) pulseSeconds = 1;
-    unsigned long pulseMs = (unsigned long)pulseSeconds * 1000UL;
-    if (pulseMs > BRIDGE_WATCHDOG_PULSE_MAX_MS) pulseMs = BRIDGE_WATCHDOG_PULSE_MAX_MS;
-    settings.pulseDurationMs = pulseMs;
-
-    String banner;
-    NetWatchdogSettings netSettings = loadNetWatchdogSettings();
-    PowerMonitorSettings powerSettings = loadPowerMonitorSettings();
-    if (settings.enabled && (settings.cameraA.length() == 0 || settings.cameraB.length() == 0)) {
-      banner = "Both Camera A and Camera B must be selected. Not saved.";
-    } else if (settings.enabled && settings.cameraA.equalsIgnoreCase(settings.cameraB)) {
-      banner = "Camera A and Camera B must be two different cameras. Not saved.";
-    } else if (settings.enabled && isReservedOrUnsafePin(settings.pin)) {
-      banner = "Pin " + String(settings.pin) + " is reserved by another peripheral on this board or "
-               "unsafe to use for general GPIO - pick a different one. Not saved.";
-    } else if (watchdogPinsConflict(settings.enabled, settings.pin, netSettings.enabled, netSettings.pin)) {
-      banner = "Pin " + String(settings.pin) + " is already used by the Internet Watchdog - pick a "
-               "different one. Not saved.";
-    } else if (watchdogPinsConflict(settings.enabled, settings.pin, powerSettings.enabled, powerSettings.pin)) {
-      banner = "Pin " + String(settings.pin) + " is already used by the 220V Power Monitor - pick a "
-               "different one. Not saved.";
-    } else {
-      banner = saveBridgeWatchdogSettings(settings)
-          ? "Saved - the enable checkbox, cameras, and pin need a reboot to apply; the threshold and "
-            "pulse duration are active immediately."
-          : "Failed to save - NVS write error (see Serial log). Setting was NOT changed.";
-    }
-    return response->send(200, "text/html",
-                           renderShell(Tab::HardwareBridge, banner, renderBridgeWatchdogPage(g_liveCameras)).c_str());
-  });
-
-  server.on("/hardware/bridge/pulse", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
-    String banner = bridgeWatchdogManualPulse()
-        ? "Relay pulsed."
-        : "Camera Bridge Watchdog isn't active (disabled, or the configured pin wasn't accepted at boot) - nothing to pulse.";
-    return response->send(200, "text/html",
-                           renderShell(Tab::HardwareBridge, banner, renderBridgeWatchdogPage(g_liveCameras)).c_str());
-  });
-
-  server.on("/hardware/power", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
-    return response->send(200, "text/html",
-                           renderShell(Tab::HardwarePower, "", renderPowerMonitorPage()).c_str());
-  });
-
-  server.on("/hardware/power/save", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
-    PowerMonitorSettings settings;
-    settings.enabled = request->hasParam("enabled");
-    settings.activeHigh = request->hasParam("activeHigh");
-
-    // Fallback matches POWER_MONITOR_PIN_DEFAULT.
-    settings.pin = request->getParam("pin", "6").toInt();
-
-    String banner;
-    NetWatchdogSettings netSettings = loadNetWatchdogSettings();
-    BridgeWatchdogSettings bridgeSettings = loadBridgeWatchdogSettings();
-    if (settings.enabled && isReservedOrUnsafePin(settings.pin)) {
-      banner = "Pin " + String(settings.pin) + " is reserved by another peripheral on this board or "
-               "unsafe to use for general GPIO - pick a different one. Not saved.";
-    } else if (watchdogPinsConflict(settings.enabled, settings.pin, netSettings.enabled, netSettings.pin)) {
-      banner = "Pin " + String(settings.pin) + " is already used by the Internet Watchdog - pick a "
-               "different one. Not saved.";
-    } else if (watchdogPinsConflict(settings.enabled, settings.pin, bridgeSettings.enabled, bridgeSettings.pin)) {
-      banner = "Pin " + String(settings.pin) + " is already used by the Camera Bridge Watchdog - pick "
-               "a different one. Not saved.";
-    } else {
-      banner = savePowerMonitorSettings(settings)
-          ? "Saved - the enable checkbox and pin need a reboot to apply; the wiring polarity is active "
-            "immediately."
-          : "Failed to save - NVS write error (see Serial log). Setting was NOT changed.";
-    }
-    return response->send(200, "text/html",
-                           renderShell(Tab::HardwarePower, banner, renderPowerMonitorPage()).c_str());
-  });
-
-  server.on("/storage", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
-    return response->send(200, "text/html", renderShell(Tab::Storage, "", renderStoragePanel()).c_str());
-  });
-
-  server.on("/capabilities", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
-    return response->send(
-        200, "text/html",
-        renderShell(Tab::Capabilities, "", renderCapabilitiesPanel(g_liveCameras, g_liveStates)).c_str());
-  });
-
-  server.on("/storage/save", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
-    SdSettings settings;
-    settings.enabled = request->hasParam("enabled");
-    long intervalHours = request->getParam("checkIntervalHours", "0").toInt();
-    if (intervalHours < 0) intervalHours = 0;
-    if (intervalHours > (long)SD_CHECK_INTERVAL_MAX_HOURS) intervalHours = (long)SD_CHECK_INTERVAL_MAX_HOURS;
-    settings.checkIntervalHours = (uint32_t)intervalHours;
-    // Clamped here and again at use. Fallback matches
-    // SD_RETENTION_DAYS_DEFAULT.
-    long retentionDays = request->getParam("retentionDays", "30").toInt();
-    if (retentionDays < 0) retentionDays = 0;
-    if (retentionDays > (long)SD_RETENTION_MAX_DAYS) retentionDays = (long)SD_RETENTION_MAX_DAYS;
-    settings.retentionDays = (uint16_t)retentionDays;
-    String banner = saveSdSettings(settings)
-        ? "Saved - the enable/disable setting needs a reboot to apply; the check interval and "
-          "retention setting are active immediately."
-        : "Failed to save - NVS write error (see Serial log). Setting was NOT changed.";
-    return response->send(200, "text/html", renderShell(Tab::Storage, banner, renderStoragePanel()).c_str());
-  });
-
-  server.on("/storage/check", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
-    // Background task; returns immediately.
-    String banner = backgroundJobBanner(
-        startStorageCheckAsync(), "Checking storage in the background.",
-        "A storage check is already running in the background - reload in a moment to see its result.",
-        "Could not start the storage check - the device is low on memory right now. Try again in a moment.");
-    return response->send(200, "text/html", renderShell(Tab::Storage, banner, renderStoragePanel()).c_str());
-  });
-
-  server.on("/storage/erase", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
-    Serial.println("[Storage] Erase all snapshot history requested via dashboard.");
-    // Background task; returns immediately.
-    String banner = backgroundJobBanner(
-        startEraseAllAsync(), "Erasing all snapshot history in the background.",
-        "An erase is already running in the background - reload in a moment to see its result.",
-        "Could not start the erase - the device is low on memory right now. Try again in a moment.");
-    return response->send(200, "text/html", renderShell(Tab::Storage, banner, renderStoragePanel()).c_str());
-  });
-
-  server.on("/security", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
-    return response->send(200, "text/html", renderShell(Tab::Security, "", renderSecurityPanel()).c_str());
-  });
-
-  // Downloads as a file. Note: the machine-readable CAMERAS block includes
-  // camera passwords (WiFi passwords are never exported).
-  server.on("/export", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) -> esp_err_t {
-    response->addHeader("Content-Disposition", "attachment; filename=\"camera-monitor-config.txt\"");
-    return response->send(200, "text/plain", buildConfigExport().c_str());
-  });
-
-  // A multipart upload, not a form field: an export can exceed PsychicHttp's
-  // 16K body limit once percent-encoded. Chunks are accumulated into a String
-  // (exports are KB-sized).
-  static String g_importText;
-  static String g_importBanner;
-
-  static PsychicUploadHandler* importHandler = new PsychicUploadHandler();
-  importHandler->onUpload([](PsychicRequest* request, const String& filename, uint64_t index, uint8_t* data,
-                              size_t len, bool last) -> esp_err_t {
-    if (index == 0) g_importText = ""; // first chunk of THIS upload - drop any leftover from a previous one
-    if (len > 0) g_importText.concat((const char*)data, len);
-    if (last) {
-      ConfigImportApplyResult r = applyConfigImport(g_importText);
-      g_importText = ""; // done with it - don't hold the buffer until the next import
-      g_importBanner = summarizeImportResult(r, ImportSummaryFormat::Html);
-    }
-    return ESP_OK;
-  });
-  importHandler->onRequest([](PsychicRequest* request, PsychicResponse* response) -> esp_err_t {
-    return response->send(200, "text/html", renderShell(Tab::Security, g_importBanner, renderSecurityPanel()).c_str());
-  });
-  server.on("/import", HTTP_POST, importHandler);
-
-  // The automatic pre-import backup, in export format - re-import it to undo.
-  server.on("/import/backup", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) -> esp_err_t {
-    String backup = loadConfigBackup();
-    if (backup.length() == 0) {
-      return response->send(200, "text/plain",
-                             "No pre-import backup available yet - one is saved automatically the next "
-                             "time Import is used.");
-    }
-    response->addHeader("Content-Disposition", "attachment; filename=\"camera-monitor-config-backup.txt\"");
-    return response->send(200, "text/plain", backup.c_str());
-  });
-
-  server.on("/security/save", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
-    String username = request->getParam("username", "");
-    String password = request->getParam("password", "");
-    String confirmPassword = request->getParam("confirmPassword", "");
-    username.trim();
-
-    String banner;
-    if (username.length() == 0 || password.length() == 0) {
-      banner = "Username and password are both required.";
-    } else if (password != confirmPassword) {
-      banner = "Password and confirmation don't match - not saved.";
-    } else {
-      DashboardAuth newAuth;
-      newAuth.username = username;
-      newAuth.password = password;
-      if (!saveDashboardAuth(newAuth)) {
-        // Leave the live login alone if the save failed; otherwise it would
-        // silently revert on the next reboot.
-        banner = "Failed to save - NVS write error (see Serial log). Login was NOT changed.";
-      } else {
-        g_authMiddleware.setUsername(newAuth.username.c_str()).setPassword(newAuth.password.c_str());
-        banner = "Saved - a login is now required on every page, starting now.";
-      }
-    }
-    return response->send(200, "text/html", renderShell(Tab::Security, banner, renderSecurityPanel()).c_str());
-  });
+  registerNetworkRoutes(server);
+  registerCameraRoutes(server);
+  registerUserRoutes(server);
+  registerActivityRoutes(server);
+  registerGalleryRoutes(server);
+  registerFirmwareRoutes(server);
+  registerMaintenanceRoutes(server);
+  registerHardwareRoutes(server);
+  registerStorageRoutes(server);
+  registerCapabilitiesRoutes(server);
+  registerSecurityRoutes(server);
 
   server.begin();
   Serial.printf("[WebServer] Camera management UI listening on http://%s:80/\n",

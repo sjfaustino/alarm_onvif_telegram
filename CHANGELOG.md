@@ -34,6 +34,8 @@ firmware behaves the same except where noted below.
   that drives both the HTML and the parsing/clamping; both forms are built
   from shared input helpers in `lib/webserver_html`. Golden tests pin their
   exact HTML.
+- `startWebServer` (750 lines) split: each dashboard page now registers its own
+  routes. Form labels and pin fallbacks now come from `config.h` constants.
 - `scripts/check_comment_only.sh` proves a change touched only comments.
 - Native test count: 454 -> 489.
 

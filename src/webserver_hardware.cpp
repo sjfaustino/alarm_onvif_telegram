@@ -5,6 +5,7 @@
 #include "net_watchdog_logic.h" // isReservedOrUnsafePin
 #include "config.h" // NET_WATCHDOG_THRESHOLD_MAX_MS/NET_WATCHDOG_PULSE_MAX_MS and BRIDGE_/POWER_MONITOR_ counterparts
 #include "format_utils.h" // formatElapsedSince, htmlEscape
+#include "webserver_internal.h"
 
 // Internet-connectivity watchdog (relay-based router power-cycle) -
 // optional, off by default, same "enable checkbox needs a reboot, status
@@ -199,4 +200,156 @@ String renderPowerMonitorPage() {
           "enable checkbox.</p>";
   html += "</fieldset>";
   return html;
+}
+
+void registerHardwareRoutes(PsychicHttpServer& server) {
+  server.on("/hardware/internet", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
+    return response->send(200, "text/html",
+                           renderShell(Tab::HardwareInternet, "", renderInternetWatchdogPage()).c_str());
+  });
+
+  server.on("/hardware/internet/save", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
+    NetWatchdogSettings settings;
+    settings.enabled = request->hasParam("enabled");
+    settings.activeLow = request->hasParam("activeLow");
+
+    settings.pin = request->getParam("pin", String(NET_WATCHDOG_PIN_DEFAULT).c_str()).toInt();
+
+    // Clamped here and again at use in net_watchdog.cpp.
+    long thresholdMinutes = request->getParam("outageThresholdMinutes", "5").toInt();
+    if (thresholdMinutes < 1) thresholdMinutes = 1;
+    unsigned long thresholdMs = (unsigned long)thresholdMinutes * 60000UL;
+    if (thresholdMs > NET_WATCHDOG_THRESHOLD_MAX_MS) thresholdMs = NET_WATCHDOG_THRESHOLD_MAX_MS;
+    settings.outageThresholdMs = thresholdMs;
+
+    long pulseSeconds = request->getParam("pulseSeconds", "10").toInt();
+    if (pulseSeconds < 1) pulseSeconds = 1;
+    unsigned long pulseMs = (unsigned long)pulseSeconds * 1000UL;
+    if (pulseMs > NET_WATCHDOG_PULSE_MAX_MS) pulseMs = NET_WATCHDOG_PULSE_MAX_MS;
+    settings.pulseDurationMs = pulseMs;
+
+    String banner;
+    BridgeWatchdogSettings bridgeSettings = loadBridgeWatchdogSettings();
+    PowerMonitorSettings powerSettings = loadPowerMonitorSettings();
+    if (settings.enabled && isReservedOrUnsafePin(settings.pin)) {
+      banner = "Pin " + String(settings.pin) + " is reserved by another peripheral on this board or "
+               "unsafe to use for general GPIO - pick a different one. Not saved.";
+    } else if (watchdogPinsConflict(settings.enabled, settings.pin, bridgeSettings.enabled, bridgeSettings.pin)) {
+      banner = "Pin " + String(settings.pin) + " is already used by the Camera Bridge Watchdog - pick "
+               "a different one. Not saved.";
+    } else if (watchdogPinsConflict(settings.enabled, settings.pin, powerSettings.enabled, powerSettings.pin)) {
+      banner = "Pin " + String(settings.pin) + " is already used by the 220V Power Monitor - pick a "
+               "different one. Not saved.";
+    } else {
+      banner = saveNetWatchdogSettings(settings)
+          ? "Saved - the enable checkbox and pin need a reboot to apply; the threshold and pulse "
+            "duration are active immediately."
+          : "Failed to save - NVS write error (see Serial log). Setting was NOT changed.";
+    }
+    return response->send(200, "text/html",
+                           renderShell(Tab::HardwareInternet, banner, renderInternetWatchdogPage()).c_str());
+  });
+
+  server.on("/hardware/internet/pulse", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
+    String banner = netWatchdogManualPulse()
+        ? "Relay pulsed."
+        : "Internet Watchdog isn't active (disabled, or the configured pin wasn't accepted at boot) - nothing to pulse.";
+    return response->send(200, "text/html",
+                           renderShell(Tab::HardwareInternet, banner, renderInternetWatchdogPage()).c_str());
+  });
+
+  server.on("/hardware/bridge", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
+    return response->send(200, "text/html",
+                           renderShell(Tab::HardwareBridge, "", renderBridgeWatchdogPage(g_liveCameras)).c_str());
+  });
+
+  server.on("/hardware/bridge/save", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
+    BridgeWatchdogSettings settings;
+    settings.enabled = request->hasParam("enabled");
+    settings.activeLow = request->hasParam("activeLow");
+    settings.cameraA = request->getParam("cameraA", "");
+    settings.cameraB = request->getParam("cameraB", "");
+
+    settings.pin = request->getParam("pin", String(BRIDGE_WATCHDOG_PIN_DEFAULT).c_str()).toInt();
+
+    // Clamped here and again at use in bridge_watchdog.cpp.
+    long thresholdMinutes = request->getParam("outageThresholdMinutes", "5").toInt();
+    if (thresholdMinutes < 1) thresholdMinutes = 1;
+    unsigned long thresholdMs = (unsigned long)thresholdMinutes * 60000UL;
+    if (thresholdMs > BRIDGE_WATCHDOG_THRESHOLD_MAX_MS) thresholdMs = BRIDGE_WATCHDOG_THRESHOLD_MAX_MS;
+    settings.outageThresholdMs = thresholdMs;
+
+    long pulseSeconds = request->getParam("pulseSeconds", "10").toInt();
+    if (pulseSeconds < 1) pulseSeconds = 1;
+    unsigned long pulseMs = (unsigned long)pulseSeconds * 1000UL;
+    if (pulseMs > BRIDGE_WATCHDOG_PULSE_MAX_MS) pulseMs = BRIDGE_WATCHDOG_PULSE_MAX_MS;
+    settings.pulseDurationMs = pulseMs;
+
+    String banner;
+    NetWatchdogSettings netSettings = loadNetWatchdogSettings();
+    PowerMonitorSettings powerSettings = loadPowerMonitorSettings();
+    if (settings.enabled && (settings.cameraA.length() == 0 || settings.cameraB.length() == 0)) {
+      banner = "Both Camera A and Camera B must be selected. Not saved.";
+    } else if (settings.enabled && settings.cameraA.equalsIgnoreCase(settings.cameraB)) {
+      banner = "Camera A and Camera B must be two different cameras. Not saved.";
+    } else if (settings.enabled && isReservedOrUnsafePin(settings.pin)) {
+      banner = "Pin " + String(settings.pin) + " is reserved by another peripheral on this board or "
+               "unsafe to use for general GPIO - pick a different one. Not saved.";
+    } else if (watchdogPinsConflict(settings.enabled, settings.pin, netSettings.enabled, netSettings.pin)) {
+      banner = "Pin " + String(settings.pin) + " is already used by the Internet Watchdog - pick a "
+               "different one. Not saved.";
+    } else if (watchdogPinsConflict(settings.enabled, settings.pin, powerSettings.enabled, powerSettings.pin)) {
+      banner = "Pin " + String(settings.pin) + " is already used by the 220V Power Monitor - pick a "
+               "different one. Not saved.";
+    } else {
+      banner = saveBridgeWatchdogSettings(settings)
+          ? "Saved - the enable checkbox, cameras, and pin need a reboot to apply; the threshold and "
+            "pulse duration are active immediately."
+          : "Failed to save - NVS write error (see Serial log). Setting was NOT changed.";
+    }
+    return response->send(200, "text/html",
+                           renderShell(Tab::HardwareBridge, banner, renderBridgeWatchdogPage(g_liveCameras)).c_str());
+  });
+
+  server.on("/hardware/bridge/pulse", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
+    String banner = bridgeWatchdogManualPulse()
+        ? "Relay pulsed."
+        : "Camera Bridge Watchdog isn't active (disabled, or the configured pin wasn't accepted at boot) - nothing to pulse.";
+    return response->send(200, "text/html",
+                           renderShell(Tab::HardwareBridge, banner, renderBridgeWatchdogPage(g_liveCameras)).c_str());
+  });
+
+  server.on("/hardware/power", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
+    return response->send(200, "text/html",
+                           renderShell(Tab::HardwarePower, "", renderPowerMonitorPage()).c_str());
+  });
+
+  server.on("/hardware/power/save", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
+    PowerMonitorSettings settings;
+    settings.enabled = request->hasParam("enabled");
+    settings.activeHigh = request->hasParam("activeHigh");
+
+    settings.pin = request->getParam("pin", String(POWER_MONITOR_PIN_DEFAULT).c_str()).toInt();
+
+    String banner;
+    NetWatchdogSettings netSettings = loadNetWatchdogSettings();
+    BridgeWatchdogSettings bridgeSettings = loadBridgeWatchdogSettings();
+    if (settings.enabled && isReservedOrUnsafePin(settings.pin)) {
+      banner = "Pin " + String(settings.pin) + " is reserved by another peripheral on this board or "
+               "unsafe to use for general GPIO - pick a different one. Not saved.";
+    } else if (watchdogPinsConflict(settings.enabled, settings.pin, netSettings.enabled, netSettings.pin)) {
+      banner = "Pin " + String(settings.pin) + " is already used by the Internet Watchdog - pick a "
+               "different one. Not saved.";
+    } else if (watchdogPinsConflict(settings.enabled, settings.pin, bridgeSettings.enabled, bridgeSettings.pin)) {
+      banner = "Pin " + String(settings.pin) + " is already used by the Camera Bridge Watchdog - pick "
+               "a different one. Not saved.";
+    } else {
+      banner = savePowerMonitorSettings(settings)
+          ? "Saved - the enable checkbox and pin need a reboot to apply; the wiring polarity is active "
+            "immediately."
+          : "Failed to save - NVS write error (see Serial log). Setting was NOT changed.";
+    }
+    return response->send(200, "text/html",
+                           renderShell(Tab::HardwarePower, banner, renderPowerMonitorPage()).c_str());
+  });
 }

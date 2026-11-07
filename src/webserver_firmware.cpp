@@ -9,6 +9,8 @@
 #include <nvs_flash.h>
 #include <nvs.h>
 #include <time.h>
+#include "webserver_internal.h"
+#include <Update.h>
 
 // "" for epoch 0 (no timestamp recorded).
 static String formatEpochLocal(time_t epoch) {
@@ -97,4 +99,75 @@ String renderFirmwarePanel() {
           "image's checksum verifies. If verification fails, nothing is applied and the board keeps "
           "running the current firmware.</p>";
   return html;
+}
+
+// ============================================================
+// Firmware upload (OTA). Update writes to the inactive app partition and only
+// marks it bootable once verified, so a failed upload changes nothing.
+// ============================================================
+
+static bool   g_otaError = false;
+static String g_otaErrorMsg;
+
+void registerFirmwareRoutes(PsychicHttpServer& server) {
+  server.on("/firmware", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
+    return response->send(200, "text/html", renderShell(Tab::Firmware, "", renderFirmwarePanel()).c_str());
+  });
+
+  static PsychicUploadHandler* otaHandler = new PsychicUploadHandler();
+  otaHandler->onUpload([](PsychicRequest* request, const String& filename, uint64_t index, uint8_t* data,
+                           size_t len, bool last) -> esp_err_t {
+    if (index == 0) {
+      g_otaError = false;
+      g_otaErrorMsg = "";
+      Serial.printf("[Firmware] Upload started: %s\n", filename.c_str());
+      // An upload that dropped mid-way never gets its final chunk, leaving
+      // Update "running" and refusing every later attempt until reboot.
+      // index==0 is the start of a new upload, so clear any leftover state.
+      if (Update.isRunning()) {
+        Serial.println("[Firmware] A previous upload never finished (dropped connection?) - "
+                        "aborting it before starting this one.");
+        Update.abort();
+      }
+      if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
+        g_otaError = true;
+        g_otaErrorMsg = Update.errorString();
+        Serial.printf("[Firmware] Update.begin failed: %s\n", g_otaErrorMsg.c_str());
+      }
+    }
+    if (!g_otaError && len > 0 && Update.write(data, len) != len) {
+      g_otaError = true;
+      g_otaErrorMsg = Update.errorString();
+      Serial.printf("[Firmware] Update.write failed: %s\n", g_otaErrorMsg.c_str());
+    }
+    if (last) {
+      if (!g_otaError && !Update.end(true)) {
+        g_otaError = true;
+        g_otaErrorMsg = Update.errorString();
+      }
+      Serial.printf("[Firmware] Upload finished (%s).\n", g_otaError ? "FAILED" : "OK - rebooting");
+    }
+    return ESP_OK; // keep accepting bytes even after a failure, so the upload doesn't just hang client-side
+  });
+  otaHandler->onRequest([](PsychicRequest* request, PsychicResponse* response) -> esp_err_t {
+    if (g_otaError) {
+      String banner = "Firmware update FAILED: " + g_otaErrorMsg + " - current firmware keeps running.";
+      return response->send(200, "text/html", renderShell(Tab::Firmware, banner, renderFirmwarePanel()).c_str());
+    }
+    esp_err_t result = response->send(
+        200, "text/html",
+        renderShell(Tab::Firmware, "Firmware accepted - rebooting now, this page will stop responding.",
+                    "<p class=\"hint\">Reconnect in about 15 seconds.</p>")
+            .c_str());
+    // The image is committed and the response already promised a reboot; if
+    // the task can't be created, the update won't apply until some later
+    // reboot. All we can do is log it.
+    if (xTaskCreate(delayedRebootTask, "otaReboot", 2048, nullptr, 1, nullptr) != pdPASS) {
+      Serial.println("[Firmware] ERROR: failed to start the post-update reboot task (out of memory?) - "
+                      "the new firmware is flashed but the board will NOT reboot on its own. Reboot "
+                      "manually from the Maintenance page once memory frees up.");
+    }
+    return result;
+  });
+  server.on("/firmware/update", HTTP_POST, otaHandler);
 }

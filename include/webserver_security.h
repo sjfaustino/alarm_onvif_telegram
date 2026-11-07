@@ -1,9 +1,6 @@
 #pragma once
 #include <Arduino.h>
 
-// Security panel content (dashboard login status + change form). Split
-// out of webserver.cpp - see webserver_network.h's comment for why. The
-// actual login-checking/updating (the auth middleware) stays in
-// webserver.cpp, since it's tied to the PsychicHttpServer instance there.
-// Config export/import itself lives in config_backup.h.
+// Security panel content (dashboard login status + change form). The login
+// middleware is in webserver.cpp; config export/import is in config_backup.h.
 String renderSecurityPanel();

@@ -10,6 +10,7 @@
 #include <freertos/FreeRTOS.h>
 #include <cctype>
 #include <time.h>
+#include "webserver_internal.h"
 
 // Live connection rows, shown under whichever network is connected.
 static String renderLiveConnectionRows() {
@@ -361,4 +362,37 @@ String renderWifiScanStatus() {
 
 bool networkJobsInProgress() {
   return g_wifiScanJob.status().inProgress;
+}
+
+void registerNetworkRoutes(PsychicHttpServer& server) {
+  server.on("/network", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
+    // From a scan result's Add link; escaped when rendered.
+    String prefillSsid = request->getParam("prefillSsid", "");
+    return response->send(
+        200, "text/html", renderShell(Tab::Network, "", renderNetworkPanel(prefillSsid)).c_str());
+  });
+
+  server.on("/network/save", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
+    String banner;
+    handleSaveNetwork(request, banner);
+    return response->send(200, "text/html", renderShell(Tab::Network, banner, renderNetworkPanel()).c_str());
+  });
+
+  server.on("/network/rtc/save", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
+    RtcSettings settings;
+    settings.enabled = request->hasParam("enabled");
+    String banner = saveRtcSettings(settings)
+        ? "Saved - reboot the board to apply."
+        : "Failed to save - NVS write error (see Serial log). Setting was NOT changed.";
+    return response->send(200, "text/html", renderShell(Tab::Network, banner, renderNetworkPanel()).c_str());
+  });
+
+  server.on("/network/scan", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
+    // Background task; returns immediately.
+    String banner = backgroundJobBanner(
+        startWifiScanAsync(), "Scanning for WiFi networks in the background.",
+        "A WiFi scan is already running in the background - reload in a moment to see its result.",
+        "Could not start the WiFi scan - the device is low on memory right now. Try again in a moment.");
+    return response->send(200, "text/html", renderShell(Tab::Network, banner, renderNetworkPanel()).c_str());
+  });
 }
