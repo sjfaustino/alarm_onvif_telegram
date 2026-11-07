@@ -416,6 +416,22 @@ void test_classifyPullResponse_empty_is_unrecognized(void) {
   TEST_ASSERT_TRUE(classifyPullResponse("") == PullResponseKind::Unrecognized);
 }
 
+// Vatilon cameras report person detection as tns1:UserAlarm/HumanShapeDetect.
+void test_human_shape_detect_counts_as_person(void) {
+  const char* xml = "<wsnt:NotificationMessage>" "<tt:Message><wsnt:Topic>tns1:UserAlarm/HumanShapeDetect</wsnt:Topic><tt:Data><tt:SimpleItem Name=\"State\" Value=\"true\"/></tt:Data></tt:Message>" "</wsnt:NotificationMessage>";
+  CameraEventClassification ev = classifyCameraEvent(xml);
+  TEST_ASSERT_TRUE(ev.peopleDetect);
+  TEST_ASSERT_TRUE(personTopicReportedTrue(xml));
+  TEST_ASSERT_TRUE(motionEventFired(xml, ev));
+}
+
+void test_human_shape_detect_false_is_not_a_person(void) {
+  const char* xml = "<wsnt:NotificationMessage><tt:Message><wsnt:Topic>tns1:UserAlarm/HumanShapeDetect</wsnt:Topic>"
+                    "<tt:Data><tt:SimpleItem Name=\"State\" Value=\"false\"/></tt:Data></tt:Message></wsnt:NotificationMessage>";
+  TEST_ASSERT_FALSE(personTopicReportedTrue(xml));
+  TEST_ASSERT_FALSE(motionEventFired(xml, classifyCameraEvent(xml)));
+}
+
 int main(int argc, char** argv) {
   UNITY_BEGIN();
   RUN_TEST(test_parseProfiles_finds_token_and_name);
@@ -462,5 +478,7 @@ int main(int argc, char** argv) {
   RUN_TEST(test_classifyPullResponse_resource_unknown_is_fault);
   RUN_TEST(test_classifyPullResponse_other_text_is_unrecognized);
   RUN_TEST(test_classifyPullResponse_empty_is_unrecognized);
+  RUN_TEST(test_human_shape_detect_counts_as_person);
+  RUN_TEST(test_human_shape_detect_false_is_not_a_person);
   return UNITY_END();
 }

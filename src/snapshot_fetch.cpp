@@ -1,3 +1,4 @@
+#include "http_digest.h"
 #include "telegram_internal.h"
 #include "config.h"
 #include <HTTPClient.h>
@@ -115,10 +116,27 @@ uint8_t* fetchOneSnapshot(const CameraConfig& cfg, CameraState& st, size_t& outL
   http.setAuthorization(user, pass);
   http.setTimeout(HTTP_TIMEOUT_MS);
   // HTTPClient only exposes headers registered with collectHeaders().
-  static const char* kCollectedHeaders[] = {"Transfer-Encoding"};
-  http.collectHeaders(kCollectedHeaders, 1);
+  static const char* kCollectedHeaders[] = {"Transfer-Encoding", "WWW-Authenticate"};
+  http.collectHeaders(kCollectedHeaders, 2);
 
   int code = http.GET();
+  // Some cameras (a Vatilon H46) refuse Basic and challenge for Digest; HTTPClient
+  // only does Basic, so answer the challenge once.
+  if (code == 401) {
+    String challenge = http.header("WWW-Authenticate");
+    http.end();
+    char cnonce[17];
+    snprintf(cnonce, sizeof(cnonce), "%08lx%08lx", (unsigned long)esp_random(), (unsigned long)esp_random());
+    String authorization = digestAuthorization(challenge, "GET", requestUriFromUrl(snapshotUri), user ? user : "",
+                                               pass ? pass : "", cnonce);
+    if (authorization.length() > 0) {
+      http.begin(snapshotUri);
+      http.setTimeout(HTTP_TIMEOUT_MS);
+      http.collectHeaders(kCollectedHeaders, 2);
+      http.addHeader("Authorization", authorization);
+      code = http.GET();
+    }
+  }
   if (code != 200) {
     Serial.printf("[%s] Snapshot GET failed, HTTP %d\n", cfg.name.c_str(), code);
     http.end();

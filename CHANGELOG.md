@@ -12,6 +12,10 @@ A cleanup release: the code is reorganised and much better tested, and the
 firmware behaves the same except where noted below.
 
 ### Changed
+- `HumanShapeDetect` (person detection on Vatilon cameras) now triggers person
+  alerts like `PeopleDetect`.
+- Snapshot URLs that answer Basic auth with a Digest challenge now get a Digest
+  login.
 - A camera with no snapshot address (Tapo cameras offer none over ONVIF) now
   sends its motion alert as text, with the same caption plus "(no photo
   available)". It used to send nothing at all.

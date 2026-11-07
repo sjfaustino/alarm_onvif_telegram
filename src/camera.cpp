@@ -133,7 +133,7 @@ bool cameraGetEventServiceCapabilities(const CameraConfig& cfg, CameraState& st)
 // The topic keywords acted on anywhere; one list so advertised-topic scans and
 // live-event matching can't drift.
 static const char* const kKnownEventTopics[] = {
-    "PeopleDetect", "VehicleDetect", "DogCatDetect", "MotionAlarm", "CellMotionDetector",
+    "PeopleDetect", "HumanShapeDetect", "VehicleDetect", "DogCatDetect", "MotionAlarm", "CellMotionDetector",
     "TamperDetector", "SignalLoss",
 };
 
@@ -423,7 +423,7 @@ static void parseEvents(const CameraConfig& cfg, CameraState& st, const String& 
     // Checked separately: one batch can report person and vehicle together,
     // and each has its own opt-out. Collapsing to one kind first once let a
     // muted person alert swallow a wanted vehicle alert.
-    bool personDetected = ev.peopleDetect && topicReportedTrue(xml, "PeopleDetect");
+    bool personDetected = ev.peopleDetect && personTopicReportedTrue(xml);
     bool vehicleDetected = ev.vehicleDetect && topicReportedTrue(xml, "VehicleDetect");
     bool plainMotionDetected = (ev.motionAlarm && topicReportedTrue(xml, "MotionAlarm")) ||
                                (ev.cellMotion && topicReportedTrue(xml, "CellMotionDetector"));
