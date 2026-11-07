@@ -479,8 +479,6 @@ bool cameraPullMessages(const CameraConfig& cfg, CameraState& st) {
                 "<tev:MessageLimit>20</tev:MessageLimit></tev:PullMessages>";
   String response = cameraSoapCall(cfg, st, st.pullPointUrl, st.pullPointUrl, action, body);
 
-  if (response.length() == 0) return false;
-
   PullResponseKind kind = classifyPullResponse(response);
   if (kind == PullResponseKind::Success) {
     // Only a good poll proves the subscription works: a camera can accept a
@@ -505,16 +503,20 @@ bool cameraPullMessages(const CameraConfig& cfg, CameraState& st) {
     return false;
   }
 
-  // Unrecognized response (neither success nor fault). Resubscribe after
-  // PULL_MESSAGES_AMBIGUOUS_LIMIT in a row instead of polling a dead pull
-  // point forever.
+  // No usable answer: unrecognized, or no reply at all (a Tapo TC65 accepted
+  // subscriptions and then dropped every poll's connection). Resubscribe after
+  // PULL_MESSAGES_AMBIGUOUS_LIMIT in a row rather than polling a dead pull point
+  // forever, with backoff: abandoned subscriptions linger on the camera until they
+  // expire, and some cameras only have a few slots.
   if (++st.pullAmbiguousStreak >= PULL_MESSAGES_AMBIGUOUS_LIMIT) {
-    Serial.printf("[%s] PullMessages returned an unrecognized response %u time(s) in a row - "
-                  "treating the subscription as dead, will resubscribe.\n",
-                  cfg.name.c_str(), (unsigned)st.pullAmbiguousStreak);
     { CameraStateLock lock(st); st.subscriptionActive = false; }
     st.pullPointUrl = "";
     st.pullAmbiguousStreak = 0;
+    st.retryDelayMs = nextRetryDelayMs(cfg, st.retryDelayMs);
+    unsigned long sinceRetry = millis() - st.lastRetry;
+    unsigned long waitMs = sinceRetry >= st.retryDelayMs ? 0 : st.retryDelayMs - sinceRetry;
+    Serial.printf("[%s] No usable PullMessages response %u time(s) in a row - resubscribing in %lus.\n",
+                  cfg.name.c_str(), (unsigned)PULL_MESSAGES_AMBIGUOUS_LIMIT, waitMs / 1000UL);
   }
   return false;
 }

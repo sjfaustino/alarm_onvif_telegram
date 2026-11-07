@@ -50,8 +50,8 @@ struct CameraState {
   uint8_t retryStreak     = 0;
   unsigned long retryDelayMs = 0;
 
-  // Consecutive unrecognized PullMessages responses; at
-  // PULL_MESSAGES_AMBIGUOUS_LIMIT the task resubscribes.
+  // Consecutive PullMessages calls with no usable answer (unrecognized or no
+  // reply); at PULL_MESSAGES_AMBIGUOUS_LIMIT the task resubscribes.
   uint8_t pullAmbiguousStreak = 0;
   uint32_t lastAlert      = 0;
   bool     hasAlerted     = false; // disambiguates lastAlert==0 from "alerted at boot" (see triggerMotionAlert)

@@ -34,6 +34,9 @@ firmware behaves the same except where noted below.
   records failed allocations and saves a heap-low record that survives reboots.
 
 ### Fixed
+- A camera whose poll connections kept dropping stayed "subscribed" and
+  delivered nothing, polling the dead subscription forever. Five polls in a row
+  with no usable reply now trigger a resubscribe, with backoff.
 - A crash (lwIP assert "Required to lock TCPIP core functionality", caught in a
   core dump from the live board) when an NTP lookup was pending as the board's
   IP state changed. SNTP is now only given an already-resolved address, retried

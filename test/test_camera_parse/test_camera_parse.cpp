@@ -411,6 +411,11 @@ void test_classifyPullResponse_other_text_is_unrecognized(void) {
   TEST_ASSERT_TRUE(classifyPullResponse("<html>busy</html>") == PullResponseKind::Unrecognized);
 }
 
+// No reply at all (a dropped connection) counts toward resubscribing too.
+void test_classifyPullResponse_empty_is_unrecognized(void) {
+  TEST_ASSERT_TRUE(classifyPullResponse("") == PullResponseKind::Unrecognized);
+}
+
 int main(int argc, char** argv) {
   UNITY_BEGIN();
   RUN_TEST(test_parseProfiles_finds_token_and_name);
@@ -456,5 +461,6 @@ int main(int argc, char** argv) {
   RUN_TEST(test_classifyPullResponse_success_with_fault_like_topic_stays_success);
   RUN_TEST(test_classifyPullResponse_resource_unknown_is_fault);
   RUN_TEST(test_classifyPullResponse_other_text_is_unrecognized);
+  RUN_TEST(test_classifyPullResponse_empty_is_unrecognized);
   return UNITY_END();
 }

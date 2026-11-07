@@ -21,8 +21,8 @@ static const unsigned long PULL_INTERVAL_MS         = 2000UL;
 static const unsigned long SUBSCRIPTION_LIFETIME_MS = 4UL * 60UL * 1000UL;
 static const unsigned long RENEW_MARGIN_MS          = 60UL * 1000UL;
 static const unsigned long RETRY_INTERVAL_MS        = 10000UL;
-// Consecutive unrecognized PullMessages responses before a forced resubscribe
-// (~10s at the default 2s poll).
+// Consecutive PullMessages calls with no usable answer before a forced
+// resubscribe (~10s at the default 2s poll).
 static const uint8_t        PULL_MESSAGES_AMBIGUOUS_LIMIT = 5;
 // Reserved up front for g_cameras/g_cameraStates so adding a camera live never
 // reallocates them; tasks hold raw pointers into both (see camera_tasks.h).
