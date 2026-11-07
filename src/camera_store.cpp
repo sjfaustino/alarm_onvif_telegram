@@ -2,8 +2,8 @@
 #include "camera_serialize.h"
 #include "nvs_chunk.h" // joinChunks, for the old chunked list
 #include "secrets.h"
+#include <LittleFS.h>
 #include <Preferences.h>
-#include <nvs.h>
 #include <esp_task_wdt.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
@@ -13,18 +13,21 @@
 // layer's own save mutex.
 static SemaphoreHandle_t g_camerasMutex = xSemaphoreCreateMutex();
 
+// The list lives in a LittleFS file: the schema version (2 bytes, little-endian),
+// then the records. A save writes CAMERA_FILE_TMP and renames it over
+// CAMERA_FILE, so a failed save changes nothing. NVS (20 KB, shared with WiFi
+// and PHY calibration) had no room for a 14-camera list plus the new copy a safe
+// save needs.
+static const char* CAMERA_FILE     = "/cameras.dat";
+static const char* CAMERA_FILE_TMP = "/cameras.tmp";
+
 static const char* NVS_NAMESPACE  = "camstore";
-// Old single-key list: read as a fallback, never written. One large value hit
-// NVS's per-entry limit and silently lost cameras (see nvs_chunk.h).
+// Older NVS formats: read once to migrate, then erased. The single-key list hit
+// NVS's per-entry limit; the chunked strings "list0", "list1", ... could be left
+// mixed old and new by a save that failed part-way, corrupting a record.
 static const char* NVS_KEY_LIST_LEGACY = "list";
-// Chunked strings "list0", "list1", ...: read as a fallback, never written. A
-// save that failed part-way left new and old chunks mixed, corrupting a record.
 static const char* NVS_KEY_LIST_CHUNKS = "listChunks"; // uint16_t chunk count
 static const char* NVS_KEY_SCHEMA = "schema"; // the chunked list's version
-// Current format: one blob, the schema version (2 bytes, little-endian) then the
-// records. NVS keeps the previous blob until the new one is fully written, so a
-// failed save changes nothing, and a blob can span pages.
-static const char* NVS_KEY_LIST_BLOB = "camlist";
 // Bumped to rerun the restore once more after the chunking fix.
 static const char* NVS_KEY_SEED_RESTORED = "seedRestore3"; // see restoreMissingCamerasFromSeed()
 
@@ -58,45 +61,86 @@ static String chunkKey(uint16_t index) {
   return String(key);
 }
 
-std::vector<CameraConfig> loadCameras() {
-  Preferences prefs;
-  // Read-write (see loadDashboardAuth).
-  prefs.begin(NVS_NAMESPACE, false);
-  bool hasBlobList    = prefs.isKey(NVS_KEY_LIST_BLOB);
-  bool hasChunkedList = prefs.isKey(NVS_KEY_LIST_CHUNKS);
-  bool hasLegacyList  = prefs.isKey(NVS_KEY_LIST_LEGACY);
-  bool alreadyInitialized = hasBlobList || hasChunkedList || hasLegacyList;
+// Mounted on first use, which is setup()'s loadCameras(); formats the
+// partition if it has never held a filesystem.
+static bool cameraFsReady() {
+  static bool tried = false, ready = false;
+  if (!tried) {
+    tried = true;
+    ready = LittleFS.begin(true);
+    if (!ready) Serial.println("[camera_store] ERROR: could not mount LittleFS - camera changes can't be saved.");
+  }
+  return ready;
+}
 
+static bool readCameraFile(const char* path, uint16_t& version, String& records) {
+  File f = LittleFS.open(path, "r");
+  if (!f) return false;
+  size_t len = f.size();
+  std::vector<uint8_t> raw(len);
+  bool ok = len >= 2 && f.read(raw.data(), len) == len;
+  f.close();
+  if (!ok) {
+    Serial.printf("[camera_store] ERROR: could not read %s (%u bytes).\n", path, (unsigned)len);
+    return false;
+  }
+  version = (uint16_t)(raw[0] | (raw[1] << 8));
+  records = "";
+  records.concat((const char*)raw.data() + 2, len - 2);
+  return true;
+}
+
+static void eraseNvsCameraList() {
+  Preferences prefs;
+  if (!prefs.begin(NVS_NAMESPACE, false)) return;
+  uint16_t chunkCount = prefs.getUShort(NVS_KEY_LIST_CHUNKS, 0);
+  for (uint16_t i = 0; i < chunkCount; i++) prefs.remove(chunkKey(i).c_str());
+  prefs.remove(NVS_KEY_LIST_CHUNKS);
+  prefs.remove(NVS_KEY_SCHEMA);
+  prefs.remove(NVS_KEY_LIST_LEGACY);
+  prefs.end();
+}
+
+std::vector<CameraConfig> loadCameras() {
   String blob;
   uint16_t storedVersion = 0; // 0 = pre-versioning records
-  if (hasBlobList) {
-    size_t len = prefs.getBytesLength(NVS_KEY_LIST_BLOB);
-    std::vector<uint8_t> raw(len);
-    if (len >= 2 && prefs.getBytes(NVS_KEY_LIST_BLOB, raw.data(), len) == len) {
-      storedVersion = (uint16_t)(raw[0] | (raw[1] << 8));
-      blob.concat((const char*)raw.data() + 2, len - 2);
-    } else {
-      Serial.printf("[camera_store] ERROR: the stored camera list (%u bytes) could not be read.\n", (unsigned)len);
-    }
-  } else if (hasChunkedList) {
-    uint16_t chunkCount = prefs.getUShort(NVS_KEY_LIST_CHUNKS, 0);
-    std::vector<String> chunks;
-    chunks.reserve(chunkCount);
-    for (uint16_t i = 0; i < chunkCount; i++) chunks.push_back(prefs.getString(chunkKey(i).c_str(), ""));
-    blob = joinChunks(chunks);
-  } else if (hasLegacyList) {
-    blob = prefs.getString(NVS_KEY_LIST_LEGACY, ""); // pre-chunking format - see its declaration comment
+  bool fromFile = false;
+  bool alreadyInitialized = false;
+  if (cameraFsReady()) {
+    // The temporary file only survives alone if a save was cut off between
+    // removing the old file and renaming (see saveCameras).
+    fromFile = readCameraFile(CAMERA_FILE, storedVersion, blob) ||
+               (!LittleFS.exists(CAMERA_FILE) && readCameraFile(CAMERA_FILE_TMP, storedVersion, blob));
+    alreadyInitialized = fromFile || LittleFS.exists(CAMERA_FILE);
   }
-  if (!hasBlobList) storedVersion = prefs.getUShort(NVS_KEY_SCHEMA, 0);
-  prefs.end();
+
+  if (!fromFile) {
+    Preferences prefs;
+    // Read-write (see loadDashboardAuth).
+    prefs.begin(NVS_NAMESPACE, false);
+    bool hasChunkedList = prefs.isKey(NVS_KEY_LIST_CHUNKS);
+    bool hasLegacyList  = prefs.isKey(NVS_KEY_LIST_LEGACY);
+    alreadyInitialized = alreadyInitialized || hasChunkedList || hasLegacyList;
+    if (hasChunkedList) {
+      uint16_t chunkCount = prefs.getUShort(NVS_KEY_LIST_CHUNKS, 0);
+      std::vector<String> chunks;
+      chunks.reserve(chunkCount);
+      for (uint16_t i = 0; i < chunkCount; i++) chunks.push_back(prefs.getString(chunkKey(i).c_str(), ""));
+      blob = joinChunks(chunks);
+    } else if (hasLegacyList) {
+      blob = prefs.getString(NVS_KEY_LIST_LEGACY, ""); // pre-chunking format - see its declaration comment
+    }
+    storedVersion = prefs.getUShort(NVS_KEY_SCHEMA, 0);
+    prefs.end();
+  }
 
   if (!alreadyInitialized) {
     std::vector<CameraConfig> cams = seedFromSecrets();
     if (!saveCameras(cams)) {
-      Serial.println("[camera_store] ERROR: failed to persist the first-boot CAMERA_SEED to NVS - "
+      Serial.println("[camera_store] ERROR: failed to persist the first-boot CAMERA_SEED - "
                       "this boot will still use it, but it wasn't saved and won't survive a reboot.");
     } else {
-      Serial.printf("[camera_store] First boot with NVS-backed camera storage - seeded %u camera(s) "
+      Serial.printf("[camera_store] First boot with stored cameras - seeded %u camera(s) "
                     "from secrets.h's CAMERA_SEED.\n", (unsigned)cams.size());
     }
     sortCamerasByName(cams);
@@ -146,7 +190,7 @@ std::vector<CameraConfig> loadCameras() {
                   "NVS this boot so the raw data isn't lost. Only the %u that parsed are active for "
                   "now; saving anything from this dashboard will overwrite the stored list, including "
                   "the unparsed records.\n", droppedRecords, totalRecords, (unsigned)cams.size());
-  } else if (storedVersion != CAMERA_SCHEMA_VERSION || !hasBlobList) {
+  } else if (storedVersion != CAMERA_SCHEMA_VERSION || !fromFile) {
     // Once per boot: this runs on every page load, and a save that fails for
     // lack of space would fail again.
     static bool migrationTried = false;
@@ -154,7 +198,7 @@ std::vector<CameraConfig> loadCameras() {
       migrationTried = true;
       Serial.printf("[camera_store] Migrating %u camera record(s) from schema %u to %u%s.\n",
                     (unsigned)cams.size(), (unsigned)storedVersion, (unsigned)CAMERA_SCHEMA_VERSION,
-                    hasBlobList ? "" : " (single NVS blob)");
+                    fromFile ? "" : ", from NVS to LittleFS");
       saveCameras(cams);
     }
   }
@@ -171,30 +215,32 @@ bool saveCameras(const std::vector<CameraConfig>& cameras) {
     raw.insert(raw.end(), record.c_str(), record.c_str() + record.length());
   }
 
-  // The raw NVS API, for the error code Preferences hides.
-  nvs_handle_t handle;
-  esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle);
-  if (err == ESP_OK) {
-    err = nvs_set_blob(handle, NVS_KEY_LIST_BLOB, raw.data(), raw.size());
-    if (err == ESP_OK) err = nvs_commit(handle);
-    if (err == ESP_OK) {
-      // The older formats are stale now; erasing them frees their space.
-      uint16_t oldChunkCount = 0;
-      nvs_get_u16(handle, NVS_KEY_LIST_CHUNKS, &oldChunkCount);
-      for (uint16_t i = 0; i < oldChunkCount; i++) nvs_erase_key(handle, chunkKey(i).c_str());
-      nvs_erase_key(handle, NVS_KEY_LIST_CHUNKS);
-      nvs_erase_key(handle, NVS_KEY_SCHEMA);
-      nvs_erase_key(handle, NVS_KEY_LIST_LEGACY);
-      nvs_commit(handle);
+  const char* failure = nullptr;
+  if (!cameraFsReady()) {
+    failure = "LittleFS is not mounted";
+  } else {
+    File f = LittleFS.open(CAMERA_FILE_TMP, "w");
+    size_t written = f ? f.write(raw.data(), raw.size()) : 0;
+    if (f) f.close();
+    if (written != raw.size()) {
+      failure = "writing the new list failed (filesystem full?)";
+      LittleFS.remove(CAMERA_FILE_TMP);
+    } else if (!LittleFS.rename(CAMERA_FILE_TMP, CAMERA_FILE)) {
+      // LittleFS's rename replaces the target atomically; this fallback is in
+      // case a VFS layer refuses an existing one. loadCameras reads the
+      // temporary file if a reset lands between the two steps.
+      if (!LittleFS.remove(CAMERA_FILE) || !LittleFS.rename(CAMERA_FILE_TMP, CAMERA_FILE)) {
+        failure = "replacing the old list failed";
+      }
     }
-    nvs_close(handle);
   }
 
-  if (err != ESP_OK) {
+  if (failure) {
     Serial.printf("[camera_store] ERROR: could not save %u camera(s) (%u bytes): %s. The stored list is "
-                  "unchanged.\n", (unsigned)cameras.size(), (unsigned)raw.size(), esp_err_to_name(err));
+                  "unchanged.\n", (unsigned)cameras.size(), (unsigned)raw.size(), failure);
     return false;
   }
+  eraseNvsCameraList(); // a no-op once migrated; frees about 130 NVS entries the first time
   return true;
 }
 

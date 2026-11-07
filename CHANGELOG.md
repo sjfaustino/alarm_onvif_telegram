@@ -40,9 +40,10 @@ firmware behaves the same except where noted below.
 ### Fixed
 - A camera list save that failed part-way (NVS nearly full) left old and new
   pieces mixed, which corrupted one camera's record so that camera vanished.
-  The list is now saved as one NVS blob, which is replaced only once fully
-  written; a failed save changes nothing and says the storage is full,
-  instead of "a camera with that name already exists".
+  The list now lives in a LittleFS file on the unused 1.5 MB data
+  partition, replaced only once the new copy is fully written, and moves
+  there from NVS on the first boot. A failed save changes nothing and says
+  so, instead of "a camera with that name already exists".
 - Editing a camera whose task had stopped (no username/password) said
   "applying live" but changed nothing until a reboot. The save now restarts
   it, and the table shows such a camera as STOPPED, and a just-added one as

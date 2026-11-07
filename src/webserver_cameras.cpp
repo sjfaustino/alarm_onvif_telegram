@@ -511,8 +511,8 @@ bool saveCameraSubmission(CameraConfig cam, const String& originalName, String& 
       return false;
     }
     if (added != CameraSaveResult::Saved) {
-      banner = "Could not save \"" + htmlEscape(cam.name) + "\" - the settings storage (NVS) is full "
-               "or failed. Nothing was changed; NVS usage is on the Firmware page.";
+      banner = "Could not save \"" + htmlEscape(cam.name) + "\" - saving to storage failed. Nothing "
+               "was changed; the Serial log says why.";
       return false;
     }
     // New camera: staged for loop() to add live, unless MAX_CAMERAS is used up
@@ -553,8 +553,8 @@ bool saveCameraSubmission(CameraConfig cam, const String& originalName, String& 
     } else if (updated == CameraSaveResult::NotFound) {
       banner = "Could not save \"" + htmlEscape(originalName) + "\" - it no longer exists.";
     } else {
-      banner = "Could not save \"" + htmlEscape(cam.name) + "\" - the settings storage (NVS) is full "
-               "or failed. Nothing was changed; NVS usage is on the Firmware page.";
+      banner = "Could not save \"" + htmlEscape(cam.name) + "\" - saving to storage failed. Nothing "
+               "was changed; the Serial log says why.";
     }
     return false;
   }
