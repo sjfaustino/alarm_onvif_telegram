@@ -434,6 +434,7 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
   registerStorageRoutes(server);
   registerCapabilitiesRoutes(server);
   registerSecurityRoutes(server);
+  registerDebugRoutes(server);
 
   server.begin();
   Serial.printf("[WebServer] Camera management UI listening on http://%s:80/\n",

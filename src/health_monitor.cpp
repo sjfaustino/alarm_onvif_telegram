@@ -9,6 +9,7 @@
 #include "event_log_store.h"
 #include "heap_health.h"
 #include "task_stall.h"
+#include "diagnostics.h"
 #include "sd_store.h"
 #include "telegram.h"
 #include "telegram_i18n.h"
@@ -182,6 +183,7 @@ void checkHeapHealth() {
   g_heapBaselineSet = true;
   g_heapBaseline = r.baseline;
   if (r.shouldAlert) g_heapLowAlerted = true;
+  diagnosticsOnHeapTick(r.baseline, r.isNewLow);
   if (!r.shouldLog) return;
 
   // Largest free block: much smaller than total free means fragmentation, not

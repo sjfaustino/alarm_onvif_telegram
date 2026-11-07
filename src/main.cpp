@@ -24,6 +24,7 @@
 #include "time_sync.h"
 #include "boot_checks.h"
 #include "health_monitor.h"
+#include "diagnostics.h"
 
 static unsigned long lastHeartbeatMs = 0;
 static unsigned long lastCommandPollMs = 0;
@@ -148,6 +149,7 @@ static void startMonitoring() {
 void setup() {
   Serial.begin(115200);
   delay(BOOT_SETTLE_MS);
+  initDiagnostics();
   Serial.println("\n========================================");
   Serial.println("MULTI-CAMERA ONVIF MOTION MONITOR");
   Serial.println("========================================");

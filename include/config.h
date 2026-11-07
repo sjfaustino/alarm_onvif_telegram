@@ -36,6 +36,10 @@ static const unsigned long CAMERA_POLL_INTERVAL_MAX_MS = 30000UL; // 30s
 // Generous: a big photo burst to many recipients can legitimately take minutes.
 static const unsigned long CAMERA_TASK_STALL_MS = 10UL * 60UL * 1000UL;
 static const unsigned long CAMERA_TASK_CHECK_INTERVAL_MS = 30UL * 1000UL;
+// Log bytes kept in PSRAM for /debug/log.
+static const size_t DEBUG_LOG_RING_BYTES = 64UL * 1024UL;
+// At most one heap-low record is written to NVS per this interval.
+static const unsigned long HEAP_LOW_SAVE_GAP_MS = 60UL * 1000UL;
 // Retry cadence for a subscribed camera whose snapshot URI isn't resolved yet.
 // Well above the poll rate: a camera with no Media service fails this forever.
 static const unsigned long SNAPSHOT_URI_RETRY_INTERVAL_MS = 5UL * 60UL * 1000UL; // 5 minutes

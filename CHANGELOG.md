@@ -25,6 +25,11 @@ firmware behaves the same except where noted below.
   are never exported. Previously they claimed no passwords were exported and
   asked for camera passwords to be re-entered after an import.
 
+### Added
+- Remote diagnostics, off unless `DEBUG_TOKEN` is set: `/debug/status`, `/debug/log`
+  and crash dump download, with `scripts/board.py` as a client. The board also
+  records failed allocations and saves a heap-low record that survives reboots.
+
 ### Fixed
 - A huge outage threshold or pulse duration on the Hardware pages wrapped to a
   tiny value instead of being capped.
