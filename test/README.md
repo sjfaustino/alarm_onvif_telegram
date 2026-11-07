@@ -25,8 +25,8 @@ this way:
 |---|---|---|
 | `xml_helpers`                | `onvif_soap.cpp`                       | ONVIF response substring parsing (`findElementByLocalName`, `findAttributeValue`/`findAttributeInTag`, `responseHasFault`) and `xmlEscape` - hardened against inconsistent attribute quoting and a closing tag that drops its namespace prefix |
 | `camera_serialize`           | `camera_store.cpp`                     | `CameraConfig` <-> NVS blob (de)serialization, schema-versioned (see below) |
-| `camera_form`                | `webserver_cameras.cpp`                | Camera Add/Edit form render + parse; golden HTML fixtures pin the exact markup |
-| `user_form`                  | `webserver_users.cpp`                  | Telegram user Add/Edit form render + parse; golden HTML fixtures |
+| `camera_form`                | `webserver_cameras.cpp`                | Camera Add/Edit form: rendered HTML submitted back through the parser (`html_form_reader`), plus every parse default and limit |
+| `user_form`                  | `webserver_users.cpp`                  | Telegram user Add/Edit form, tested the same way |
 | `hardware_form`              | `webserver_hardware.cpp`               | Hardware page parsing and pin-clash validation, including the overflow-safe duration clamp |
 | `camera_clamps`              | `telegram_alerts.cpp` + `camera.cpp`   | Limits re-applied when stored camera settings are used |
 | `task_stall`                 | `health_monitor.cpp`                   | Alert-once/re-arm decision for stuck camera tasks |

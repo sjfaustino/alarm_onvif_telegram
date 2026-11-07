@@ -12,6 +12,10 @@ A cleanup release: the code is reorganised and much better tested, and the
 firmware behaves the same except where noted below.
 
 ### Changed
+- Boot no longer waits 5 seconds for a serial terminal; alerts start sooner after
+  every reboot (`BOOT_SETTLE_MS`, 250 ms, leaves time for SD and the RTC).
+- A camera task that stops making progress for 10 minutes now triggers a
+  Telegram alert, and another when it recovers.
 - The firmware version now comes from `git describe` (e.g. `1.1.0`, or
   `1.1.0-3-gabc1234` between releases) instead of a build timestamp, so a
   running board says exactly which commit it was built from.
@@ -20,6 +24,10 @@ firmware behaves the same except where noted below.
   did - that's how an import restores working cameras) and that WiFi passwords
   are never exported. Previously they claimed no passwords were exported and
   asked for camera passwords to be re-entered after an import.
+
+### Fixed
+- A huge outage threshold or pulse duration on the Hardware pages wrapped to a
+  tiny value instead of being capped.
 
 ### Internal
 - `telegram.cpp` (2,500 lines) split into transport, snapshot fetch, alerts
@@ -32,8 +40,11 @@ firmware behaves the same except where noted below.
 - The camera and Telegram user forms moved into natively tested libraries
   (`lib/camera_form`, `lib/user_form`). The camera form is now one field table
   that drives both the HTML and the parsing/clamping; both forms are built
-  from shared input helpers in `lib/webserver_html`. Golden tests pin their
-  exact HTML.
+  from shared input helpers in `lib/webserver_html`. Tests submit the rendered
+  HTML back through the parser, the way a browser would.
+- Hardware page parsing and validation (`lib/hardware_form`) and the limits applied
+  to stored camera settings (`lib/camera_clamps`) moved where tests can reach them.
+- Library versions and the CI's PlatformIO version are pinned; CI also runs weekly.
 - `startWebServer` (750 lines) split: each dashboard page now registers its own
   routes. Form labels and pin fallbacks now come from `config.h` constants.
 - `scripts/check_comment_only.sh` proves a change touched only comments.
