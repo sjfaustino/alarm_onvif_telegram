@@ -16,7 +16,9 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.x"
+          # Not "3.x": the pinned ESP32 platform rejects versions newer than it
+          # supports (3.15 failed the build).
+          python-version: "3.13"
 
       - name: Cache PlatformIO packages
         uses: actions/cache@v4
@@ -54,7 +56,9 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.x"
+          # Not "3.x": the pinned ESP32 platform rejects versions newer than it
+          # supports (3.15 failed the build).
+          python-version: "3.13"
 
       - name: Cache PlatformIO packages
         uses: actions/cache@v4
