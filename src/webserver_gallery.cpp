@@ -4,6 +4,7 @@
 #include "sd_store.h"
 #include "format_utils.h"
 #include "config.h" // GALLERY_PAGE_SIZE
+#include "webserver_internal.h"
 
 static int findLiveCameraIndex(std::vector<CameraConfig>* liveCameras, const String& name) {
   if (!liveCameras) return -1;
@@ -187,4 +188,19 @@ String renderGalleryPanel(const String& cameraFilter, size_t page, const String&
                            std::vector<CameraState>* liveStates) {
   if (cameraFilter.length() == 0) return renderCameraPicker(liveCameras, liveStates);
   return renderCameraGrid(cameraFilter, page, sourceFilter, dateFilter, liveCameras, liveStates);
+}
+
+void registerGalleryRoutes(PsychicHttpServer& server) {
+  server.on("/gallery", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
+    String camera = request->getParam("camera", "");
+    String source = request->getParam("source", "");
+    String date = request->getParam("date", "");
+    long page = request->getParam("page", "0").toInt();
+    if (page < 0) page = 0; // a negative/garbage param falls back to the newest page, not undefined behavior
+    return response->send(
+        200, "text/html",
+        renderShell(Tab::Gallery, "",
+                    renderGalleryPanel(camera, (size_t)page, source, date, g_liveCameras, g_liveStates))
+            .c_str());
+  });
 }

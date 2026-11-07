@@ -1,6 +1,8 @@
 #include "webserver_security.h"
 #include "auth_store.h"
 #include "format_utils.h"
+#include "webserver_internal.h"
+#include "config_backup.h"
 
 String renderSecurityPanel() {
   DashboardAuth auth = loadDashboardAuth();
@@ -56,7 +58,7 @@ String renderSecurityPanel() {
   // each) could blow well past the dashboard's ordinary request-body cap
   // on exactly the multi-camera setups this feature exists to back up. A
   // real file upload is bounded by the much larger upload-size limit
-  // (webserver.cpp's importHandler) instead, and streams in rather than
+  // (registerSecurityRoutes' importHandler) instead, and streams in rather than
   // needing to be buffered whole by the browser into a hidden field first.
   html += "<form method=\"POST\" action=\"/import\" enctype=\"multipart/form-data\" "
           "onsubmit=\"return confirm('Import this "
@@ -69,4 +71,79 @@ String renderSecurityPanel() {
           "<input type=\"file\" name=\"configFile\" accept=\".txt\" required></label>";
   html += "<p><button type=\"submit\">Import configuration</button></p></form></fieldset>";
   return html;
+}
+
+void registerSecurityRoutes(PsychicHttpServer& server) {
+  server.on("/security", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
+    return response->send(200, "text/html", renderShell(Tab::Security, "", renderSecurityPanel()).c_str());
+  });
+
+  // Downloads as a file. Note: the machine-readable CAMERAS block includes
+  // camera passwords (WiFi passwords are never exported).
+  server.on("/export", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) -> esp_err_t {
+    response->addHeader("Content-Disposition", "attachment; filename=\"camera-monitor-config.txt\"");
+    return response->send(200, "text/plain", buildConfigExport().c_str());
+  });
+
+  // A multipart upload, not a form field: an export can exceed PsychicHttp's
+  // 16K body limit once percent-encoded. Chunks are accumulated into a String
+  // (exports are KB-sized).
+  static String g_importText;
+  static String g_importBanner;
+
+  static PsychicUploadHandler* importHandler = new PsychicUploadHandler();
+  importHandler->onUpload([](PsychicRequest* request, const String& filename, uint64_t index, uint8_t* data,
+                              size_t len, bool last) -> esp_err_t {
+    if (index == 0) g_importText = ""; // first chunk of THIS upload - drop any leftover from a previous one
+    if (len > 0) g_importText.concat((const char*)data, len);
+    if (last) {
+      ConfigImportApplyResult r = applyConfigImport(g_importText);
+      g_importText = ""; // done with it - don't hold the buffer until the next import
+      g_importBanner = summarizeImportResult(r, ImportSummaryFormat::Html);
+    }
+    return ESP_OK;
+  });
+  importHandler->onRequest([](PsychicRequest* request, PsychicResponse* response) -> esp_err_t {
+    return response->send(200, "text/html", renderShell(Tab::Security, g_importBanner, renderSecurityPanel()).c_str());
+  });
+  server.on("/import", HTTP_POST, importHandler);
+
+  // The automatic pre-import backup, in export format - re-import it to undo.
+  server.on("/import/backup", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) -> esp_err_t {
+    String backup = loadConfigBackup();
+    if (backup.length() == 0) {
+      return response->send(200, "text/plain",
+                             "No pre-import backup available yet - one is saved automatically the next "
+                             "time Import is used.");
+    }
+    response->addHeader("Content-Disposition", "attachment; filename=\"camera-monitor-config-backup.txt\"");
+    return response->send(200, "text/plain", backup.c_str());
+  });
+
+  server.on("/security/save", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
+    String username = request->getParam("username", "");
+    String password = request->getParam("password", "");
+    String confirmPassword = request->getParam("confirmPassword", "");
+    username.trim();
+
+    String banner;
+    if (username.length() == 0 || password.length() == 0) {
+      banner = "Username and password are both required.";
+    } else if (password != confirmPassword) {
+      banner = "Password and confirmation don't match - not saved.";
+    } else {
+      DashboardAuth newAuth;
+      newAuth.username = username;
+      newAuth.password = password;
+      if (!saveDashboardAuth(newAuth)) {
+        // Leave the live login alone if the save failed; otherwise it would
+        // silently revert on the next reboot.
+        banner = "Failed to save - NVS write error (see Serial log). Login was NOT changed.";
+      } else {
+        applyDashboardLogin(newAuth);
+        banner = "Saved - a login is now required on every page, starting now.";
+      }
+    }
+    return response->send(200, "text/html", renderShell(Tab::Security, banner, renderSecurityPanel()).c_str());
+  });
 }

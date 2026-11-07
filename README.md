@@ -565,13 +565,13 @@ src/
   sd_store.cpp        # SD.h/SPI.h usage lives only here - mount/write/list/read/prune/erase/check
   snapshot_history.cpp # SD-vs-PSRAM-ring dispatch; also owns the PSRAM ring's own logic
                         # (moved out of telegram.cpp when SD support was added)
-  webserver.cpp      # routing table, dashboard shell, OTA upload state, login rate-limiting
-                       # middleware - see webserver_*.cpp for panels
-  webserver_network.cpp, webserver_cameras.cpp, webserver_users.cpp, webserver_activity.cpp,
-  webserver_gallery.cpp, webserver_firmware.cpp, webserver_maintenance.cpp, webserver_storage.cpp,
-  webserver_security.cpp
-                     # each panel's rendering/form-handling, split out of what used to be one
-                     # 946-line webserver.cpp
+  webserver.cpp      # server setup, login and rate-limiting middleware, dashboard shell
+  webserver_network.cpp, webserver_users.cpp, webserver_activity.cpp, webserver_gallery.cpp,
+  webserver_firmware.cpp, webserver_maintenance.cpp, webserver_hardware.cpp,
+  webserver_storage.cpp, webserver_capabilities.cpp, webserver_security.cpp
+                     # one per page: its content, form handling and routes
+  webserver_cameras.cpp, webserver_camera_routes.cpp
+                     # Cameras page content and jobs; its routes
   config_backup.cpp  # config export/import/backup - no HTML, shared with Telegram /backup, /restore
   telegram_transport.cpp # TLS sends to the Bot API (message/photo/document/keyboard), the
                            # project-wide Telegram send mutex, local-clock helpers

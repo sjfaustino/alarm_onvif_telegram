@@ -70,7 +70,7 @@ now comes back empty instead.
 
 - **`onvif_soap.cpp`'s `soapPost`/`makeSecurityHeader`/`isoTimeNow`, the SOAP
   call sequencing in `camera.cpp`, `telegram_transport.cpp`'s actual send paths,
-  `webserver.cpp`'s route handlers, `main.cpp`'s boot sequence** - all
+  the dashboard's route handlers, `main.cpp`'s boot sequence** - all
   fundamentally about talking to a network/clock/NVS that doesn't exist on a
   CI runner. Testing these for real would mean either running against actual
   ONVIF cameras and a real Telegram bot (not reproducible, not CI-safe), or
@@ -83,7 +83,7 @@ now comes back empty instead.
   watchdog, `CameraState`'s cross-task locking, the web server's request
   handling) - needs either real hardware or a FreeRTOS simulator; out of
   scope here.
-- **`webserver.cpp`'s ~1000 lines of hand-built HTML** - not logic so much
+- **The dashboard pages' hand-built HTML (other than the two tested forms)** - not logic so much
   as string assembly; the highest-value thing to test there would be that
   every user-controlled value passed to `htmlEscape()` actually gets there,
   which is more of a lint/audit than a unit test. Not attempted yet.

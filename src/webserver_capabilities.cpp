@@ -1,5 +1,6 @@
 #include "webserver_capabilities.h"
 #include "format_utils.h" // htmlEscape
+#include "webserver_internal.h"
 
 String renderCapabilitiesPanel(std::vector<CameraConfig>* liveCameras, std::vector<CameraState>* liveStates) {
   String html = "<h1>Capabilities</h1>";
@@ -60,4 +61,12 @@ String renderCapabilitiesPanel(std::vector<CameraConfig>* liveCameras, std::vect
 
   html += "</table>";
   return html;
+}
+
+void registerCapabilitiesRoutes(PsychicHttpServer& server) {
+  server.on("/capabilities", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
+    return response->send(
+        200, "text/html",
+        renderShell(Tab::Capabilities, "", renderCapabilitiesPanel(g_liveCameras, g_liveStates)).c_str());
+  });
 }

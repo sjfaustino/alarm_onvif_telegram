@@ -4,6 +4,8 @@
 #include "format_utils.h"
 #include "background_job.h" // BackgroundJob<T> - startStorageCheckAsync
 #include <freertos/FreeRTOS.h>
+#include "webserver_internal.h"
+#include "config.h" // SD_CHECK_INTERVAL_MAX_HOURS, SD_RETENTION_*
 
 String renderStoragePanel() {
   SdStatus status = getSdStatus();
@@ -178,4 +180,48 @@ String renderEraseAllStatus() {
 
 bool storageJobsInProgress() {
   return g_storageCheckJob.status().inProgress || g_eraseAllJob.status().inProgress;
+}
+
+void registerStorageRoutes(PsychicHttpServer& server) {
+  server.on("/storage", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
+    return response->send(200, "text/html", renderShell(Tab::Storage, "", renderStoragePanel()).c_str());
+  });
+
+  server.on("/storage/save", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
+    SdSettings settings;
+    settings.enabled = request->hasParam("enabled");
+    long intervalHours = request->getParam("checkIntervalHours", "0").toInt();
+    if (intervalHours < 0) intervalHours = 0;
+    if (intervalHours > (long)SD_CHECK_INTERVAL_MAX_HOURS) intervalHours = (long)SD_CHECK_INTERVAL_MAX_HOURS;
+    settings.checkIntervalHours = (uint32_t)intervalHours;
+    // Clamped here and again at use.
+    long retentionDays = request->getParam("retentionDays", String(SD_RETENTION_DAYS_DEFAULT).c_str()).toInt();
+    if (retentionDays < 0) retentionDays = 0;
+    if (retentionDays > (long)SD_RETENTION_MAX_DAYS) retentionDays = (long)SD_RETENTION_MAX_DAYS;
+    settings.retentionDays = (uint16_t)retentionDays;
+    String banner = saveSdSettings(settings)
+        ? "Saved - the enable/disable setting needs a reboot to apply; the check interval and "
+          "retention setting are active immediately."
+        : "Failed to save - NVS write error (see Serial log). Setting was NOT changed.";
+    return response->send(200, "text/html", renderShell(Tab::Storage, banner, renderStoragePanel()).c_str());
+  });
+
+  server.on("/storage/check", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
+    // Background task; returns immediately.
+    String banner = backgroundJobBanner(
+        startStorageCheckAsync(), "Checking storage in the background.",
+        "A storage check is already running in the background - reload in a moment to see its result.",
+        "Could not start the storage check - the device is low on memory right now. Try again in a moment.");
+    return response->send(200, "text/html", renderShell(Tab::Storage, banner, renderStoragePanel()).c_str());
+  });
+
+  server.on("/storage/erase", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
+    Serial.println("[Storage] Erase all snapshot history requested via dashboard.");
+    // Background task; returns immediately.
+    String banner = backgroundJobBanner(
+        startEraseAllAsync(), "Erasing all snapshot history in the background.",
+        "An erase is already running in the background - reload in a moment to see its result.",
+        "Could not start the erase - the device is low on memory right now. Try again in a moment.");
+    return response->send(200, "text/html", renderShell(Tab::Storage, banner, renderStoragePanel()).c_str());
+  });
 }

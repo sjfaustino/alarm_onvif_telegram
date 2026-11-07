@@ -9,6 +9,7 @@
 #include "telegram_i18n.h" // trTestMessage
 #include "background_job.h" // BackgroundJob<T> - startTestMessageAsync
 #include <freertos/FreeRTOS.h>
+#include "webserver_internal.h"
 
 // Same badge-on/badge-off pattern as the Cameras page's "Enabled" column
 // (webserver_cameras.cpp) - lets a wide permissions table be scanned at a
@@ -176,4 +177,63 @@ bool saveUserSubmission(const TelegramUser& user, const String& originalName, St
     return false;
   }
   return true;
+}
+
+void registerUserRoutes(PsychicHttpServer& server) {
+  server.on("/users", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
+    // From an unknown-chat Add link; escaped when rendered.
+    String prefillChatId = request->getParam("prefillChatId", "");
+    TelegramUser prefill;
+    TelegramUser* prefillPtr = nullptr;
+    if (prefillChatId.length() > 0) {
+      prefill.chatId = prefillChatId;
+      prefill.allCameras = true; // friendlier default for a brand-new user, same as the blank Add form
+      prefillPtr = &prefill;
+    }
+    return response->send(200, "text/html", renderShell(Tab::Users, "", renderUsersPanel(prefillPtr, false)).c_str());
+  });
+
+  server.on("/users/edit", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
+    String name = request->getParam("name", "");
+    for (auto& u : loadTelegramUsers()) {
+      if (u.name.equalsIgnoreCase(name)) {
+        TelegramUser prefill = u;
+        return response->send(200, "text/html",
+                               renderShell(Tab::Users, "", renderUsersPanel(&prefill, true)).c_str());
+      }
+    }
+    return response->redirect("/users");
+  });
+
+  server.on("/users/save", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
+    TelegramUser submitted = parseUserForm(request);
+    String originalName = request->getParam("originalName", "");
+    originalName.trim();
+
+    String banner;
+    if (!saveUserSubmission(submitted, originalName, banner)) {
+      return response->send(200, "text/html",
+                             renderShell(Tab::Users, banner,
+                                         renderUsersPanel(&submitted, originalName.length() > 0)).c_str());
+    }
+    return response->redirect("/users");
+  });
+
+  server.on("/users/delete", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
+    String name = request->getParam("name", "");
+    deleteTelegramUser(name);
+    return response->redirect("/users");
+  });
+
+  server.on("/users/test", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
+    // Background task; returns immediately.
+    String banner = backgroundJobBanner(
+        startTestMessageAsync(), "Sending a test message in the background.",
+        "A test message is already being sent in the background - reload in a moment to see its result.",
+        "Could not start sending the test message - the device is low on memory right now. Try again in a "
+        "moment.");
+    return response->send(
+        200, "text/html",
+        renderShell(Tab::Users, banner, renderUsersPanel(nullptr, false)).c_str());
+  });
 }
