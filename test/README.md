@@ -27,6 +27,9 @@ this way:
 | `camera_serialize`           | `camera_store.cpp`                     | `CameraConfig` <-> NVS blob (de)serialization, schema-versioned (see below) |
 | `camera_form`                | `webserver_cameras.cpp`                | Camera Add/Edit form render + parse; golden HTML fixtures pin the exact markup |
 | `user_form`                  | `webserver_users.cpp`                  | Telegram user Add/Edit form render + parse; golden HTML fixtures |
+| `hardware_form`              | `webserver_hardware.cpp`               | Hardware page parsing and pin-clash validation, including the overflow-safe duration clamp |
+| `camera_clamps`              | `telegram_alerts.cpp` + `camera.cpp`   | Limits re-applied when stored camera settings are used |
+| `task_stall`                 | `health_monitor.cpp`                   | Alert-once/re-arm decision for stuck camera tasks |
 | `telegram_user_serialize`    | `telegram_users.cpp`                   | `TelegramUser` <-> NVS blob (de)serialization (also schema-versioned), and `telegramUserWantsCamera` |
 | `telegram_parse`             | `telegram_commands.cpp`                | `parseTelegramUpdates` (ArduinoJson, replacing hand-rolled brace-counting) and the `/on`/`/off`/`/snap` camera-name prefix matching |
 | `backoff`                    | `main.cpp` + `camera.cpp` (duplicated) | The doubling-with-a-cap retry delay formula, previously hand-written twice and prone to drifting apart |

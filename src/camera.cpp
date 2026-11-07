@@ -1,3 +1,4 @@
+#include "camera_clamps.h"
 #include "camera.h"
 #include "onvif_soap.h"
 #include "telegram.h"
@@ -218,13 +219,6 @@ bool cameraGetEventProperties(const CameraConfig& cfg, CameraState& st, String* 
              " - not used by this firmware yet");
   }
   return true;
-}
-
-// Clamped at use; 0 means unset.
-static uint16_t safeSnapshotDimension(uint16_t value) {
-  if (value == 0) return 0;
-  if (value > CAMERA_SNAPSHOT_DIMENSION_MAX) return CAMERA_SNAPSHOT_DIMENSION_MAX;
-  return value;
 }
 
 bool cameraFetchProfileAndSnapshotUri(const CameraConfig& cfg, CameraState& st) {
@@ -544,15 +538,6 @@ bool cameraSetupSequence(const CameraConfig& cfg, CameraState& st) {
 // threshold. A fault still counts as contact, but only once per retry: with
 // both at 5 minutes, backed-off cameras false-alarmed as OFFLINE.
 static const unsigned long RETRY_BACKOFF_MAX_MS = 300000UL; // 5 minutes between retries
-
-// Clamped at use. Near 0 would open a new connection ("Connection: close") in
-// a tight loop.
-static unsigned long safePollIntervalMs(const CameraConfig& cfg) {
-  unsigned long ms = cfg.pollIntervalMs;
-  if (ms < CAMERA_POLL_INTERVAL_MIN_MS) ms = CAMERA_POLL_INTERVAL_MIN_MS;
-  if (ms > CAMERA_POLL_INTERVAL_MAX_MS) ms = CAMERA_POLL_INTERVAL_MAX_MS;
-  return ms;
-}
 
 // ============================================================
 // Per-camera task, pinned to core 1 (away from WiFi and loopTask on core 0).

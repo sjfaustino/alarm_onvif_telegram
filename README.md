@@ -589,6 +589,9 @@ lib/                 # pure-logic modules with no hardware dependencies, split o
   camera_serialize/       # CameraConfig <-> NVS blob (de)serialization, schema-versioned
   camera_form/            # camera Add/Edit form: rendering and parsing/clamping (golden-tested)
   user_form/              # Telegram user Add/Edit form: rendering and parsing (golden-tested)
+  hardware_form/          # Hardware page forms: parsing, pin-clash validation
+  camera_clamps/          # limits re-applied when stored camera settings are used
+  task_stall/             # alert-once logic for stuck camera tasks
   telegram_user_serialize/ # TelegramUser <-> NVS blob (de)serialization, schema-versioned
   telegram_parse/         # Telegram JSON escaping, /on,/off,/snap camera-name matching, and
                            # /on,/off timer-token parsing (minutes or HH:MM)

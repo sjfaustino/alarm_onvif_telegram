@@ -12,34 +12,10 @@
 #include <esp_task_wdt.h>
 #include <WiFi.h>
 #include <freertos/FreeRTOS.h>
+#include "camera_clamps.h"
 #include <freertos/semphr.h>
 #include <vector>
 #include <algorithm>
-
-// Clamped at use (imported configs bypass the form). 0 isn't "off": it would
-// alert on every poll with no digest throttling - the multi-camera burst that
-// once broke TLS.
-static unsigned long safeAlertCooldownMs(const CameraConfig& cfg) {
-  unsigned long ms = cfg.alertCooldownMs;
-  if (ms == 0) ms = CameraConfig().alertCooldownMs;
-  if (ms > CAMERA_ALERT_COOLDOWN_MAX_MS) ms = CAMERA_ALERT_COOLDOWN_MAX_MS;
-  return ms;
-}
-
-// 0 would mark every camera OFFLINE permanently.
-static unsigned long safeOfflineThresholdMs(const CameraConfig& cfg) {
-  unsigned long ms = cfg.offlineThresholdMs;
-  if (ms == 0) ms = CameraConfig().offlineThresholdMs;
-  if (ms > CAMERA_OFFLINE_THRESHOLD_MAX_MS) ms = CAMERA_OFFLINE_THRESHOLD_MAX_MS;
-  return ms;
-}
-
-// Shots go out back-to-back, so an unclamped count floods Telegram.
-static unsigned int safeSnapshotBurstCount(const CameraConfig& cfg) {
-  unsigned int shots = (cfg.snapshotBurstCount > 0) ? cfg.snapshotBurstCount : 1;
-  if (shots > CAMERA_SNAPSHOT_BURST_MAX) shots = CAMERA_SNAPSHOT_BURST_MAX;
-  return shots;
-}
 
 // Just what the alert paths need (chat and language), not the full
 // TelegramUser with its camera-name vector - avoids heap churn on every alert.
