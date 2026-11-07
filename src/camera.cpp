@@ -581,7 +581,7 @@ void cameraTaskFn(void* pvParameters) {
     String cameraName = cfg.name;
     sendTelegramMessage([cameraName](TelegramLang lang) { return trMissingCredentials(lang, cameraName, false); });
     { CameraStateLock lock(st); st.taskRunning = false; }
-    vTaskDelete(nullptr);
+    vTaskSuspend(nullptr); // deleted by reapStoppedCameraTasks (camera_tasks.h); never resumes
     return;
   }
 
@@ -614,7 +614,7 @@ void cameraTaskFn(void* pvParameters) {
       Serial.printf("[%s] Stopped via dashboard (disabled/deleted) - task exiting, no reboot needed.\n",
                     cfg.name.c_str());
       logEvent(cfg.name + ": monitoring stopped live (disabled/deleted via dashboard)");
-      vTaskDelete(nullptr);
+      vTaskSuspend(nullptr); // deleted by reapStoppedCameraTasks (camera_tasks.h); never resumes
       return;
     }
 

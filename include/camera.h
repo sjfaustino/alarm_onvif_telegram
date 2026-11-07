@@ -1,6 +1,7 @@
 #pragma once
 #include <Arduino.h>
 #include <freertos/semphr.h> // SemaphoreHandle_t, for CameraState::stateMutex
+#include <freertos/task.h>   // TaskHandle_t, for CameraState::taskHandle
 #include "config.h"
 #include "camera_store.h" // CameraConfig
 #include "snapshot_source.h" // SnapshotSource
@@ -103,6 +104,9 @@ struct CameraState {
   // Task liveness for checkCameraTasks. taskRunning is true from task start
   // until it exits; lastTaskBeatMs is refreshed at the top of every loop pass.
   bool taskRunning = false;
+  // Set by spawnCameraTask, cleared when the stopped task is deleted. Guarded by
+  // camera_tasks.cpp's reap mutex, not stateMutex.
+  TaskHandle_t taskHandle = nullptr;
   unsigned long lastTaskBeatMs = 0;
   bool taskStallAlerted = false;
 

@@ -15,6 +15,10 @@ extern std::vector<CameraState> g_cameraStates;
 // its config/state.
 void spawnCameraTask(size_t index);
 
+// Deletes camera tasks that have stopped (disabled or deleted live, or missing
+// credentials). Call every loop() tick; cheap.
+void reapStoppedCameraTasks();
+
 // Queues a new camera for loop() to add and start. False if MAX_CAMERAS is
 // used up (the caller then says a reboot is needed). One pending slot, last
 // write wins - PsychicHttp handles one save at a time.

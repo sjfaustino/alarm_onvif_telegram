@@ -42,7 +42,10 @@ struct TelegramUser {
 // True if this user should receive alerts for camera `cameraName`.
 bool telegramUserWantsCamera(const TelegramUser& user, const String& cameraName);
 
-// Loads from NVS. A fresh board seeds one "Admin" from secrets.h's
+// Returns a copy of the list, which is kept in RAM after the first call: alert
+// paths run on camera tasks whose stacks are in PSRAM and must never read NVS.
+// Call once at boot, before camera tasks start. Loads from NVS the first time. A
+// fresh board seeds one "Admin" from secrets.h's
 // TELEGRAM_CHAT_ID with everything except the permissions above.
 std::vector<TelegramUser> loadTelegramUsers();
 

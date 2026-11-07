@@ -9,6 +9,7 @@
 #include "camera_store.h"
 #include "network_store.h"
 #include "telegram.h"
+#include "telegram_users.h"
 #include "webserver.h"
 #include "format_utils.h"
 #include "event_log_store.h"
@@ -203,6 +204,10 @@ void setup() {
   // Self-gating one-time recovery; safe to leave in.
   restoreMissingCamerasFromSeed();
 
+  // Loads the Telegram users into RAM now, while only this task runs: camera
+  // tasks (PSRAM stacks) must never be the first to read them from NVS.
+  loadTelegramUsers();
+
   // Reserve MAX_CAMERAS before any task exists: tasks hold raw pointers into
   // these vectors, and the headroom lets a live add push_back without
   // reallocating.
@@ -242,6 +247,7 @@ void loop() {
 
   // Only this task may grow g_cameras (see camera_tasks.h).
   applyPendingNewCameraIfAny();
+  reapStoppedCameraTasks();
 
   // No WiFi gate: a stall is worth logging even if the alert has to queue.
   if (g_monitoringStarted && millis() - lastCameraTaskCheckMs >= CAMERA_TASK_CHECK_INTERVAL_MS) {

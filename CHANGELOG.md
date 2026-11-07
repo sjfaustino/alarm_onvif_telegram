@@ -38,6 +38,10 @@ firmware behaves the same except where noted below.
   records failed allocations and saves a heap-low record that survives reboots.
 
 ### Fixed
+- With 8 cameras enabled, free internal RAM fell to 6.7 KB during a Telegram
+  photo send. Camera task stacks (10 KB each) now live in PSRAM, leaving internal
+  RAM for TLS. The Telegram user list is kept in RAM so those tasks never read
+  flash.
 - A camera whose poll connections kept dropping stayed "subscribed" and
   delivered nothing, polling the dead subscription forever. Five polls in a row
   with no usable reply now trigger a resubscribe, with backoff.

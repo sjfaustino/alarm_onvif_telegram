@@ -9,6 +9,26 @@
 std::vector<CameraConfig> g_cameras;
 std::vector<CameraState> g_cameraStates;
 
+// Camera task stacks are in PSRAM, which must be freed with vTaskDeleteWithCaps
+// and preferably not by the task itself. A stopping task suspends itself instead,
+// and it's deleted here, from loop() or from spawnCameraTask reusing the slot.
+static SemaphoreHandle_t g_reapMutex = xSemaphoreCreateMutex();
+
+// Caller holds g_reapMutex.
+static void reapIfStopped(size_t index) {
+  TaskHandle_t handle = g_cameraStates[index].taskHandle;
+  if (handle && eTaskGetState(handle) == eSuspended) {
+    vTaskDeleteWithCaps(handle);
+    g_cameraStates[index].taskHandle = nullptr;
+  }
+}
+
+void reapStoppedCameraTasks() {
+  xSemaphoreTake(g_reapMutex, portMAX_DELAY);
+  for (size_t i = 0; i < g_cameraStates.size(); i++) reapIfStopped(i);
+  xSemaphoreGive(g_reapMutex);
+}
+
 // Starts a task for an existing slot (boot, live re-enable, or live add).
 void spawnCameraTask(size_t index) {
   cameraStateInit(g_cameraStates[index]); // must run before any other task can see this camera - see camera.h
@@ -21,14 +41,20 @@ void spawnCameraTask(size_t index) {
   char taskName[16];
   snprintf(taskName, sizeof(taskName), "cam%u", (unsigned)index);
   // 10KB covers SOAP strings plus a TLS handshake. Core 1, like loopTask, to
-  // stay off the core-0 WiFi tasks.
-  BaseType_t created =
-      xTaskCreatePinnedToCore(cameraTaskFn, taskName, 10240, ctx, tskIDLE_PRIORITY + 1, nullptr, 1);
+  // stay off the core-0 WiFi tasks. The stack is in PSRAM: with 8 cameras,
+  // internal-RAM stacks left too little for a TLS handshake (free heap fell to
+  // 6.7KB during a photo send). Such a task must never touch flash - see
+  // loadTelegramUsers.
+  xSemaphoreTake(g_reapMutex, portMAX_DELAY);
+  reapIfStopped(index); // a previous task in this slot may still be awaiting deletion
+  BaseType_t created = xTaskCreatePinnedToCoreWithCaps(cameraTaskFn, taskName, 10240, ctx, tskIDLE_PRIORITY + 1,
+                                                       &g_cameraStates[index].taskHandle, 1, MALLOC_CAP_SPIRAM);
+  xSemaphoreGive(g_reapMutex);
   if (created != pdPASS) {
     // Task creation can fail under memory pressure; say so loudly, since only
     // freeing memory or rebooting fixes it.
     delete ctx; // never handed to a task, so nothing else will free it
-    Serial.printf("[%s] FATAL: xTaskCreatePinnedToCore failed (out of memory?) - this camera will NOT "
+    Serial.printf("[%s] FATAL: camera task creation failed (out of memory?) - this camera will NOT "
                   "be monitored until the board is rebooted (ideally with more free memory).\n",
                   g_cameras[index].name.c_str());
     logEvent(g_cameras[index].name + ": task creation FAILED (out of memory?) - NOT being monitored");
