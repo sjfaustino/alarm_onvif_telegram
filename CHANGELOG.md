@@ -9,6 +9,9 @@ config exports - see [Releases](README.md#releases) for how to cut one.
 ## [Unreleased]
 
 ### Added
+- Hardware > Cameras page: each camera's manufacturer, model, firmware,
+  serial number, MAC and IP address, link speed, ONVIF scopes, clock offset
+  and video streams, as the camera reports them over ONVIF.
 - Model defaults: a newly added camera is asked for its manufacturer and model,
   and known settings for it are filled in where the add form was left at the
   default. Entries so far:
