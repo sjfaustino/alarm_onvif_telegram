@@ -57,7 +57,9 @@ def log(follow):
             body = r.read()
         sys.stdout.write(body.decode(errors="replace"))
         sys.stdout.flush()
-        if body:
+        # A short read is caught up: a busy log always has a new line by the
+        # next request, so waiting for an empty one might never end.
+        if len(body) >= 16 * 1024:
             continue
         if not follow:
             return
