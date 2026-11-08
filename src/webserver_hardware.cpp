@@ -270,8 +270,12 @@ static void disabledHardwareTask(void* param) {
   vTaskDelete(nullptr);
 }
 
+static const unsigned long DISABLED_HARDWARE_MAX_AGE_MS = 10UL * 60UL * 1000UL;
+static unsigned long g_disabledHardwareStartedMs = 0; // web server task only
+
 static void startDisabledHardwareRead(const std::vector<CameraConfig>* liveCameras) {
   if (!liveCameras) return;
+  g_disabledHardwareStartedMs = millis();
   std::vector<CameraConfig>* disabled = new std::vector<CameraConfig>();
   for (const CameraConfig& c : *liveCameras) {
     if (!c.enabled) disabled->push_back(c);
@@ -327,8 +331,8 @@ static String renderReading(const CameraHardwareReading& r, unsigned long nowMs)
 String renderCameraHardwarePage(const std::vector<CameraConfig>* liveCameras, std::vector<CameraState>* liveStates) {
   String html = "<h1>Hardware - Cameras</h1>";
   html += "<p class=\"hint\">What each camera reports about itself over ONVIF. Monitored cameras are read when "
-          "they connect and after an edit; disabled ones are read in the background when this page is first "
-          "opened. Fields a camera doesn't report are left out.</p>";
+          "they connect and after an edit; disabled ones are read in the background when this page is opened, "
+          "at most every 10 minutes. Fields a camera doesn't report are left out.</p>";
   html += "<form method=\"POST\" action=\"/hardware/cameras/refresh\"><button type=\"submit\">Read again "
           "from all cameras</button></form>";
   if (!liveCameras || !liveStates) return html;
@@ -425,7 +429,9 @@ void registerHardwareRoutes(PsychicHttpServer& server) {
 
   server.on("/hardware/cameras", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
     auto job = g_disabledHardwareJob.status();
-    if (!job.inProgress && !job.hasResult) startDisabledHardwareRead(g_liveCameras);
+    if (!job.inProgress && (!job.hasResult || millis() - g_disabledHardwareStartedMs >= DISABLED_HARDWARE_MAX_AGE_MS)) {
+      startDisabledHardwareRead(g_liveCameras);
+    }
     return response->send(200, "text/html",
                            renderShell(Tab::HardwareCameras, "", renderCameraHardwarePage(g_liveCameras, g_liveStates))
                                .c_str());

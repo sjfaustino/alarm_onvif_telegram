@@ -1,5 +1,5 @@
 #pragma once
-#include <Arduino.h> // explicit, not chained - see camera_serialize.h's comment
+#include <Arduino.h> // explicit: PlatformIO's LDF only scans a lib's own includes
 #include <vector>
 
 // Pure decision logic for SD snapshot history (sd_store.cpp does the I/O),

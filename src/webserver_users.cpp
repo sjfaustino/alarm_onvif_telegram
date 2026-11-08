@@ -83,8 +83,8 @@ String renderUsersPanel(const TelegramUser* prefill, bool isEdit) {
 }
 
 // ============================================================
-// Test message background wrapper - see webserver_users.h's own comment
-// for why this can't run synchronously on the calling (PsychicHttp) task.
+// Test message background wrapper: this can't run synchronously on the
+// calling (PsychicHttp) task.
 // BackgroundJob<T> (background_job.h) owns the mutex/state-machine part,
 // same as webserver_cameras.cpp's identically-shaped "Test all cameras"/
 // "Search network for cameras" wrappers.

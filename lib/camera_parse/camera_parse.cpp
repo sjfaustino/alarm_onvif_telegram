@@ -140,3 +140,9 @@ PullResponseKind classifyPullResponse(const String& xml) {
 bool personTopicReportedTrue(const String& xml) {
   return topicReportedTrue(xml, "PeopleDetect") || topicReportedTrue(xml, "HumanShapeDetect");
 }
+
+uint8_t cameraEventMask(const CameraEventClassification& ev) {
+  return (uint8_t)((ev.motionAlarm ? 1 : 0) | (ev.cellMotion ? 2 : 0) | (ev.peopleDetect ? 4 : 0) |
+                   (ev.vehicleDetect ? 8 : 0) | (ev.dogCatDetect ? 16 : 0) | (ev.signalLoss ? 32 : 0) |
+                   (ev.tamper ? 64 : 0));
+}

@@ -199,326 +199,48 @@ void test_v0_12_field_record_keeps_cooldown_defaults_the_rest(void) {
   TEST_ASSERT_EQUAL_UINT32(fresh.snapshotBurstCount, restored.snapshotBurstCount);
 }
 
-// ---- Version 1 (superseded, but still readable - not the current version) ----
+// One record with every field different from its default, so a field read
+// from the wrong column, or not at all, shows up.
+static const char* const kAllFields[] = {
+    "D07", "http://x/onvif", "0", "0", "1", "1", "snap", "kw", "usr", "pw", "nt", "111", "222", "3", "1", "44", "55",
+    "66", "77", "888", "1", "99", "1", "1", "640", "360", "0", "0", "0"};
+static const size_t kAllFieldCount = sizeof(kAllFields) / sizeof(kAllFields[0]);
 
-// A record explicitly tagged version 1 keeps parsing under V1's own
-// 14-field layout, even though CAMERA_SCHEMA_VERSION has moved on to 2 -
-// this is what lets an un-migrated NVS record from before quiet hours/
-// watchdog/timelapse existed keep loading correctly (camera_store.cpp
-// re-saves it as the current version on its next write).
-void test_v1_wrong_field_count_is_rejected_not_reinterpreted(void) {
-  String wrongCount = joinFields({"D05", "http://192.168.1.54/onvif/device_service", "1", "1", "0", "0",
-                                   "", "", "user", "pass", "notes", "60000", "300000"}); // 13 fields
-  CameraConfig restored = deserializeCamera(wrongCount, 1);
-  TEST_ASSERT_EQUAL_STRING("", restored.name.c_str());
+static String firstFields(size_t count) {
+  String out;
+  for (size_t i = 0; i < count; i++) {
+    if (i > 0) out += (char)0x1F;
+    out += i < kAllFieldCount ? kAllFields[i] : "extra";
+  }
+  return out;
 }
 
-void test_v1_exact_field_count_is_accepted(void) {
-  String exact = joinFields({"D05", "http://192.168.1.54/onvif/device_service", "1", "1", "0", "0",
-                              "", "", "user", "pass", "notes", "60000", "300000", "2"}); // 14 fields
-  CameraConfig restored = deserializeCamera(exact, 1);
-  TEST_ASSERT_EQUAL_STRING("D05", restored.name.c_str());
-  TEST_ASSERT_EQUAL_UINT32(2, restored.snapshotBurstCount);
+static std::vector<String> columns(const String& record) {
+  std::vector<String> out;
+  int start = 0;
+  for (int i = 0; i <= (int)record.length(); i++) {
+    if (i == (int)record.length() || record[i] == (char)0x1F) { out.push_back(record.substring(start, i)); start = i + 1; }
+  }
+  return out;
 }
 
-// The wrong-count test above only ever tries BELOW the exact count (13) -
-// a `!= 14` -> `< 14` mutation would pass it unchanged but silently accept
-// and misparse a 15-field record (e.g. a corrupted or downgraded-from-a-
-// newer-format record) as if it were valid V1.
-void test_v1_field_count_above_exact_is_also_rejected(void) {
-  String tooMany = joinFields({"D05", "http://192.168.1.54/onvif/device_service", "1", "1", "0", "0",
-                                "", "", "user", "pass", "notes", "60000", "300000", "2", "extra"}); // 15 fields
-  CameraConfig restored = deserializeCamera(tooMany, 1);
-  TEST_ASSERT_EQUAL_STRING("", restored.name.c_str());
-}
+void test_every_version_reads_exactly_its_own_fields(void) {
+  struct { uint16_t version; size_t count; } kLayouts[] = {{1, 14}, {2, 19}, {3, 20}, {4, 22}, {5, 24}, {6, 26}, {7, 28}, {8, 29}};
+  std::vector<String> defaults = columns(serializeCamera(CameraConfig()));
+  TEST_ASSERT_EQUAL((int)kAllFieldCount, (int)defaults.size());
 
-// ---- Version 2 (superseded, but still readable - not the current version) ----
+  for (auto& layout : kLayouts) {
+    char label[32];
+    snprintf(label, sizeof(label), "version %u", (unsigned)layout.version);
+    TEST_ASSERT_EQUAL_STRING_MESSAGE("", deserializeCamera(firstFields(layout.count - 1), layout.version).name.c_str(), label);
+    TEST_ASSERT_EQUAL_STRING_MESSAGE("", deserializeCamera(firstFields(layout.count + 1), layout.version).name.c_str(), label);
 
-// Same "exact count or rejected" rule as V1, now for V2's 19 fields - a
-// record tagged version 2 with V1's old 14-field shape (or any other wrong
-// count) is corruption/a downgrade artifact, not "an older save" (that's
-// what the recordVersion tag itself is for). Tagged explicitly as literal
-// version 2, not CAMERA_SCHEMA_VERSION (now 3, pollIntervalMs) - V2 is a
-// permanent, never-edited historical branch, same as V1 above.
-void test_v2_wrong_field_count_is_rejected_not_reinterpreted(void) {
-  String wrongCount = joinFields({"D07", "http://192.168.1.56/onvif/device_service", "1", "1", "0", "0",
-                                   "", "", "user", "pass", "notes", "60000", "300000", "2"}); // 14 fields
-  CameraConfig restored = deserializeCamera(wrongCount, 2);
-  TEST_ASSERT_EQUAL_STRING("", restored.name.c_str());
-}
-
-void test_v2_exact_field_count_is_accepted(void) {
-  String exact = joinFields({"D07", "http://192.168.1.56/onvif/device_service", "1", "1", "0", "0",
-                              "", "", "user", "pass", "notes", "60000", "300000", "2",
-                              "1", "1320", "360", "24", "15"}); // 19 fields
-  CameraConfig restored = deserializeCamera(exact, 2);
-  TEST_ASSERT_EQUAL_STRING("D07", restored.name.c_str());
-  TEST_ASSERT_EQUAL_UINT32(2, restored.snapshotBurstCount);
-  TEST_ASSERT_TRUE(restored.quietHoursEnabled);
-  TEST_ASSERT_EQUAL_UINT32(1320, restored.quietStartMinute);
-  TEST_ASSERT_EQUAL_UINT32(360, restored.quietEndMinute);
-  TEST_ASSERT_EQUAL_UINT32(24, restored.motionWatchdogHours);
-  TEST_ASSERT_EQUAL_UINT32(15, restored.timelapseIntervalMin);
-}
-
-// Same "above the exact count, not just below" gap as V1's own test - a
-// `!= 19` -> `< 19` mutation would pass the wrong-count test above
-// unchanged (14 fields) but silently accept a 20-field record.
-void test_v2_field_count_above_exact_is_also_rejected(void) {
-  String tooMany = joinFields({"D07", "http://192.168.1.56/onvif/device_service", "1", "1", "0", "0",
-                                "", "", "user", "pass", "notes", "60000", "300000", "2",
-                                "1", "1320", "360", "24", "15", "extra"}); // 20 fields
-  CameraConfig restored = deserializeCamera(tooMany, 2);
-  TEST_ASSERT_EQUAL_STRING("", restored.name.c_str());
-}
-
-// ---- Version 3 (superseded, but still readable - not the current version) ----
-
-// Same "exact count or rejected" rule as V2, now for V3's 20 fields
-// (pollIntervalMs appended). Tagged explicitly as literal version 3, not
-// CAMERA_SCHEMA_VERSION (now 4, timelapseSendToTelegram/retentionDays) -
-// V3 is a permanent, never-edited historical branch, same as V1/V2 above.
-void test_v3_wrong_field_count_is_rejected_not_reinterpreted(void) {
-  String wrongCount = joinFields({"D07", "http://192.168.1.56/onvif/device_service", "1", "1", "0", "0",
-                                   "", "", "user", "pass", "notes", "60000", "300000", "2",
-                                   "1", "1320", "360", "24", "15"}); // 19 fields - V2's shape
-  CameraConfig restored = deserializeCamera(wrongCount, 3);
-  TEST_ASSERT_EQUAL_STRING("", restored.name.c_str());
-}
-
-void test_v3_exact_field_count_is_accepted(void) {
-  String exact = joinFields({"D07", "http://192.168.1.56/onvif/device_service", "1", "1", "0", "0",
-                              "", "", "user", "pass", "notes", "60000", "300000", "2",
-                              "1", "1320", "360", "24", "15", "1500"}); // 20 fields
-  CameraConfig restored = deserializeCamera(exact, 3);
-  TEST_ASSERT_EQUAL_STRING("D07", restored.name.c_str());
-  TEST_ASSERT_EQUAL_UINT32(2, restored.snapshotBurstCount);
-  TEST_ASSERT_TRUE(restored.quietHoursEnabled);
-  TEST_ASSERT_EQUAL_UINT32(1320, restored.quietStartMinute);
-  TEST_ASSERT_EQUAL_UINT32(360, restored.quietEndMinute);
-  TEST_ASSERT_EQUAL_UINT32(24, restored.motionWatchdogHours);
-  TEST_ASSERT_EQUAL_UINT32(15, restored.timelapseIntervalMin);
-  TEST_ASSERT_EQUAL_UINT32(1500, restored.pollIntervalMs);
-}
-
-// Same "above the exact count, not just below" gap as V2's own test.
-void test_v3_field_count_above_exact_is_also_rejected(void) {
-  String tooMany = joinFields({"D07", "http://192.168.1.56/onvif/device_service", "1", "1", "0", "0",
-                                "", "", "user", "pass", "notes", "60000", "300000", "2",
-                                "1", "1320", "360", "24", "15", "1500", "extra"}); // 21 fields
-  CameraConfig restored = deserializeCamera(tooMany, 3);
-  TEST_ASSERT_EQUAL_STRING("", restored.name.c_str());
-}
-
-// ---- Version 4 (superseded, but still readable - not the current version) ----
-
-// Same "exact count or rejected" rule as V3, now for V4's 22 fields
-// (timelapseSendToTelegram/retentionDays appended). Tagged explicitly as
-// literal version 4, not CAMERA_SCHEMA_VERSION (now 5, petAlertsEnabled/
-// petAlertsTextOnly) - V4 is a permanent, never-edited historical branch,
-// same as V1-V3 above.
-void test_v4_wrong_field_count_is_rejected_not_reinterpreted(void) {
-  String wrongCount = joinFields({"D07", "http://192.168.1.56/onvif/device_service", "1", "1", "0", "0",
-                                   "", "", "user", "pass", "notes", "60000", "300000", "2",
-                                   "1", "1320", "360", "24", "15", "1500"}); // 20 fields - V3's shape
-  CameraConfig restored = deserializeCamera(wrongCount, 4);
-  TEST_ASSERT_EQUAL_STRING("", restored.name.c_str());
-}
-
-void test_v4_exact_field_count_is_accepted(void) {
-  String exact = joinFields({"D07", "http://192.168.1.56/onvif/device_service", "1", "1", "0", "0",
-                              "", "", "user", "pass", "notes", "60000", "300000", "2",
-                              "1", "1320", "360", "24", "15", "1500", "1", "45"}); // 22 fields
-  CameraConfig restored = deserializeCamera(exact, 4);
-  TEST_ASSERT_EQUAL_STRING("D07", restored.name.c_str());
-  TEST_ASSERT_EQUAL_UINT32(2, restored.snapshotBurstCount);
-  TEST_ASSERT_TRUE(restored.quietHoursEnabled);
-  TEST_ASSERT_EQUAL_UINT32(1320, restored.quietStartMinute);
-  TEST_ASSERT_EQUAL_UINT32(360, restored.quietEndMinute);
-  TEST_ASSERT_EQUAL_UINT32(24, restored.motionWatchdogHours);
-  TEST_ASSERT_EQUAL_UINT32(15, restored.timelapseIntervalMin);
-  TEST_ASSERT_EQUAL_UINT32(1500, restored.pollIntervalMs);
-  TEST_ASSERT_TRUE(restored.timelapseSendToTelegram);
-  TEST_ASSERT_EQUAL_UINT32(45, restored.retentionDays);
-}
-
-// Same "above the exact count, not just below" gap as V3's own test.
-void test_v4_field_count_above_exact_is_also_rejected(void) {
-  String tooMany = joinFields({"D07", "http://192.168.1.56/onvif/device_service", "1", "1", "0", "0",
-                                "", "", "user", "pass", "notes", "60000", "300000", "2",
-                                "1", "1320", "360", "24", "15", "1500", "1", "45", "extra"}); // 23 fields
-  CameraConfig restored = deserializeCamera(tooMany, 4);
-  TEST_ASSERT_EQUAL_STRING("", restored.name.c_str());
-}
-
-// ---- Version 5 (superseded, but still readable - not the current version) ----
-
-// Same "exact count or rejected" rule as V4, now for V5's 24 fields
-// (petAlertsEnabled/petAlertsTextOnly appended). Tagged explicitly as
-// literal version 5, not CAMERA_SCHEMA_VERSION (now 6, snapshotMaxWidth/
-// snapshotMaxHeight) - V5 is a permanent, never-edited historical branch,
-// same as V1-V4 above.
-void test_v5_wrong_field_count_is_rejected_not_reinterpreted(void) {
-  String wrongCount = joinFields({"D07", "http://192.168.1.56/onvif/device_service", "1", "1", "0", "0",
-                                   "", "", "user", "pass", "notes", "60000", "300000", "2",
-                                   "1", "1320", "360", "24", "15", "1500", "1", "45"}); // 22 fields - V4's shape
-  CameraConfig restored = deserializeCamera(wrongCount, 5);
-  TEST_ASSERT_EQUAL_STRING("", restored.name.c_str());
-}
-
-void test_v5_exact_field_count_is_accepted(void) {
-  String exact = joinFields({"D07", "http://192.168.1.56/onvif/device_service", "1", "1", "0", "0",
-                              "", "", "user", "pass", "notes", "60000", "300000", "2",
-                              "1", "1320", "360", "24", "15", "1500", "1", "45", "1", "1"}); // 24 fields
-  CameraConfig restored = deserializeCamera(exact, 5);
-  TEST_ASSERT_EQUAL_STRING("D07", restored.name.c_str());
-  TEST_ASSERT_EQUAL_UINT32(2, restored.snapshotBurstCount);
-  TEST_ASSERT_TRUE(restored.quietHoursEnabled);
-  TEST_ASSERT_EQUAL_UINT32(1320, restored.quietStartMinute);
-  TEST_ASSERT_EQUAL_UINT32(360, restored.quietEndMinute);
-  TEST_ASSERT_EQUAL_UINT32(24, restored.motionWatchdogHours);
-  TEST_ASSERT_EQUAL_UINT32(15, restored.timelapseIntervalMin);
-  TEST_ASSERT_EQUAL_UINT32(1500, restored.pollIntervalMs);
-  TEST_ASSERT_TRUE(restored.timelapseSendToTelegram);
-  TEST_ASSERT_EQUAL_UINT32(45, restored.retentionDays);
-  TEST_ASSERT_TRUE(restored.petAlertsEnabled);
-  TEST_ASSERT_TRUE(restored.petAlertsTextOnly);
-}
-
-// Same "above the exact count, not just below" gap as V4's own test.
-void test_v5_field_count_above_exact_is_also_rejected(void) {
-  String tooMany = joinFields({"D07", "http://192.168.1.56/onvif/device_service", "1", "1", "0", "0",
-                                "", "", "user", "pass", "notes", "60000", "300000", "2",
-                                "1", "1320", "360", "24", "15", "1500", "1", "45", "1", "1", "extra"}); // 25 fields
-  CameraConfig restored = deserializeCamera(tooMany, 5);
-  TEST_ASSERT_EQUAL_STRING("", restored.name.c_str());
-}
-
-// ---- Version 6 (superseded, but still readable - not the current version) ----
-
-// Same "exact count or rejected" rule as V5, now for V6's 26 fields
-// (snapshotMaxWidth/snapshotMaxHeight appended). Tagged explicitly as
-// literal version 6, not CAMERA_SCHEMA_VERSION (now 8, personAlertsEnabled/
-// vehicleAlertsEnabled/motionDigestEnabled) - V6 is a permanent, never-
-// edited historical branch, same as V1-V5 above.
-void test_v6_wrong_field_count_is_rejected_not_reinterpreted(void) {
-  String wrongCount = joinFields({"D07", "http://192.168.1.56/onvif/device_service", "1", "1", "0", "0",
-                                   "", "", "user", "pass", "notes", "60000", "300000", "2",
-                                   "1", "1320", "360", "24", "15", "1500", "1", "45", "1", "1"}); // 24 fields - V5's shape
-  CameraConfig restored = deserializeCamera(wrongCount, 6);
-  TEST_ASSERT_EQUAL_STRING("", restored.name.c_str());
-}
-
-void test_v6_exact_field_count_is_accepted(void) {
-  String exact = joinFields({"D07", "http://192.168.1.56/onvif/device_service", "1", "1", "0", "0",
-                              "", "", "user", "pass", "notes", "60000", "300000", "2",
-                              "1", "1320", "360", "24", "15", "1500", "1", "45", "1", "1", "800", "600"}); // 26 fields
-  CameraConfig restored = deserializeCamera(exact, 6);
-  TEST_ASSERT_EQUAL_STRING("D07", restored.name.c_str());
-  TEST_ASSERT_EQUAL_UINT32(2, restored.snapshotBurstCount);
-  TEST_ASSERT_TRUE(restored.quietHoursEnabled);
-  TEST_ASSERT_EQUAL_UINT32(1320, restored.quietStartMinute);
-  TEST_ASSERT_EQUAL_UINT32(360, restored.quietEndMinute);
-  TEST_ASSERT_EQUAL_UINT32(24, restored.motionWatchdogHours);
-  TEST_ASSERT_EQUAL_UINT32(15, restored.timelapseIntervalMin);
-  TEST_ASSERT_EQUAL_UINT32(1500, restored.pollIntervalMs);
-  TEST_ASSERT_TRUE(restored.timelapseSendToTelegram);
-  TEST_ASSERT_EQUAL_UINT32(45, restored.retentionDays);
-  TEST_ASSERT_TRUE(restored.petAlertsEnabled);
-  TEST_ASSERT_TRUE(restored.petAlertsTextOnly);
-  TEST_ASSERT_EQUAL_UINT32(800, restored.snapshotMaxWidth);
-  TEST_ASSERT_EQUAL_UINT32(600, restored.snapshotMaxHeight);
-  // personAlertsEnabled/vehicleAlertsEnabled didn't exist in V6 yet - must
-  // default to true (CameraConfig's own default), not false.
-  TEST_ASSERT_TRUE(restored.personAlertsEnabled);
-  TEST_ASSERT_TRUE(restored.vehicleAlertsEnabled);
-}
-
-// Same "above the exact count, not just below" gap as V5's own test.
-void test_v6_field_count_above_exact_is_also_rejected(void) {
-  String tooMany = joinFields({"D07", "http://192.168.1.56/onvif/device_service", "1", "1", "0", "0",
-                                "", "", "user", "pass", "notes", "60000", "300000", "2",
-                                "1", "1320", "360", "24", "15", "1500", "1", "45", "1", "1", "800", "600", "extra"}); // 27 fields
-  CameraConfig restored = deserializeCamera(tooMany, 6);
-  TEST_ASSERT_EQUAL_STRING("", restored.name.c_str());
-}
-
-// ---- Version 7 (superseded, but still readable - not the current version) ----
-
-// Same "exact count or rejected" rule as V6, now for V7's 28 fields
-// (personAlertsEnabled/vehicleAlertsEnabled appended). Tagged explicitly
-// as literal version 7, not CAMERA_SCHEMA_VERSION (now 8,
-// motionDigestEnabled) - V7 is a permanent, never-edited historical
-// branch, same as V1-V6 above.
-void test_v7_wrong_field_count_is_rejected_not_reinterpreted(void) {
-  String wrongCount = joinFields({"D07", "http://192.168.1.56/onvif/device_service", "1", "1", "0", "0",
-                                   "", "", "user", "pass", "notes", "60000", "300000", "2",
-                                   "1", "1320", "360", "24", "15", "1500", "1", "45", "1", "1", "800", "600"}); // 26 fields - V6's shape
-  CameraConfig restored = deserializeCamera(wrongCount, 7);
-  TEST_ASSERT_EQUAL_STRING("", restored.name.c_str());
-}
-
-void test_v7_exact_field_count_is_accepted(void) {
-  String exact = joinFields({"D07", "http://192.168.1.56/onvif/device_service", "1", "1", "0", "0",
-                              "", "", "user", "pass", "notes", "60000", "300000", "2",
-                              "1", "1320", "360", "24", "15", "1500", "1", "45", "1", "1", "800", "600",
-                              "0", "0"}); // 28 fields, person/vehicle alerts both explicitly off
-  CameraConfig restored = deserializeCamera(exact, 7);
-  TEST_ASSERT_EQUAL_STRING("D07", restored.name.c_str());
-  TEST_ASSERT_EQUAL_UINT32(800, restored.snapshotMaxWidth);
-  TEST_ASSERT_EQUAL_UINT32(600, restored.snapshotMaxHeight);
-  TEST_ASSERT_FALSE(restored.personAlertsEnabled);
-  TEST_ASSERT_FALSE(restored.vehicleAlertsEnabled);
-  // motionDigestEnabled didn't exist in V7 yet - must default to true
-  // (CameraConfig's own default), not false.
-  TEST_ASSERT_TRUE(restored.motionDigestEnabled);
-}
-
-// Same "above the exact count, not just below" gap as V6's own test.
-void test_v7_field_count_above_exact_is_also_rejected(void) {
-  String tooMany = joinFields({"D07", "http://192.168.1.56/onvif/device_service", "1", "1", "0", "0",
-                                "", "", "user", "pass", "notes", "60000", "300000", "2",
-                                "1", "1320", "360", "24", "15", "1500", "1", "45", "1", "1", "800", "600",
-                                "0", "0", "extra"}); // 29 fields
-  CameraConfig restored = deserializeCamera(tooMany, 7);
-  TEST_ASSERT_EQUAL_STRING("", restored.name.c_str());
-}
-
-// ---- Version CAMERA_SCHEMA_VERSION (current, strict) ----
-
-// Same "exact count or rejected" rule as V7, now for V8's 29 fields
-// (motionDigestEnabled appended).
-void test_v8_wrong_field_count_is_rejected_not_reinterpreted(void) {
-  String wrongCount = joinFields({"D07", "http://192.168.1.56/onvif/device_service", "1", "1", "0", "0",
-                                   "", "", "user", "pass", "notes", "60000", "300000", "2",
-                                   "1", "1320", "360", "24", "15", "1500", "1", "45", "1", "1", "800", "600",
-                                   "0", "0"}); // 28 fields - V7's shape
-  CameraConfig restored = deserializeCamera(wrongCount, CAMERA_SCHEMA_VERSION);
-  TEST_ASSERT_EQUAL_STRING("", restored.name.c_str());
-}
-
-void test_v8_exact_field_count_is_accepted(void) {
-  String exact = joinFields({"D07", "http://192.168.1.56/onvif/device_service", "1", "1", "0", "0",
-                              "", "", "user", "pass", "notes", "60000", "300000", "2",
-                              "1", "1320", "360", "24", "15", "1500", "1", "45", "1", "1", "800", "600",
-                              "0", "0", "0"}); // 29 fields, person/vehicle/motion-digest all explicitly off
-  CameraConfig restored = deserializeCamera(exact, CAMERA_SCHEMA_VERSION);
-  TEST_ASSERT_EQUAL_STRING("D07", restored.name.c_str());
-  TEST_ASSERT_EQUAL_UINT32(800, restored.snapshotMaxWidth);
-  TEST_ASSERT_EQUAL_UINT32(600, restored.snapshotMaxHeight);
-  TEST_ASSERT_FALSE(restored.personAlertsEnabled);
-  TEST_ASSERT_FALSE(restored.vehicleAlertsEnabled);
-  TEST_ASSERT_FALSE(restored.motionDigestEnabled);
-}
-
-// Same "above the exact count, not just below" gap as V7's own test.
-void test_v8_field_count_above_exact_is_also_rejected(void) {
-  String tooMany = joinFields({"D07", "http://192.168.1.56/onvif/device_service", "1", "1", "0", "0",
-                                "", "", "user", "pass", "notes", "60000", "300000", "2",
-                                "1", "1320", "360", "24", "15", "1500", "1", "45", "1", "1", "800", "600",
-                                "0", "0", "0", "extra"}); // 30 fields
-  CameraConfig restored = deserializeCamera(tooMany, CAMERA_SCHEMA_VERSION);
-  TEST_ASSERT_EQUAL_STRING("", restored.name.c_str());
+    std::vector<String> got = columns(serializeCamera(deserializeCamera(firstFields(layout.count), layout.version)));
+    for (size_t i = 0; i < kAllFieldCount; i++) {
+      const char* expected = i < layout.count ? kAllFields[i] : defaults[i].c_str();
+      TEST_ASSERT_EQUAL_STRING_MESSAGE(expected, got[i].c_str(), label);
+    }
+  }
 }
 
 // A version newer than this build knows about (firmware downgraded after
@@ -643,6 +365,7 @@ void test_expected_field_counts_per_version(void) {
 
 int main(int argc, char** argv) {
   UNITY_BEGIN();
+  RUN_TEST(test_every_version_reads_exactly_its_own_fields);
   RUN_TEST(test_stored_layout_is_pinned);
   RUN_TEST(test_empty_alert_flags_keep_their_default_on);
   RUN_TEST(test_current_layout_matches_the_schema_version);
@@ -656,30 +379,6 @@ int main(int argc, char** argv) {
   RUN_TEST(test_v0_11_field_record_gets_current_defaults);
   RUN_TEST(test_v0_13_field_record_defaults_only_snapshotBurstCount);
   RUN_TEST(test_v0_12_field_record_keeps_cooldown_defaults_the_rest);
-  RUN_TEST(test_v1_wrong_field_count_is_rejected_not_reinterpreted);
-  RUN_TEST(test_v1_exact_field_count_is_accepted);
-  RUN_TEST(test_v1_field_count_above_exact_is_also_rejected);
-  RUN_TEST(test_v2_wrong_field_count_is_rejected_not_reinterpreted);
-  RUN_TEST(test_v2_exact_field_count_is_accepted);
-  RUN_TEST(test_v2_field_count_above_exact_is_also_rejected);
-  RUN_TEST(test_v3_wrong_field_count_is_rejected_not_reinterpreted);
-  RUN_TEST(test_v3_exact_field_count_is_accepted);
-  RUN_TEST(test_v3_field_count_above_exact_is_also_rejected);
-  RUN_TEST(test_v4_wrong_field_count_is_rejected_not_reinterpreted);
-  RUN_TEST(test_v4_exact_field_count_is_accepted);
-  RUN_TEST(test_v4_field_count_above_exact_is_also_rejected);
-  RUN_TEST(test_v5_wrong_field_count_is_rejected_not_reinterpreted);
-  RUN_TEST(test_v5_exact_field_count_is_accepted);
-  RUN_TEST(test_v5_field_count_above_exact_is_also_rejected);
-  RUN_TEST(test_v6_wrong_field_count_is_rejected_not_reinterpreted);
-  RUN_TEST(test_v6_exact_field_count_is_accepted);
-  RUN_TEST(test_v6_field_count_above_exact_is_also_rejected);
-  RUN_TEST(test_v7_wrong_field_count_is_rejected_not_reinterpreted);
-  RUN_TEST(test_v7_exact_field_count_is_accepted);
-  RUN_TEST(test_v7_field_count_above_exact_is_also_rejected);
-  RUN_TEST(test_v8_wrong_field_count_is_rejected_not_reinterpreted);
-  RUN_TEST(test_v8_exact_field_count_is_accepted);
-  RUN_TEST(test_v8_field_count_above_exact_is_also_rejected);
   RUN_TEST(test_unknown_future_version_falls_back_to_newest_known_layout);
   RUN_TEST(test_field_separator_character_in_input_is_stripped_not_corrupting);
   RUN_TEST(test_sortCamerasByName_orders_alphabetically);

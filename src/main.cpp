@@ -94,7 +94,7 @@ static void startMonitoring() {
   startWebServer(&g_cameras, &g_cameraStates); // logs its own "listening on http://<ip>:80/" line
 
   // Staggered: some cameras accept only 1-2 connections, and starting them all
-  // at once caused connection resets at boot.
+  // at once causes connection resets.
   for (size_t i = 0; i < g_cameras.size(); i++) {
     if (!g_cameras[i].enabled) {
       Serial.printf("[%s] Disabled - no task created.\n", g_cameras[i].name.c_str());

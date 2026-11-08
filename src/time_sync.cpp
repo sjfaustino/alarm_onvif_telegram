@@ -78,7 +78,7 @@ static bool startSntp() {
 
 void maintainTimeSync() {
   if (g_syncedSinceStart && g_ntpSyncFailedAlerted) {
-    g_ntpSyncFailedAlerted = false; // re-arm - see its own comment
+    g_ntpSyncFailedAlerted = false; // re-arm
     logEvent("NTP time synchronized again");
   }
   unsigned long now = millis();
@@ -187,7 +187,7 @@ void setupTime() {
           Serial.println("[rtc_store] WARNING: failed to write corrected time to the RTC.");
         }
       }
-      g_ntpSyncFailedAlerted = false; // re-arm - see its own comment
+      g_ntpSyncFailedAlerted = false; // re-arm
       return;
     }
     Serial.print(".");

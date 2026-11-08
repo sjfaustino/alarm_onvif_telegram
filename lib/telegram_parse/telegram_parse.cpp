@@ -161,7 +161,7 @@ ParsedTelegramCommand parseTelegramCommand(const String& text) {
     result.command = TelegramCommand::Log;
     result.logCountText = text.substring(5);
   } else if (lower == "/on") {
-    result.command = TelegramCommand::On; // cameraName stays "" - picker, see this function's own comment
+    result.command = TelegramCommand::On; // cameraName stays "": the picker
   } else if (lower.startsWith("/on ")) {
     result.command = TelegramCommand::On;
     splitNameAndDuration(text.substring(4), result.cameraName, result.durationText);

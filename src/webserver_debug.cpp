@@ -154,6 +154,7 @@ void registerDebugRoutes(PsychicHttpServer& server) {
     if (!authorized(request)) return response->send(403, "text/plain", "Forbidden");
     JsonDocument doc;
     doc["version"] = FIRMWARE_VERSION;
+    doc["otaSigned"] = true;
     doc["uptimeMs"] = millis();
     doc["resetReason"] = describeResetReason();
     JsonObject heap = doc["heap"].to<JsonObject>();
@@ -200,6 +201,7 @@ void registerDebugRoutes(PsychicHttpServer& server) {
     buffer[n] = 0;
     response->addHeader("X-Log-Next", String(next).c_str());
     response->addHeader("X-Log-Oldest", String(oldest).c_str());
+    response->addHeader("X-Log-More", next < logTeeEnd() ? "1" : "0");
     esp_err_t result = response->send(200, "text/plain", buffer);
     heap_caps_free(buffer);
     return result;

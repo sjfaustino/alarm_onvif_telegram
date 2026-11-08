@@ -6,8 +6,11 @@ and DASHBOARD_LOGIN ("user:password") too if the dashboard has a login.
   scripts/board.py log [--follow]      the log ring; --follow keeps polling
   scripts/board.py coredump [FILE]     download a stored crash dump
   scripts/board.py flash FILE --yes    OTA upload; REBOOTS the live board
+  scripts/board.py sign FILE           write FILE's signed copy, firmware.signed.bin
+  scripts/board.py verify FILE         have the board check a signed file; changes nothing
+  scripts/board.py keygen              create the signing key (once)
 
-Set BOARD_HOST to override the address.
+Set BOARD_HOST to override the address, FIRMWARE_SIGNING_KEY the private key's path.
 """
 import base64
 import json
@@ -20,6 +23,57 @@ import time
 import urllib.request
 
 HOST = os.environ.get("BOARD_HOST", "192.168.8.132")
+
+
+SIGNING_KEY = os.environ.get("FIRMWARE_SIGNING_KEY",
+                             os.path.join(os.path.expanduser("~"), ".alarm_onvif_telegram", "firmware_signing_key.pem"))
+PUBLIC_KEY_HEADER = "include/firmware_signing_key.h"
+SIGNED_MAGIC = b"AOTSIG1\n"
+SIGNATURE_SLOT = 72  # lib/signed_firmware/signed_firmware.h
+
+
+def keygen():
+    if os.path.exists(SIGNING_KEY):
+        sys.exit(f"{SIGNING_KEY} already exists; not replacing it.")
+    os.makedirs(os.path.dirname(SIGNING_KEY), exist_ok=True)
+    subprocess.run(["openssl", "ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", SIGNING_KEY], check=True)
+    public = subprocess.run(["openssl", "pkey", "-in", SIGNING_KEY, "-pubout"], check=True,
+                            capture_output=True, text=True).stdout
+    pem = [line.strip() for line in public.strip().splitlines()]
+    body = "\n".join(f'    "{line}\\n"' for line in pem)
+    with open(PUBLIC_KEY_HEADER, "w", newline="\n") as out:
+        out.write("#pragma once\n\n// Checks uploaded firmware. Its private half stays off this repository; see\n"
+                  "// \"Firmware signing\" in the README.\n"
+                  f"static const char FIRMWARE_PUBLIC_KEY_PEM[] =\n{body};\n")
+    print(f"Created {SIGNING_KEY}. Back it up: without it, updates need USB.")
+
+
+def sign(path):
+    if not os.path.exists(SIGNING_KEY):
+        sys.exit(f"No signing key at {SIGNING_KEY}.")
+    signature_path = path + ".sig"
+    subprocess.run(["openssl", "dgst", "-sha256", "-sign", SIGNING_KEY, "-out", signature_path, path], check=True)
+    with open(signature_path, "rb") as f:
+        signature = f.read()
+    os.remove(signature_path)
+    if len(signature) > SIGNATURE_SLOT:
+        sys.exit("Signature longer than the header allows.")
+    header = SIGNED_MAGIC + bytes([len(signature)]) + bytes(7) + signature.ljust(SIGNATURE_SLOT, b"\0")
+    signed_path = os.path.join(os.path.dirname(path), "firmware.signed.bin")
+    with open(path, "rb") as f, open(signed_path, "wb") as out:
+        out.write(header + f.read())
+    return signed_path
+
+
+def upload(path, route):
+    login = secret("DASHBOARD_LOGIN")
+    return subprocess.run(["curl", "-sS", "--fail", "-m", "300", *(["-u", login] if login else []),
+                           "-F", f"firmware=@{path}", f"http://{HOST}{route}"], stdout=subprocess.DEVNULL).returncode == 0
+
+
+def board_wants_signed():
+    with get("/debug/status") as r:
+        return bool(json.load(r).get("otaSigned"))
 
 
 def secret(name):
@@ -54,12 +108,12 @@ def log(follow):
             if int(r.headers.get("X-Log-Oldest", 0)) > since > 0:
                 print("--- log lines were missed ---")
             since = int(r.headers["X-Log-Next"])
+            more = r.headers.get("X-Log-More") == "1"
             body = r.read()
         sys.stdout.write(body.decode(errors="replace"))
         sys.stdout.flush()
-        # A short read is caught up: a busy log always has a new line by the
-        # next request, so waiting for an empty one might never end.
-        if len(body) >= 16 * 1024:
+        # The board says whether it had more; a busy log would never run dry.
+        if more:
             continue
         if not follow:
             return
@@ -86,13 +140,19 @@ def main():
         elf = os.path.join(os.path.dirname(args[1]), "firmware.elf")
         if os.path.exists(elf):
             shutil.copy(elf, f".pio/flashed/firmware-{version}.elf")
-        login = secret("DASHBOARD_LOGIN")
-        upload = subprocess.run(["curl", "-sS", "--fail", "-m", "300", *(["-u", login] if login else []),
-                                 "-F", f"firmware=@{args[1]}", f"http://{HOST}/firmware/update"],
-                                stdout=subprocess.DEVNULL)
-        if upload.returncode != 0:
+        # A board from before signing can't read the signed format.
+        image = sign(args[1]) if board_wants_signed() else args[1]
+        if not upload(image, "/firmware/update"):
             sys.exit("Upload FAILED - the board was not updated.")
         print("Uploaded. The board reboots if the image was accepted; check `status` in about 20 seconds.")
+    elif cmd == "sign" and len(args) >= 2:
+        print(sign(args[1]))
+    elif cmd == "verify" and len(args) >= 2:
+        if not upload(sign(args[1]), "/firmware/verify"):
+            sys.exit("REFUSED - see the board's log.")
+        print("Signature OK.")
+    elif cmd == "keygen":
+        keygen()
     else:
         sys.exit(__doc__)
 

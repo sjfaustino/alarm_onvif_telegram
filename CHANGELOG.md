@@ -8,7 +8,12 @@ config exports - see [Releases](README.md#releases) for how to cut one.
 
 ## [Unreleased]
 
+**Upgrading:** OTA uploads must now be signed; see "Firmware signing" in the README.
+
 ### Changed
+- Motion events are logged when what a camera reports changes, not on every poll.
+- Model defaults leave cameras off the local subnet at the default poll interval,
+  since they may be on a metered link.
 - The External RTC settings moved from the Network page to Hardware > External
   RTC.
 
@@ -21,6 +26,8 @@ config exports - see [Releases](README.md#releases) for how to cut one.
   empty list when the board loads it.
 
 ### Added
+- OTA uploads must be signed: an unsigned or tampered file is refused and the
+  current firmware keeps running. `board.py` signs with a key kept off the repo.
 - Hardware > Cameras page: each camera's manufacturer, model, firmware,
   serial number, MAC and IP address, link speed, ONVIF scopes, clock offset
   and video streams, as the camera reports them over ONVIF.

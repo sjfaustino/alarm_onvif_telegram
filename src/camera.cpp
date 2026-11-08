@@ -42,7 +42,7 @@ static bool applyPendingConfigIfAny(CameraConfig& cfg, CameraState& st) {
   { CameraStateLock lock(st); pending = st.pendingConfig; st.pendingConfig = nullptr; }
   if (!pending) return false;
 
-  cfg = *pending; // safe: this task is the sole writer of its own cfg - see requestLiveConfigReload's comment
+  cfg = *pending; // safe: this task is the sole writer of its own cfg
   delete pending;
 
   // Always re-point, valid or not: the assignment above may have freed the old
@@ -442,6 +442,7 @@ static void printEventState(const CameraConfig& cfg, const String& xml, const St
 
 static void parseEvents(const CameraConfig& cfg, CameraState& st, const String& xml) {
   CameraEventClassification ev = classifyCameraEvent(xml);
+  if (!ev.anyTrue) st.lastLoggedEventMask = 0;
   if (!ev.anyTrue && !VERBOSE_SOAP_LOG) return;
   if (!ev.motionAlarm && !ev.cellMotion && !ev.peopleDetect && !ev.vehicleDetect && !ev.dogCatDetect &&
       !ev.signalLoss && !ev.tamper) {
@@ -455,19 +456,24 @@ static void parseEvents(const CameraConfig& cfg, CameraState& st, const String& 
     return;
   }
 
-  if (ev.motionAlarm)  { Serial.printf("[%s] MOTION ALARM EVENT\n", cfg.name.c_str());  printEventState(cfg, xml, "MotionAlarm"); }
-  if (ev.cellMotion)   { Serial.printf("[%s] CELL MOTION EVENT\n", cfg.name.c_str());   printEventState(cfg, xml, "CellMotionDetector"); }
-  if (ev.peopleDetect)  { Serial.printf("[%s] PEOPLE DETECT EVENT\n", cfg.name.c_str());  printEventState(cfg, xml, "PeopleDetect"); }
-  if (ev.vehicleDetect) { Serial.printf("[%s] VEHICLE DETECT EVENT\n", cfg.name.c_str()); printEventState(cfg, xml, "VehicleDetect"); }
-  if (ev.dogCatDetect) { Serial.printf("[%s] DOG/CAT DETECT EVENT\n", cfg.name.c_str());  printEventState(cfg, xml, "DogCatDetect"); }
-  if (ev.signalLoss)    { Serial.printf("[%s] SIGNAL LOSS EVENT\n", cfg.name.c_str());    printEventState(cfg, xml, "SignalLoss"); }
-  if (ev.tamper)       { Serial.printf("[%s] TAMPER EVENT\n", cfg.name.c_str());        printEventState(cfg, xml, "TamperDetector"); }
+  // Some cameras repeat "motion = true" on every poll; a line per change is enough.
+  uint8_t eventMask = cameraEventMask(ev);
+  if (eventMask != st.lastLoggedEventMask || VERBOSE_SOAP_LOG) {
+    st.lastLoggedEventMask = eventMask;
+    if (ev.motionAlarm)  { Serial.printf("[%s] MOTION ALARM EVENT\n", cfg.name.c_str());  printEventState(cfg, xml, "MotionAlarm"); }
+    if (ev.cellMotion)   { Serial.printf("[%s] CELL MOTION EVENT\n", cfg.name.c_str());   printEventState(cfg, xml, "CellMotionDetector"); }
+    if (ev.peopleDetect)  { Serial.printf("[%s] PEOPLE DETECT EVENT\n", cfg.name.c_str());  printEventState(cfg, xml, "PeopleDetect"); }
+    if (ev.vehicleDetect) { Serial.printf("[%s] VEHICLE DETECT EVENT\n", cfg.name.c_str()); printEventState(cfg, xml, "VehicleDetect"); }
+    if (ev.dogCatDetect) { Serial.printf("[%s] DOG/CAT DETECT EVENT\n", cfg.name.c_str());  printEventState(cfg, xml, "DogCatDetect"); }
+    if (ev.signalLoss)    { Serial.printf("[%s] SIGNAL LOSS EVENT\n", cfg.name.c_str());    printEventState(cfg, xml, "SignalLoss"); }
+    if (ev.tamper)       { Serial.printf("[%s] TAMPER EVENT\n", cfg.name.c_str());        printEventState(cfg, xml, "TamperDetector"); }
+  }
 
   // Every check below uses the topic's own state, not the body-wide flags.
   if (motionEventFired(xml, ev)) {
     st.lastMotionMs = millis(); // real motion signal, independent of mute/cooldown/quiet hours - see checkMotionWatchdog
     // Checked separately: one batch can report person and vehicle together,
-    // and each has its own opt-out. Collapsing to one kind first once let a
+    // and each has its own opt-out. Collapsing to one kind first would let a
     // muted person alert swallow a wanted vehicle alert.
     bool personDetected = ev.peopleDetect && personTopicReportedTrue(xml);
     bool vehicleDetected = ev.vehicleDetect && topicReportedTrue(xml, "VehicleDetect");
@@ -612,7 +618,7 @@ bool cameraSetupSequence(const CameraConfig& cfg, CameraState& st) {
 // ============================================================
 void cameraTaskFn(void* pvParameters) {
   CameraTaskContext* ctx = static_cast<CameraTaskContext*>(pvParameters);
-  CameraConfig& cfg = *ctx->cfg; // non-const - see CameraTaskContext::cfg's comment
+  CameraConfig& cfg = *ctx->cfg; // non-const: this task applies staged edits to it
   CameraState& st = *ctx->st;
   delete ctx; // context struct's job is done once we've unpacked it
 
@@ -659,7 +665,7 @@ void cameraTaskFn(void* pvParameters) {
       st.lastTaskBeatMs = millis();
     }
     if (stopNow) {
-      cfg.enabled = false; // only this task may write its own cfg - see requestLiveConfigReload's comment
+      cfg.enabled = false; // only this task may write its own cfg
       { CameraStateLock lock(st); st.subscriptionActive = false; st.taskRunning = false; }
       Serial.printf("[%s] Stopped via dashboard (disabled/deleted) - task exiting, no reboot needed.\n",
                     cfg.name.c_str());

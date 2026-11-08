@@ -128,222 +128,234 @@ static String renderCameraHealthSummary(const std::vector<CameraConfig>& cams,
   return html;
 }
 
-String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
-                           std::vector<CameraConfig>* liveCameras, std::vector<CameraState>* liveStates) {
-  std::vector<CameraConfig> cams = loadCameras();
-
-  String html = "<h1>Cameras</h1>";
-  html += renderCameraHealthSummary(cams, liveCameras, liveStates);
-  html += "<table><tr><th>Name</th><th>Device Service URL</th><th>Enabled</th>"
-          "<th>Live Status</th><th>Last Alert</th><th>Preview</th><th>Notes</th><th></th></tr>";
-  size_t rowIdx = 0; // unique per-row DOM id source for the latency toggle below - findLiveCameraIndex's
-                      // own idx can be -1 (camera with no live slot)
-  for (auto& c : cams) {
-    int idx = findLiveCameraIndex(liveCameras, c.name);
-    String liveStatus;
-    String lastAlertStr = "never";
-    String previewCell = "<span class=\"hint\">(none yet)</span>";
-    String rtspUri;  // populated below only if isLive - see CameraState::streamUri's own comment
-    String mjpegUri; // populated below only if isLive - see CameraState::mjpegUri's own comment
-    String liveRowHtml; // set below only if mjpegUri is non-empty - a sibling <tr> appended after this row's own
-    // c.enabled (fresh from NVS) too: a stopped camera keeps its slot, so idx
-    // alone can't tell a live task from a finished one.
-    bool isLive = idx >= 0 && liveStates && idx < (int)liveStates->size() && c.enabled;
-    if (isLive) {
-      // Written by the camera task; read under the lock.
-      CameraState& st = (*liveStates)[idx];
-      bool subscribed, offline, alertsEnabled, hasAlerted;
-      uint32_t lastAlert;
-      unsigned long revertDueMs, totalReconnects;
-      bool revertToOn;
-      size_t recentReconnects = 0; // how many of reconnectHistory's entries fall in the last 24h
-      size_t recentOfflineEvents = 0; // same, for offlineHistory
-      size_t latencyCount = 0;
-      unsigned long latencySum = 0, latencyMin = 0, latencyMax = 0;
-      unsigned long nowMs = millis();
-      String supportedEventTopics;
-      {
-        CameraStateLock lock(st);
-        subscribed = st.subscriptionActive;
-        offline = st.isOffline;
-        alertsEnabled = st.alertsEnabled;
-        hasAlerted = st.hasAlerted;
-        lastAlert = st.lastAlert;
-        revertDueMs = st.scheduledRevertDueMs;
-        revertToOn = st.scheduledRevertToOn;
-        totalReconnects = st.totalReconnects;
-        rtspUri = st.streamUri;
-        mjpegUri = st.mjpegUri;
-        supportedEventTopics = st.supportedEventTopics;
-        for (size_t i = 0; i < st.reconnectHistoryCount; i++) {
-          if (nowMs - st.reconnectHistory[i] < 24UL * 3600UL * 1000UL) recentReconnects++;
-        }
-        for (size_t i = 0; i < st.offlineHistoryCount; i++) {
-          if (nowMs - st.offlineHistory[i] < 24UL * 3600UL * 1000UL) recentOfflineEvents++;
-        }
-        latencyCount = st.motionLatencyHistoryCount;
-        for (size_t i = 0; i < latencyCount; i++) {
-          unsigned long v = st.motionLatencyHistory[i];
-          latencySum += v;
-          if (i == 0 || v < latencyMin) latencyMin = v;
-          if (v > latencyMax) latencyMax = v;
-        }
-      }
-      // OFFLINE (not answering), NOT SUBSCRIBED (answering but no
-      // subscription) and ONLINE are different problems, hence three states.
-      // STOPPED: the task exited, which only a save (or reboot) restarts.
-      if (!cameraTaskAlive(idx)) {
-        liveStatus = "<span class=\"badge badge-warn\">STOPPED</span> - " +
-                     String(c.user.length() == 0 || c.pass.length() == 0
-                                ? "no username/password; add them and save to restart"
-                                : "save this camera to restart it");
-      } else if (offline) {
-        liveStatus = "<span class=\"badge badge-offline\">OFFLINE</span>";
-      } else if (subscribed) {
-        liveStatus = "<span class=\"badge badge-on\">ONLINE</span>";
-      } else {
-        liveStatus = "<span class=\"badge badge-warn\">NOT SUBSCRIBED</span>";
-      }
-      // Supported detection types as a hover tooltip.
-      if (supportedEventTopics.length() > 0) {
-        liveStatus += " <span title=\"Event schema mentions: " + htmlEscape(supportedEventTopics) +
-                      "\">\xE2\x84\xB9\xEF\xB8\x8F</span>";
-      }
-      // Shown even when online again - repeated flapping is what it reveals.
-      if (recentOfflineEvents > 0) {
-        liveStatus += " - went offline " + String((unsigned)recentOfflineEvents) +
-                      (recentOfflineEvents == EVENT_HISTORY_RING_SIZE ? "+" : "") + " time(s) in the last 24h";
-      }
-      if (!alertsEnabled) liveStatus += " <span class=\"badge badge-off\">MUTED</span>";
-      if (revertDueMs != 0 && (long)(millis() - revertDueMs) < 0) {
-        liveStatus += " - auto " + String(revertToOn ? "ON" : "OFF") + " in " +
-                      formatUptime(revertDueMs - millis());
-      }
-      if (totalReconnects > 0) {
-        liveStatus += " - " + String(totalReconnects) + " reconnect(s) since boot";
-        // "+" means a floor: every ring slot is within 24h, so older ones may
-        // have been evicted.
-        if (recentReconnects > 0) {
-          liveStatus += " (" + String((unsigned)recentReconnects) +
-                        (recentReconnects == EVENT_HISTORY_RING_SIZE ? "+" : "") + " in the last 24h)";
-        }
-      }
-      // Latency detail behind a click (vanilla JS toggle); it's tuning info.
-      if (latencyCount > 0) {
-        unsigned long avgMs = latencySum / latencyCount;
-        String latencyId = "lat" + String((unsigned)rowIdx);
-        liveStatus += " <a href=\"#\" onclick=\"var d=document.getElementById('" + latencyId +
-                      "');d.style.display=(d.style.display==='inline')?'none':'inline';return false;\" "
-                      "title=\"Motion-to-photo latency\">&#9201;</a>";
-        // Poll interval alongside, for comparison.
-        liveStatus += "<span id=\"" + latencyId + "\" style=\"display:none;\"> - last " +
-                      String((unsigned)latencyCount) + ": avg " + String(avgMs) + "ms, min " +
-                      String(latencyMin) + "ms, max " + String(latencyMax) + "ms (poll interval " +
-                      String(c.pollIntervalMs) + "ms)</span>";
-      }
-      if (hasAlerted) lastAlertStr = formatElapsedSince(lastAlert, millis());
-
-      size_t historyCount = cameraSnapshotCount(c, st);
-      if (historyCount > 0) {
-        // Newest first. One render-time value cache-busts the thumbnails.
-        unsigned long renderMs = millis();
-        previewCell = "";
-        // Oldest-to-newest for the flipbook (age counts back from newest).
-        String flipbookUrls;
-        for (size_t age = 0; age < historyCount; age++) {
-          String url = "/cameras/snapshot?name=" + urlEncode(c.name) + "&age=" + String((unsigned)age) +
-                        "&t=" + String(renderMs);
-          // Source as a tooltip; the strip has no room for captions.
-          String sourceLabel = snapshotSourceLabel(cameraSnapshotSourceAt(c, st, age));
-          previewCell += "<a href=\"" + url + "\" target=\"_blank\">"
-                         "<img src=\"" + url + "\" style=\"max-width:48px;max-height:36px;margin:1px;\" "
-                         "alt=\"preview\" title=\"" + sourceLabel + "\"></a>";
-          String oldestFirstUrl = "/cameras/snapshot?name=" + urlEncode(c.name) +
-                                   "&age=" + String((unsigned)(historyCount - 1 - age)) + "&t=" + String(renderMs);
-          flipbookUrls += (age > 0 ? "|" : "") + oldestFirstUrl;
-        }
-        // Flipbook reuses the loaded thumbnails (no extra requests).
-        if (historyCount > 1) {
-          previewCell += "<br><button type=\"button\" class=\"secondary\" "
-                         "onclick=\"playFlipbook(this,'" + flipbookUrls + "')\">\xE2\x96\xB6 Play</button> "
-                         "<img class=\"flipbook-img\">"; // sized/hidden via the shell's .flipbook-img rule
-        }
-      }
-    } else if (!c.enabled) {
-      liveStatus = "<span class=\"badge badge-off\">DISABLED</span>";
-    } else if (isPendingNewCamera(c.name)) {
-      liveStatus = "<span class=\"badge badge-warn\">STARTING</span> - refresh in a few seconds";
-    } else {
-      liveStatus = "<span class=\"badge badge-warn\">NOT RUNNING</span> - reboot to apply";
-    }
-
-    // Notes as a tooltip so long text doesn't widen the column.
-    String notesCell = c.notes.length() > 0
-        ? "<span title=\"" + htmlEscape(c.notes) + "\" style=\"cursor:help;\">\xF0\x9F\x93\x9D</span>"
-        : "";
-
-    String enabledBadge = c.enabled ? "<span class=\"badge badge-on\">yes</span>"
-                                      : "<span class=\"badge badge-off\">no</span>";
-    html += "<tr><td>" + htmlEscape(c.name) + "</td><td>" + htmlEscape(c.deviceServiceUrl) +
-            "</td><td>" + enabledBadge + "</td><td>" + liveStatus + "</td><td>" +
-            lastAlertStr + "</td><td>" + previewCell + "</td><td>" +
-            notesCell + "</td><td><div class=\"row-actions\">";
-    // Best-guess link to the camera's own web UI on port 80. The ONVIF port is
-    // dropped: several cameras run ONVIF on a separate port (e.g. Vstarcam's
-    // :10080) with the UI on 80. New tab, in case it's dead.
-    String hostOnly = extractHost(c.deviceServiceUrl);
-    int portSep = hostOnly.indexOf(':');
-    if (portSep >= 0) hostOnly = hostOnly.substring(0, portSep);
-    // Must escape: deviceServiceUrl can come from a rogue camera's discovery
-    // reply or an imported file - stored XSS otherwise.
-    html += "<a class=\"icon-btn secondary\" href=\"http://" + htmlEscape(hostOnly) +
-            "/\" target=\"_blank\" title=\"Open camera's web UI\" aria-label=\"Open camera's web UI\">"
-            "&#8599;</a>";
-    // RTSP link with embedded credentials, ready for VLC. Escaped: the URI
-    // comes from the camera's own (untrusted) response.
-    if (rtspUri.length() > 0) {
-      String rtspWithCreds = buildUriWithCredentials(rtspUri, c.user, c.pass);
-      html += " <a class=\"icon-btn secondary\" href=\"" + htmlEscape(rtspWithCreds) +
-              "\" title=\"Open live RTSP stream (e.g. in VLC)\" aria-label=\"Open live RTSP stream\">"
-              "&#9654;</a>";
-    }
-    // Inline MJPEG preview (rare: needs a JPEG profile with HTTP transport). A
-    // toggle rather than always on: the browser holds a connection straight to
-    // the camera, which can crowd out our own polling on 1-2-connection
-    // cameras.
-    if (mjpegUri.length() > 0) {
-      String mjpegWithCreds = buildUriWithCredentials(mjpegUri, c.user, c.pass);
-      String liveRowId = "liverow" + String((unsigned)rowIdx);
-      String liveImgId = "liveimg" + String((unsigned)rowIdx);
-      html += " <button type=\"button\" class=\"icon-btn secondary\" title=\"Toggle live preview - "
-              "holds an extra connection open on the camera while showing\" aria-label=\"Toggle live "
-              "preview\" onclick=\"toggleLivePreview(this,'" + liveRowId + "','" + liveImgId + "','" +
-              htmlEscape(mjpegWithCreds) + "')\">\xE2\x96\xB6 Live</button>";
-      liveRowHtml = "<tr id=\"" + liveRowId + "\" style=\"display:none;\"><td colspan=\"8\">"
-                    "<img id=\"" + liveImgId + "\" style=\"max-width:100%;max-height:400px;\" "
-                    "alt=\"live preview\"></td></tr>";
-    }
-    if (isLive) {
-      // POST form: fetches a snapshot and sends it via a background task. The
-      // kind selector picks the caption variant so phone automations can be
-      // tested (pet is a separate flag, as in real alerts).
-      html += " <form method=\"POST\" action=\"/cameras/test-alert\" style=\"display:inline;\">"
-              "<input type=\"hidden\" name=\"name\" value=\"" + htmlEscape(c.name) + "\">"
-              "<select name=\"kind\" title=\"Which detection kind to simulate\">"
-              "<option value=\"generic\">Generic</option>"
-              "<option value=\"person\">Person</option>"
-              "<option value=\"vehicle\">Vehicle</option>"
-              "<option value=\"pet\">Pet</option>"
-              "</select>"
-              "<button type=\"submit\" class=\"icon-btn secondary\" title=\"Send test alert\" "
-              "aria-label=\"Send test alert\">\xF0\x9F\xA7\xAA</button></form>";
-    }
-    html += renderEditDeleteActions("/cameras/edit?name=", "/delete", c.name) + "</div></td></tr>";
-    html += liveRowHtml;
-    rowIdx++;
+// Thumbnails of this camera's recent snapshots, or "" if it has none.
+static String renderSnapshotPreview(const CameraConfig& c, CameraState& st) {
+  size_t historyCount = cameraSnapshotCount(c, st);
+  if (historyCount == 0) return "";
+  String previewCell;
+  // Newest first. One render-time value cache-busts the thumbnails.
+  unsigned long renderMs = millis();
+  // Oldest-to-newest for the flipbook (age counts back from newest).
+  String flipbookUrls;
+  for (size_t age = 0; age < historyCount; age++) {
+    String url = "/cameras/snapshot?name=" + urlEncode(c.name) + "&age=" + String((unsigned)age) +
+                  "&t=" + String(renderMs);
+    // Source as a tooltip; the strip has no room for captions.
+    String sourceLabel = snapshotSourceLabel(cameraSnapshotSourceAt(c, st, age));
+    previewCell += "<a href=\"" + url + "\" target=\"_blank\">"
+                   "<img src=\"" + url + "\" style=\"max-width:48px;max-height:36px;margin:1px;\" "
+                   "alt=\"preview\" title=\"" + sourceLabel + "\"></a>";
+    String oldestFirstUrl = "/cameras/snapshot?name=" + urlEncode(c.name) +
+                             "&age=" + String((unsigned)(historyCount - 1 - age)) + "&t=" + String(renderMs);
+    flipbookUrls += (age > 0 ? "|" : "") + oldestFirstUrl;
   }
-  html += "</table>";
+  // Flipbook reuses the loaded thumbnails (no extra requests).
+  if (historyCount > 1) {
+    previewCell += "<br><button type=\"button\" class=\"secondary\" "
+                   "onclick=\"playFlipbook(this,'" + flipbookUrls + "')\">\xE2\x96\xB6 Play</button> "
+                   "<img class=\"flipbook-img\">"; // sized/hidden via the shell's .flipbook-img rule
+  }
+  return previewCell;
+}
 
+// Fills in the columns that depend on the running task.
+static void describeLiveCamera(const CameraConfig& c, int idx, CameraState& st, size_t rowIdx, String& liveStatus,
+                               String& lastAlertStr, String& rtspUri, String& mjpegUri) {
+  bool subscribed, offline, alertsEnabled, hasAlerted;
+  uint32_t lastAlert;
+  unsigned long revertDueMs, totalReconnects;
+  bool revertToOn;
+  size_t recentReconnects = 0; // how many of reconnectHistory's entries fall in the last 24h
+  size_t recentOfflineEvents = 0; // same, for offlineHistory
+  size_t latencyCount = 0;
+  unsigned long latencySum = 0, latencyMin = 0, latencyMax = 0;
+  unsigned long nowMs = millis();
+  String supportedEventTopics;
+  {
+    CameraStateLock lock(st);
+    subscribed = st.subscriptionActive;
+    offline = st.isOffline;
+    alertsEnabled = st.alertsEnabled;
+    hasAlerted = st.hasAlerted;
+    lastAlert = st.lastAlert;
+    revertDueMs = st.scheduledRevertDueMs;
+    revertToOn = st.scheduledRevertToOn;
+    totalReconnects = st.totalReconnects;
+    rtspUri = st.streamUri;
+    mjpegUri = st.mjpegUri;
+    supportedEventTopics = st.supportedEventTopics;
+    for (size_t i = 0; i < st.reconnectHistoryCount; i++) {
+      if (nowMs - st.reconnectHistory[i] < 24UL * 3600UL * 1000UL) recentReconnects++;
+    }
+    for (size_t i = 0; i < st.offlineHistoryCount; i++) {
+      if (nowMs - st.offlineHistory[i] < 24UL * 3600UL * 1000UL) recentOfflineEvents++;
+    }
+    latencyCount = st.motionLatencyHistoryCount;
+    for (size_t i = 0; i < latencyCount; i++) {
+      unsigned long v = st.motionLatencyHistory[i];
+      latencySum += v;
+      if (i == 0 || v < latencyMin) latencyMin = v;
+      if (v > latencyMax) latencyMax = v;
+    }
+  }
+  // OFFLINE (not answering), NOT SUBSCRIBED (answering but no
+  // subscription) and ONLINE are different problems, hence three states.
+  // STOPPED: the task exited, which only a save (or reboot) restarts.
+  if (!cameraTaskAlive(idx)) {
+    liveStatus = "<span class=\"badge badge-warn\">STOPPED</span> - " +
+                 String(c.user.length() == 0 || c.pass.length() == 0
+                            ? "no username/password; add them and save to restart"
+                            : "save this camera to restart it");
+  } else if (offline) {
+    liveStatus = "<span class=\"badge badge-offline\">OFFLINE</span>";
+  } else if (subscribed) {
+    liveStatus = "<span class=\"badge badge-on\">ONLINE</span>";
+  } else {
+    liveStatus = "<span class=\"badge badge-warn\">NOT SUBSCRIBED</span>";
+  }
+  // Supported detection types as a hover tooltip.
+  if (supportedEventTopics.length() > 0) {
+    liveStatus += " <span title=\"Event schema mentions: " + htmlEscape(supportedEventTopics) +
+                  "\">\xE2\x84\xB9\xEF\xB8\x8F</span>";
+  }
+  // Shown even when online again - repeated flapping is what it reveals.
+  if (recentOfflineEvents > 0) {
+    liveStatus += " - went offline " + String((unsigned)recentOfflineEvents) +
+                  (recentOfflineEvents == EVENT_HISTORY_RING_SIZE ? "+" : "") + " time(s) in the last 24h";
+  }
+  if (!alertsEnabled) liveStatus += " <span class=\"badge badge-off\">MUTED</span>";
+  if (revertDueMs != 0 && (long)(millis() - revertDueMs) < 0) {
+    liveStatus += " - auto " + String(revertToOn ? "ON" : "OFF") + " in " +
+                  formatUptime(revertDueMs - millis());
+  }
+  if (totalReconnects > 0) {
+    liveStatus += " - " + String(totalReconnects) + " reconnect(s) since boot";
+    // "+" means a floor: every ring slot is within 24h, so older ones may
+    // have been evicted.
+    if (recentReconnects > 0) {
+      liveStatus += " (" + String((unsigned)recentReconnects) +
+                    (recentReconnects == EVENT_HISTORY_RING_SIZE ? "+" : "") + " in the last 24h)";
+    }
+  }
+  // Latency detail behind a click (vanilla JS toggle); it's tuning info.
+  if (latencyCount > 0) {
+    unsigned long avgMs = latencySum / latencyCount;
+    String latencyId = "lat" + String((unsigned)rowIdx);
+    liveStatus += " <a href=\"#\" onclick=\"var d=document.getElementById('" + latencyId +
+                  "');d.style.display=(d.style.display==='inline')?'none':'inline';return false;\" "
+                  "title=\"Motion-to-photo latency\">&#9201;</a>";
+    // Poll interval alongside, for comparison.
+    liveStatus += "<span id=\"" + latencyId + "\" style=\"display:none;\"> - last " +
+                  String((unsigned)latencyCount) + ": avg " + String(avgMs) + "ms, min " +
+                  String(latencyMin) + "ms, max " + String(latencyMax) + "ms (poll interval " +
+                  String(c.pollIntervalMs) + "ms)</span>";
+  }
+  if (hasAlerted) lastAlertStr = formatElapsedSince(lastAlert, millis());
+}
+
+// The row's buttons, up to Edit/Delete; liveRowHtml gets the hidden preview row, if any.
+static String renderRowActions(const CameraConfig& c, size_t rowIdx, bool isLive, const String& rtspUri,
+                               const String& mjpegUri, String& liveRowHtml) {
+  String html;
+  // Best-guess link to the camera's own web UI on port 80. The ONVIF port is
+  // dropped: several cameras run ONVIF on a separate port (e.g. Vstarcam's
+  // :10080) with the UI on 80. New tab, in case it's dead.
+  String hostOnly = extractHost(c.deviceServiceUrl);
+  int portSep = hostOnly.indexOf(':');
+  if (portSep >= 0) hostOnly = hostOnly.substring(0, portSep);
+  // Must escape: deviceServiceUrl can come from a rogue camera's discovery
+  // reply or an imported file - stored XSS otherwise.
+  html += "<a class=\"icon-btn secondary\" href=\"http://" + htmlEscape(hostOnly) +
+          "/\" target=\"_blank\" title=\"Open camera's web UI\" aria-label=\"Open camera's web UI\">"
+          "&#8599;</a>";
+  // RTSP link with embedded credentials, ready for VLC. Escaped: the URI
+  // comes from the camera's own (untrusted) response.
+  if (rtspUri.length() > 0) {
+    String rtspWithCreds = buildUriWithCredentials(rtspUri, c.user, c.pass);
+    html += " <a class=\"icon-btn secondary\" href=\"" + htmlEscape(rtspWithCreds) +
+            "\" title=\"Open live RTSP stream (e.g. in VLC)\" aria-label=\"Open live RTSP stream\">"
+            "&#9654;</a>";
+  }
+  // Inline MJPEG preview (rare: needs a JPEG profile with HTTP transport). A
+  // toggle rather than always on: the browser holds a connection straight to
+  // the camera, which can crowd out our own polling on 1-2-connection
+  // cameras.
+  if (mjpegUri.length() > 0) {
+    String mjpegWithCreds = buildUriWithCredentials(mjpegUri, c.user, c.pass);
+    String liveRowId = "liverow" + String((unsigned)rowIdx);
+    String liveImgId = "liveimg" + String((unsigned)rowIdx);
+    html += " <button type=\"button\" class=\"icon-btn secondary\" title=\"Toggle live preview - "
+            "holds an extra connection open on the camera while showing\" aria-label=\"Toggle live "
+            "preview\" onclick=\"toggleLivePreview(this,'" + liveRowId + "','" + liveImgId + "','" +
+            htmlEscape(mjpegWithCreds) + "')\">\xE2\x96\xB6 Live</button>";
+    liveRowHtml = "<tr id=\"" + liveRowId + "\" style=\"display:none;\"><td colspan=\"8\">"
+                  "<img id=\"" + liveImgId + "\" style=\"max-width:100%;max-height:400px;\" "
+                  "alt=\"live preview\"></td></tr>";
+  }
+  if (isLive) {
+    // POST form: fetches a snapshot and sends it via a background task. The
+    // kind selector picks the caption variant so phone automations can be
+    // tested (pet is a separate flag, as in real alerts).
+    html += " <form method=\"POST\" action=\"/cameras/test-alert\" style=\"display:inline;\">"
+            "<input type=\"hidden\" name=\"name\" value=\"" + htmlEscape(c.name) + "\">"
+            "<select name=\"kind\" title=\"Which detection kind to simulate\">"
+            "<option value=\"generic\">Generic</option>"
+            "<option value=\"person\">Person</option>"
+            "<option value=\"vehicle\">Vehicle</option>"
+            "<option value=\"pet\">Pet</option>"
+            "</select>"
+            "<button type=\"submit\" class=\"icon-btn secondary\" title=\"Send test alert\" "
+            "aria-label=\"Send test alert\">\xF0\x9F\xA7\xAA</button></form>";
+  }
+  return html;
+}
+
+static String renderCameraRow(const CameraConfig& c, size_t rowIdx, std::vector<CameraConfig>* liveCameras,
+                              std::vector<CameraState>* liveStates) {
+  String html;
+  int idx = findLiveCameraIndex(liveCameras, c.name);
+  String liveStatus;
+  String lastAlertStr = "never";
+  String previewCell = "<span class=\"hint\">(none yet)</span>";
+  String rtspUri;  // only if isLive
+  String mjpegUri; // only if isLive
+  String liveRowHtml; // set below only if mjpegUri is non-empty - a sibling <tr> appended after this row's own
+  // c.enabled (fresh from NVS) too: a stopped camera keeps its slot, so idx
+  // alone can't tell a live task from a finished one.
+  bool isLive = idx >= 0 && liveStates && idx < (int)liveStates->size() && c.enabled;
+  if (isLive) {
+    // Written by the camera task; read under the lock.
+    CameraState& st = (*liveStates)[idx];
+    describeLiveCamera(c, idx, st, rowIdx, liveStatus, lastAlertStr, rtspUri, mjpegUri);
+    String preview = renderSnapshotPreview(c, st);
+    if (preview.length() > 0) previewCell = preview;
+  } else if (!c.enabled) {
+    liveStatus = "<span class=\"badge badge-off\">DISABLED</span>";
+  } else if (isPendingNewCamera(c.name)) {
+    liveStatus = "<span class=\"badge badge-warn\">STARTING</span> - refresh in a few seconds";
+  } else {
+    liveStatus = "<span class=\"badge badge-warn\">NOT RUNNING</span> - reboot to apply";
+  }
+
+  // Notes as a tooltip so long text doesn't widen the column.
+  String notesCell = c.notes.length() > 0
+      ? "<span title=\"" + htmlEscape(c.notes) + "\" style=\"cursor:help;\">\xF0\x9F\x93\x9D</span>"
+      : "";
+
+  String enabledBadge = c.enabled ? "<span class=\"badge badge-on\">yes</span>"
+                                    : "<span class=\"badge badge-off\">no</span>";
+  html += "<tr><td>" + htmlEscape(c.name) + "</td><td>" + htmlEscape(c.deviceServiceUrl) +
+          "</td><td>" + enabledBadge + "</td><td>" + liveStatus + "</td><td>" +
+          lastAlertStr + "</td><td>" + previewCell + "</td><td>" +
+          notesCell + "</td><td><div class=\"row-actions\">";
+  html += renderRowActions(c, rowIdx, isLive, rtspUri, mjpegUri, liveRowHtml);
+  html += renderEditDeleteActions("/cameras/edit?name=", "/delete", c.name) + "</div></td></tr>";
+  html += liveRowHtml;
+  return html;
+}
+
+static String renderCameraPageScripts() {
+  String html;
   // playFlipbook: cycles a row's cached thumbnails, oldest to newest, in a
   // larger image. Click again to stop.
   html += "<script>"
@@ -367,88 +379,121 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
           "row.style.display='table-row';img.src=src;btn.textContent='\xE2\x8F\xB8 Stop';"
           "}"
           "</script>";
+  return html;
+}
+
+static String renderMuteAllForms() {
+  String html;
+  html += "<fieldset><legend>Mute / Unmute all</legend>";
+  html += "<form method=\"POST\" action=\"/cameras/mute-all\" "
+          "onsubmit=\"return confirm('Mute every enabled camera\\'s alerts? Detection/recording keeps "
+          "running either way, only the Telegram send is muted.');\">";
+  html += "<label>Mute every enabled camera's alerts for (minutes, or HH:MM, blank = until "
+          "manually unmuted)<input type=\"text\" name=\"duration\" placeholder=\"e.g. 30 or 23:00\">"
+          "</label>";
+  html += "<p><button type=\"submit\">Mute all</button></p></form>";
+  html += "<form method=\"POST\" action=\"/cameras/unmute-all\" "
+          "onsubmit=\"return confirm('Unmute every camera\\'s alerts?');\">"
+          "<p><button type=\"submit\">Unmute all</button></p></form>";
+  html += "<p class=\"hint\">Same effect as Telegram's /off all and /on all - each enabled camera "
+          "keeps its own subscription and detection running either way, only the Telegram send is "
+          "muted. A per-camera edit or timer below still overrides whatever this last set.</p>";
+  html += "</fieldset>";
+  return html;
+}
+
+static String renderQuietHoursAllForm() {
+  String html;
+  html += "<fieldset><legend>Set quiet hours for all cameras</legend>";
+  html += "<form method=\"POST\" action=\"/cameras/quiet-hours-all\" "
+          "onsubmit=\"return confirm('Overwrite every camera\\'s individual quiet hours setting "
+          "with this one? There is no way to see what each camera currently has before this "
+          "replaces it.');\">";
+  html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"quietHoursEnabled\"> Quiet hours "
+          "(mutes motion alerts only - tamper/offline still alert)</label>";
+  html += "<label>Start<input type=\"time\" name=\"quietStart\" value=\"00:00\"></label>";
+  html += "<label>End<input type=\"time\" name=\"quietEnd\" value=\"00:00\"></label>";
+  html += "<p><button type=\"submit\">Apply to all cameras</button></p></form>";
+  html += "<p class=\"hint\">Overwrites every camera's quiet hours (both enabled and disabled ones) "
+          "with this one setting, all at once - there's no per-camera preview here, so check each "
+          "camera's own Edit form afterward if you need to confirm what landed. Leaving start and "
+          "end the same (e.g. both 00:00) means no active window, same as the per-camera form.</p>";
+  html += "</fieldset>";
+  return html;
+}
+
+static String renderAlertTypesAllForms(const std::vector<CameraConfig>& cams) {
+  String html;
+  // Each bulk checkbox starts checked only if every camera has it on, so
+  // submitting untouched changes nothing; "X of Y" shows mixed states.
+  size_t personOnCount = 0, vehicleOnCount = 0, petOnCount = 0;
+  for (auto& c : cams) {
+    if (c.personAlertsEnabled) personOnCount++;
+    if (c.vehicleAlertsEnabled) vehicleOnCount++;
+    if (c.petAlertsEnabled) petOnCount++;
+  }
+  html += "<fieldset><legend>Set person/vehicle/pet alerts for all cameras</legend>";
+  html += "<form method=\"POST\" action=\"/cameras/person-alerts-all\" "
+          "onsubmit=\"return confirm('Overwrite every camera\\'s individual PERSON alert setting with "
+          "this one? Vehicle and pet alert settings are left untouched. There is no way to see what "
+          "each camera currently has before this replaces it.');\">";
+  html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"enabled\"" +
+          String(personOnCount == cams.size() ? " checked" : "") + "> "
+          "Alert on person detection</label>";
+  html += "<p class=\"hint\">Currently on for " + String((unsigned)personOnCount) + " of " +
+          String((unsigned)cams.size()) + " camera(s).</p>";
+  html += "<p><button type=\"submit\">Apply person alerts to all cameras</button></p></form>";
+  html += "<form method=\"POST\" action=\"/cameras/vehicle-alerts-all\" "
+          "onsubmit=\"return confirm('Overwrite every camera\\'s individual VEHICLE alert setting with "
+          "this one? Person and pet alert settings are left untouched. There is no way to see what "
+          "each camera currently has before this replaces it.');\">";
+  html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"enabled\"" +
+          String(vehicleOnCount == cams.size() ? " checked" : "") + "> "
+          "Alert on vehicle detection</label>";
+  html += "<p class=\"hint\">Currently on for " + String((unsigned)vehicleOnCount) + " of " +
+          String((unsigned)cams.size()) + " camera(s).</p>";
+  html += "<p><button type=\"submit\">Apply vehicle alerts to all cameras</button></p></form>";
+  html += "<form method=\"POST\" action=\"/cameras/pet-alerts-all\" "
+          "onsubmit=\"return confirm('Overwrite every camera\\'s individual PET alert setting with this "
+          "one? Person and vehicle alert settings are left untouched. There is no way to see what each "
+          "camera currently has before this replaces it.');\">";
+  html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"enabled\"" +
+          String(petOnCount == cams.size() ? " checked" : "") + "> "
+          "Alert on pet (dog/cat) detection</label>";
+  html += "<p class=\"hint\">Currently on for " + String((unsigned)petOnCount) + " of " +
+          String((unsigned)cams.size()) + " camera(s).</p>";
+  html += "<p><button type=\"submit\">Apply pet alerts to all cameras</button></p></form>";
+  html += "<p class=\"hint\">Each button only overwrites its own setting (person, vehicle, or pet) "
+          "across every camera (both enabled and disabled ones) - the other two stay whatever each "
+          "camera already has, so bulk-setting one never undoes a deliberate per-camera choice on "
+          "another. The \"currently on for X of Y\" counts (and each checkbox's own starting state) "
+          "reflect the real setting right now, but only as an all-on/not-all-on summary - if it's "
+          "mixed, check each camera's own Edit form for the specific breakdown. Person/vehicle only "
+          "affects cameras whose own ONVIF AI actually distinguishes that detection - a plain motion "
+          "sensor always alerts regardless.</p>";
+  html += "</fieldset>";
+  return html;
+}
+
+String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
+                           std::vector<CameraConfig>* liveCameras, std::vector<CameraState>* liveStates) {
+  std::vector<CameraConfig> cams = loadCameras();
+
+  String html = "<h1>Cameras</h1>";
+  html += renderCameraHealthSummary(cams, liveCameras, liveStates);
+  html += "<table><tr><th>Name</th><th>Device Service URL</th><th>Enabled</th>"
+          "<th>Live Status</th><th>Last Alert</th><th>Preview</th><th>Notes</th><th></th></tr>";
+  size_t rowIdx = 0; // unique per-row DOM id source for the latency toggle below - findLiveCameraIndex's
+                      // own idx can be -1 (camera with no live slot)
+  for (auto& c : cams) html += renderCameraRow(c, rowIdx++, liveCameras, liveStates);
+  html += "</table>";
+
+  html += renderCameraPageScripts();
 
   if (!cams.empty()) {
-    html += "<fieldset><legend>Mute / Unmute all</legend>";
-    html += "<form method=\"POST\" action=\"/cameras/mute-all\" "
-            "onsubmit=\"return confirm('Mute every enabled camera\\'s alerts? Detection/recording keeps "
-            "running either way, only the Telegram send is muted.');\">";
-    html += "<label>Mute every enabled camera's alerts for (minutes, or HH:MM, blank = until "
-            "manually unmuted)<input type=\"text\" name=\"duration\" placeholder=\"e.g. 30 or 23:00\">"
-            "</label>";
-    html += "<p><button type=\"submit\">Mute all</button></p></form>";
-    html += "<form method=\"POST\" action=\"/cameras/unmute-all\" "
-            "onsubmit=\"return confirm('Unmute every camera\\'s alerts?');\">"
-            "<p><button type=\"submit\">Unmute all</button></p></form>";
-    html += "<p class=\"hint\">Same effect as Telegram's /off all and /on all - each enabled camera "
-            "keeps its own subscription and detection running either way, only the Telegram send is "
-            "muted. A per-camera edit or timer below still overrides whatever this last set.</p>";
-    html += "</fieldset>";
-
-    html += "<fieldset><legend>Set quiet hours for all cameras</legend>";
-    html += "<form method=\"POST\" action=\"/cameras/quiet-hours-all\" "
-            "onsubmit=\"return confirm('Overwrite every camera\\'s individual quiet hours setting "
-            "with this one? There is no way to see what each camera currently has before this "
-            "replaces it.');\">";
-    html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"quietHoursEnabled\"> Quiet hours "
-            "(mutes motion alerts only - tamper/offline still alert)</label>";
-    html += "<label>Start<input type=\"time\" name=\"quietStart\" value=\"00:00\"></label>";
-    html += "<label>End<input type=\"time\" name=\"quietEnd\" value=\"00:00\"></label>";
-    html += "<p><button type=\"submit\">Apply to all cameras</button></p></form>";
-    html += "<p class=\"hint\">Overwrites every camera's quiet hours (both enabled and disabled ones) "
-            "with this one setting, all at once - there's no per-camera preview here, so check each "
-            "camera's own Edit form afterward if you need to confirm what landed. Leaving start and "
-            "end the same (e.g. both 00:00) means no active window, same as the per-camera form.</p>";
-    html += "</fieldset>";
-
-    // Each bulk checkbox starts checked only if every camera has it on, so
-    // submitting untouched changes nothing; "X of Y" shows mixed states.
-    size_t personOnCount = 0, vehicleOnCount = 0, petOnCount = 0;
-    for (auto& c : cams) {
-      if (c.personAlertsEnabled) personOnCount++;
-      if (c.vehicleAlertsEnabled) vehicleOnCount++;
-      if (c.petAlertsEnabled) petOnCount++;
-    }
-    html += "<fieldset><legend>Set person/vehicle/pet alerts for all cameras</legend>";
-    html += "<form method=\"POST\" action=\"/cameras/person-alerts-all\" "
-            "onsubmit=\"return confirm('Overwrite every camera\\'s individual PERSON alert setting with "
-            "this one? Vehicle and pet alert settings are left untouched. There is no way to see what "
-            "each camera currently has before this replaces it.');\">";
-    html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"enabled\"" +
-            String(personOnCount == cams.size() ? " checked" : "") + "> "
-            "Alert on person detection</label>";
-    html += "<p class=\"hint\">Currently on for " + String((unsigned)personOnCount) + " of " +
-            String((unsigned)cams.size()) + " camera(s).</p>";
-    html += "<p><button type=\"submit\">Apply person alerts to all cameras</button></p></form>";
-    html += "<form method=\"POST\" action=\"/cameras/vehicle-alerts-all\" "
-            "onsubmit=\"return confirm('Overwrite every camera\\'s individual VEHICLE alert setting with "
-            "this one? Person and pet alert settings are left untouched. There is no way to see what "
-            "each camera currently has before this replaces it.');\">";
-    html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"enabled\"" +
-            String(vehicleOnCount == cams.size() ? " checked" : "") + "> "
-            "Alert on vehicle detection</label>";
-    html += "<p class=\"hint\">Currently on for " + String((unsigned)vehicleOnCount) + " of " +
-            String((unsigned)cams.size()) + " camera(s).</p>";
-    html += "<p><button type=\"submit\">Apply vehicle alerts to all cameras</button></p></form>";
-    html += "<form method=\"POST\" action=\"/cameras/pet-alerts-all\" "
-            "onsubmit=\"return confirm('Overwrite every camera\\'s individual PET alert setting with this "
-            "one? Person and vehicle alert settings are left untouched. There is no way to see what each "
-            "camera currently has before this replaces it.');\">";
-    html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"enabled\"" +
-            String(petOnCount == cams.size() ? " checked" : "") + "> "
-            "Alert on pet (dog/cat) detection</label>";
-    html += "<p class=\"hint\">Currently on for " + String((unsigned)petOnCount) + " of " +
-            String((unsigned)cams.size()) + " camera(s).</p>";
-    html += "<p><button type=\"submit\">Apply pet alerts to all cameras</button></p></form>";
-    html += "<p class=\"hint\">Each button only overwrites its own setting (person, vehicle, or pet) "
-            "across every camera (both enabled and disabled ones) - the other two stay whatever each "
-            "camera already has, so bulk-setting one never undoes a deliberate per-camera choice on "
-            "another. The \"currently on for X of Y\" counts (and each checkbox's own starting state) "
-            "reflect the real setting right now, but only as an all-on/not-all-on summary - if it's "
-            "mixed, check each camera's own Edit form for the specific breakdown. Person/vehicle only "
-            "affects cameras whose own ONVIF AI actually distinguishes that detection - a plain motion "
-            "sensor always alerts regardless.</p>";
-    html += "</fieldset>";
+    html += renderMuteAllForms();
+    html += renderQuietHoursAllForm();
+    html += renderAlertTypesAllForms(cams);
   }
 
   html += "<form method=\"POST\" action=\"/cameras/discover\">"
@@ -481,11 +526,11 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
   html += renderTestAlertStatus();
   html += renderCameraForm(prefill ? *prefill : CameraConfig(), isEdit);
 
-  html += "<p class=\"hint\">Adding, editing, or deleting a camera updates storage immediately, "
-          "but only takes effect after the board reboots. Test Connection doesn't save anything - "
-          "it just runs GetCapabilities/GetEventProperties/GetSnapshotUri against whatever is "
-          "currently typed in, so you can catch a wrong URL or credential before rebooting. Runs "
-          "in the background; reload this page after clicking to see the result.</p>";
+  html += "<p class=\"hint\">Adding, editing, or deleting a camera applies straight away, without a "
+          "reboot. Test Connection doesn't save anything - it just runs "
+          "GetCapabilities/GetEventProperties/GetSnapshotUri against whatever is currently typed in, "
+          "so you can catch a wrong URL or credential before saving. Runs in the background; reload "
+          "this page after clicking to see the result.</p>";
   return html;
 }
 
@@ -553,8 +598,8 @@ bool saveCameraSubmission(CameraConfig cam, const String& originalName, String& 
 
   if (idx >= 0 && liveStates && idx < (int)liveStates->size()) {
     // Not escaped here: applyNote travels in the redirect and is escaped once,
-    // where it's rendered. Escaping twice once let a direct ?note= request
-    // skip escaping entirely (reflected XSS).
+    // where it's rendered. A note escaped here would need the render side to
+    // skip escaping, and a direct ?note= request would then go out raw (reflected XSS).
     switch (liveActionAfterSave(wasRunning, cam.enabled)) {
       case LiveCameraAction::Reload:
         // Stage the config for the running task; this task must never write its
@@ -624,8 +669,7 @@ static String applySettingToAllCameras(const std::function<void(CameraConfig&)>&
   if (liveReloaded > 0) {
     result += " " + String(liveReloaded) + " already-running camera(s) are reconnecting now with it.";
   }
-  result += " Any camera not currently running (disabled, or added after this board's last boot) "
-            "needs a reboot to pick this up.";
+  result += " A disabled camera picks this up when it's enabled.";
   return result;
 }
 
@@ -646,7 +690,7 @@ String applyQuietHoursToAllCameras(PsychicRequest* request, std::vector<CameraCo
       done, "", "Quiet hours were", liveCameras, liveStates);
 }
 
-// Each alert type has its own button: a combined form once re-enabled a
+// Each alert type has its own button: a combined form would re-enable a
 // camera's deliberately-disabled vehicle alerts.
 String applyPersonAlertsToAllCameras(PsychicRequest* request, std::vector<CameraConfig>* liveCameras,
                                       std::vector<CameraState>* liveStates) {
@@ -797,7 +841,7 @@ static BackgroundJob<TestAlertResult> g_testAlertJob;
 
 struct TestAlertTaskParams {
   CameraConfig cfg; // heap-copied snapshot - only cfg.name is actually read by sendTestAlert
-  CameraState* st;  // NOT owned - must be the live CameraState (liveStates[idx]), see startTestAlertAsync's comment
+  CameraState* st;  // NOT owned - must be the live CameraState (liveStates[idx])
   MotionDetectionKind kind;
   bool isPetEvent;
 };

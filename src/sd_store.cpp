@@ -8,7 +8,7 @@
 #include <SD.h>
 #include <SPI.h>
 #include <esp_heap_caps.h>
-#include <esp_task_wdt.h> // checkSnapshotStorage() - see its own comment
+#include <esp_task_wdt.h> // checkSnapshotStorage()
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 #include <algorithm>
@@ -28,7 +28,7 @@ static bool g_sdSettingEnabled = false;         // cached at boot, see initSdSto
 static uint32_t g_sdCheckIntervalHours = 0;      // cached, see sdCheckIntervalHours()
 static uint16_t g_sdRetentionDays = SD_RETENTION_DAYS_DEFAULT; // cached, see sdRetentionDays()
 static bool g_sdAvailable = false;              // see sdActive()'s comment
-static String g_sdUnavailableReason;            // see SdStatus::unavailableReason's own comment
+static String g_sdUnavailableReason;
 static SemaphoreHandle_t g_sdMutex = xSemaphoreCreateMutex();
 static QuickSnapshotCheckResult g_lastBootCheckResult; // see lastBootCheckResult()'s own comment
 

@@ -1,5 +1,5 @@
 #pragma once
-#include <Arduino.h> // explicit, not just via xml_helpers.h - see camera_serialize.h's comment
+#include <Arduino.h> // explicit: PlatformIO's LDF only scans a lib's own includes
 #include <vector>
 #include "xml_helpers.h"
 
@@ -62,6 +62,10 @@ bool personTopicReportedTrue(const String& xml);
 // VehicleDetect) itself reported true. Checking anyTrue alone fired motion
 // alerts off unrelated topics like SignalLoss.
 bool motionEventFired(const String& xml, const CameraEventClassification& ev);
+
+// One bit per kind of event in `ev`, to tell whether what a camera reports has
+// changed. 0 if none.
+uint8_t cameraEventMask(const CameraEventClassification& ev);
 
 // First <tt:Topic> text, for logging unrecognized events. Never used to
 // classify.

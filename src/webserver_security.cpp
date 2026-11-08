@@ -53,7 +53,7 @@ String renderSecurityPanel() {
           "again to undo.</p>";
   // multipart/form-data, not a plain form field - a config file grows
   // roughly linearly with camera/user count, and the URL-encoded plain-
-  // form approach this used to use (the browser percent-encoding every
+  // form approach (the browser percent-encoding every
   // newline and every \x1F machine-readable-block separator as 3 bytes
   // each) could blow well past the dashboard's ordinary request-body cap
   // on exactly the multi-camera setups this feature exists to back up. A

@@ -108,125 +108,45 @@ void test_v1_record_parses_with_canReset_defaulted_false(void) {
   TEST_ASSERT_FALSE(restored.canReset);
 }
 
-// ---- Version 2 (superseded by V3's maxCommandsPerMinute, still read for migration) ----
+// Every field different from its default, so a wrong column shows up.
+static const char* const kAllFields[] = {"n", "42", "1", "A\x1D" "B", "1", "1", "1", "1", "9", "1", "1", "1"};
+static const size_t kAllFieldCount = sizeof(kAllFields) / sizeof(kAllFields[0]);
 
-// A record tagged as version 2 keeps parsing under V2's own 8-field
-// layout even though TELEGRAM_USER_SCHEMA_VERSION has moved on to 3 - lets
-// an un-migrated NVS record from before this field existed keep loading
-// correctly (telegram_users.cpp re-saves it as the current version on its
-// next write).
-void test_v2_wrong_field_count_is_rejected_not_reinterpreted(void) {
-  String sevenFields = joinFields({"User", "42", "1", "", "1", "1", "0"}); // missing canReset
-  TelegramUser restored = deserializeUser(sevenFields, 2);
-  TEST_ASSERT_EQUAL_STRING("", restored.name.c_str());
+static String firstFields(size_t count) {
+  String out;
+  for (size_t i = 0; i < count; i++) {
+    if (i > 0) out += (char)0x1F;
+    out += i < kAllFieldCount ? kAllFields[i] : "extra";
+  }
+  return out;
 }
 
-void test_v2_exact_field_count_is_accepted(void) {
-  String exact = joinFields({"User", "42", "1", "", "1", "1", "0", "1"}); // 8 fields
-  TelegramUser restored = deserializeUser(exact, 2);
-  TEST_ASSERT_EQUAL_STRING("User", restored.name.c_str());
-  TEST_ASSERT_FALSE(restored.canSnap);
-  TEST_ASSERT_TRUE(restored.canReset);
+static std::vector<String> columns(const String& record) {
+  std::vector<String> out;
+  int start = 0;
+  for (int i = 0; i <= (int)record.length(); i++) {
+    if (i == (int)record.length() || record[i] == (char)0x1F) { out.push_back(record.substring(start, i)); start = i + 1; }
+  }
+  return out;
 }
 
-// ---- Version 3 (superseded by V4's language, still read for migration) ----
+void test_every_version_reads_exactly_its_own_fields(void) {
+  struct { uint16_t version; size_t count; } kLayouts[] = {{1, 7}, {2, 8}, {3, 9}, {4, 10}, {5, 11}, {6, 12}};
+  std::vector<String> defaults = columns(serializeUser(TelegramUser()));
+  TEST_ASSERT_EQUAL((int)kAllFieldCount, (int)defaults.size());
 
-void test_v3_wrong_field_count_is_rejected_not_reinterpreted(void) {
-  String eightFields = joinFields({"User", "42", "1", "", "1", "1", "0", "1"}); // missing maxCommandsPerMinute
-  TelegramUser restored = deserializeUser(eightFields, 3);
-  TEST_ASSERT_EQUAL_STRING("", restored.name.c_str());
-}
+  for (auto& layout : kLayouts) {
+    char label[32];
+    snprintf(label, sizeof(label), "version %u", (unsigned)layout.version);
+    TEST_ASSERT_EQUAL_STRING_MESSAGE("", deserializeUser(firstFields(layout.count - 1), layout.version).name.c_str(), label);
+    TEST_ASSERT_EQUAL_STRING_MESSAGE("", deserializeUser(firstFields(layout.count + 1), layout.version).name.c_str(), label);
 
-void test_v3_exact_field_count_is_accepted(void) {
-  String exact = joinFields({"User", "42", "1", "", "1", "1", "0", "1", "15"}); // 9 fields
-  TelegramUser restored = deserializeUser(exact, 3);
-  TEST_ASSERT_EQUAL_STRING("User", restored.name.c_str());
-  TEST_ASSERT_FALSE(restored.canSnap);
-  TEST_ASSERT_TRUE(restored.canReset);
-  TEST_ASSERT_EQUAL_UINT32(15, restored.maxCommandsPerMinute);
-  // language didn't exist in V3 yet - must default to English (TelegramUser's own default).
-  TEST_ASSERT_TRUE(TelegramLang::English == restored.language);
-}
-
-// ---- Version 4 (superseded by V5's canBackup, still read for migration) ----
-
-// A record tagged as version 4 keeps parsing under V4's own 10-field
-// layout even though TELEGRAM_USER_SCHEMA_VERSION has moved on to 5 - lets
-// an un-migrated NVS record from before canBackup existed keep loading
-// correctly (telegram_users.cpp re-saves it as the current version on its
-// next write). Tagged explicitly as literal version 4, not
-// TELEGRAM_USER_SCHEMA_VERSION - V4 is a permanent, never-edited
-// historical branch, same as V1-V3 above.
-void test_v4_wrong_field_count_is_rejected_not_reinterpreted(void) {
-  String nineFields = joinFields({"User", "42", "1", "", "1", "1", "0", "1", "15"}); // missing language
-  TelegramUser restored = deserializeUser(nineFields, 4);
-  TEST_ASSERT_EQUAL_STRING("", restored.name.c_str());
-}
-
-void test_v4_exact_field_count_is_accepted(void) {
-  String exact = joinFields({"User", "42", "1", "", "1", "1", "0", "1", "15", "1"}); // 10 fields, language=Portuguese
-  TelegramUser restored = deserializeUser(exact, 4);
-  TEST_ASSERT_EQUAL_STRING("User", restored.name.c_str());
-  TEST_ASSERT_FALSE(restored.canSnap);
-  TEST_ASSERT_TRUE(restored.canReset);
-  TEST_ASSERT_EQUAL_UINT32(15, restored.maxCommandsPerMinute);
-  TEST_ASSERT_TRUE(TelegramLang::Portuguese == restored.language);
-  // canBackup didn't exist in V4 yet - must default to false (TelegramUser's own default).
-  TEST_ASSERT_FALSE(restored.canBackup);
-}
-
-// ---- Version 5 (superseded by V6's canRestore, still read for migration) ----
-
-// A record tagged as version 5 keeps parsing under V5's own 11-field
-// layout even though TELEGRAM_USER_SCHEMA_VERSION has moved on to 6 -
-// lets an un-migrated NVS record from before canRestore existed keep
-// loading correctly (telegram_users.cpp re-saves it as the current
-// version on its next write). Tagged explicitly as literal version 5,
-// not TELEGRAM_USER_SCHEMA_VERSION - V5 is a permanent, never-edited
-// historical branch, same as V1-V4 above.
-void test_v5_wrong_field_count_is_rejected_not_reinterpreted(void) {
-  String tenFields = joinFields({"User", "42", "1", "", "1", "1", "0", "1", "15", "1"}); // missing canBackup
-  TelegramUser restored = deserializeUser(tenFields, 5);
-  TEST_ASSERT_EQUAL_STRING("", restored.name.c_str());
-}
-
-void test_v5_exact_field_count_is_accepted(void) {
-  String exact = joinFields({"User", "42", "1", "", "1", "1", "0", "1", "15", "1", "1"}); // 11 fields, canBackup=true
-  TelegramUser restored = deserializeUser(exact, 5);
-  TEST_ASSERT_EQUAL_STRING("User", restored.name.c_str());
-  TEST_ASSERT_FALSE(restored.canSnap);
-  TEST_ASSERT_TRUE(restored.canReset);
-  TEST_ASSERT_EQUAL_UINT32(15, restored.maxCommandsPerMinute);
-  TEST_ASSERT_TRUE(TelegramLang::Portuguese == restored.language);
-  TEST_ASSERT_TRUE(restored.canBackup);
-  // canRestore didn't exist in V5 yet - must default to false (TelegramUser's own default).
-  TEST_ASSERT_FALSE(restored.canRestore);
-}
-
-// ---- Version TELEGRAM_USER_SCHEMA_VERSION (current, strict) ----
-
-// The actual fix this versioning scheme exists for: a record tagged as the
-// *current* schema version must have exactly the current field count - the
-// old 11-field V5 layout, explicitly tagged as the current (V6) version, is
-// corruption, not "an older save" (that interpretation is scoped to
-// explicit older version numbers only). See test_camera_serialize's
-// equivalent test for the full rationale.
-void test_v6_wrong_field_count_is_rejected_not_reinterpreted(void) {
-  String elevenFields = joinFields({"User", "42", "1", "", "1", "1", "0", "1", "15", "1", "1"}); // missing canRestore
-  TelegramUser restored = deserializeUser(elevenFields, TELEGRAM_USER_SCHEMA_VERSION);
-  TEST_ASSERT_EQUAL_STRING("", restored.name.c_str());
-}
-
-void test_v6_exact_field_count_is_accepted(void) {
-  String exact = joinFields({"User", "42", "1", "", "1", "1", "0", "1", "15", "1", "1", "1"}); // 12 fields, canRestore=true
-  TelegramUser restored = deserializeUser(exact, TELEGRAM_USER_SCHEMA_VERSION);
-  TEST_ASSERT_EQUAL_STRING("User", restored.name.c_str());
-  TEST_ASSERT_FALSE(restored.canSnap);
-  TEST_ASSERT_TRUE(restored.canReset);
-  TEST_ASSERT_EQUAL_UINT32(15, restored.maxCommandsPerMinute);
-  TEST_ASSERT_TRUE(TelegramLang::Portuguese == restored.language);
-  TEST_ASSERT_TRUE(restored.canBackup);
-  TEST_ASSERT_TRUE(restored.canRestore);
+    std::vector<String> got = columns(serializeUser(deserializeUser(firstFields(layout.count), layout.version)));
+    for (size_t i = 0; i < kAllFieldCount; i++) {
+      const char* expected = i < layout.count ? kAllFields[i] : defaults[i].c_str();
+      TEST_ASSERT_EQUAL_STRING_MESSAGE(expected, got[i].c_str(), label);
+    }
+  }
 }
 
 void test_unknown_future_version_falls_back_to_newest_known_layout(void) {
@@ -305,6 +225,7 @@ void test_separators_inside_values_are_stripped(void) {
 
 int main(int argc, char** argv) {
   UNITY_BEGIN();
+  RUN_TEST(test_every_version_reads_exactly_its_own_fields);
   RUN_TEST(test_separators_inside_values_are_stripped);
   RUN_TEST(test_stored_layout_is_pinned);
   RUN_TEST(test_current_layout_matches_the_schema_version);
@@ -315,16 +236,6 @@ int main(int argc, char** argv) {
   RUN_TEST(test_malformed_record_returns_empty_name_current_version);
   RUN_TEST(test_v0_6_field_record_defaults_canSnap_false);
   RUN_TEST(test_v1_record_parses_with_canReset_defaulted_false);
-  RUN_TEST(test_v2_wrong_field_count_is_rejected_not_reinterpreted);
-  RUN_TEST(test_v2_exact_field_count_is_accepted);
-  RUN_TEST(test_v3_wrong_field_count_is_rejected_not_reinterpreted);
-  RUN_TEST(test_v3_exact_field_count_is_accepted);
-  RUN_TEST(test_v4_wrong_field_count_is_rejected_not_reinterpreted);
-  RUN_TEST(test_v4_exact_field_count_is_accepted);
-  RUN_TEST(test_v5_wrong_field_count_is_rejected_not_reinterpreted);
-  RUN_TEST(test_v5_exact_field_count_is_accepted);
-  RUN_TEST(test_v6_wrong_field_count_is_rejected_not_reinterpreted);
-  RUN_TEST(test_v6_exact_field_count_is_accepted);
   RUN_TEST(test_unknown_future_version_falls_back_to_newest_known_layout);
   RUN_TEST(test_wantsCamera_true_when_allCameras);
   RUN_TEST(test_wantsCamera_true_for_listed_camera_case_insensitive);

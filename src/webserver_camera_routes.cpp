@@ -9,7 +9,7 @@
 // Cameras page routes; the page content and its background jobs are in
 // webserver_cameras.cpp.
 
-void registerCameraRoutes(PsychicHttpServer& server) {
+static void registerCameraEditRoutes(PsychicHttpServer& server) {
   server.on("/cameras", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
     // One-time banner from /cameras/save. Escaped here, where it's rendered:
     // this route can be requested directly, and trusting a pre-escaped value
@@ -66,7 +66,9 @@ void registerCameraRoutes(PsychicHttpServer& server) {
     if (applyNote.length() > 0) redirectUrl += "?note=" + urlEncode(applyNote);
     return response->redirect(redirectUrl.c_str());
   });
+}
 
+static void registerCameraTestRoutes(PsychicHttpServer& server) {
   server.on("/cameras/test", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
     CameraConfig submitted = parseCameraForm(request);
     String originalName = request->getParam("originalName", "");
@@ -158,7 +160,9 @@ void registerCameraRoutes(PsychicHttpServer& server) {
         renderShell(Tab::Cameras, banner, renderCamerasPanel(nullptr, false, g_liveCameras, g_liveStates))
             .c_str());
   });
+}
 
+static void registerCameraBulkRoutes(PsychicHttpServer& server) {
   server.on("/cameras/mute-all", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
     String duration = request->getParam("duration", "");
     duration.trim();
@@ -214,7 +218,9 @@ void registerCameraRoutes(PsychicHttpServer& server) {
         renderShell(Tab::Cameras, result, renderCamerasPanel(nullptr, false, g_liveCameras, g_liveStates))
             .c_str());
   });
+}
 
+static void registerCameraMediaRoutes(PsychicHttpServer& server) {
   // One history entry (SD or PSRAM ring, per snapshot_history.h); age 0 =
   // newest. Behind rate limiting and auth like every route - it's camera
   // footage.
@@ -251,4 +257,11 @@ void registerCameraRoutes(PsychicHttpServer& server) {
     deleteCamera(name);
     return response->redirect("/cameras");
   });
+}
+
+void registerCameraRoutes(PsychicHttpServer& server) {
+  registerCameraEditRoutes(server);
+  registerCameraTestRoutes(server);
+  registerCameraBulkRoutes(server);
+  registerCameraMediaRoutes(server);
 }

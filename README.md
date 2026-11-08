@@ -149,7 +149,7 @@ Arduino-ESP32/IDF releases.
   on real hardware.
 - Cameras and Telegram recipients are managed at runtime through a built-in
   sidebar dashboard ([hoeken/PsychicHttp](https://github.com/hoeken/PsychicHttp))
-  and persisted in NVS - no more editing and reflashing `config.h`/`secrets.h` to
+  and persisted on the board (cameras in LittleFS, users in NVS) - no more editing and reflashing `config.h`/`secrets.h` to
   change either. Cameras can be added, edited, and deleted (edits can rename a
   camera too); a Test Connection button runs a live GetCapabilities/
   GetEventProperties/GetSnapshotUri check against whatever's currently typed in
@@ -157,9 +157,9 @@ Arduino-ESP32/IDF releases.
   immediately. Camera changes apply immediately too when the edited camera was
   already running and stays enabled (the task reconnects with the new settings
   within about a tick of saving) or when the edit enables a previously-disabled
-  camera (its task starts live); a brand new camera, or disabling one that's
-  currently running, still needs a reboot - the dashboard tells you which
-  happened after you save. The Cameras page also shows a small strip of the most
+  camera (its task starts live). A brand new camera starts live and disabling a
+  running one stops it live; only adding one past the board's reserved camera
+  slots needs a reboot - the dashboard tells you which happened after you save. The Cameras page also shows a small strip of the most
   recent snapshots per camera (motion, tamper, or an on-demand `/snap`), backed
   by whichever of the two snapshot-history stores below is active.
 - Snapshot history is stored either in a small PSRAM ring (last 5 per camera,
@@ -232,8 +232,9 @@ Arduino-ESP32/IDF releases.
   the Internet Watchdog, Camera Bridge Watchdog, and 220V Power Monitor each get
   their own page under a separate "Hardware" submenu, one per relay/sensor
   feature rather than stacked together on one page.
-  Firmware updates over the dashboard: upload a `.bin` built with
-  `pio run -e esp32s3` on the Firmware page instead of reflashing over USB. Uses
+  Firmware updates over the dashboard: upload a signed image (see
+  [Firmware signing](#firmware-signing)) on the Firmware page instead of
+  reflashing over USB. Uses
   the board's dual OTA app partitions - a failed or aborted upload leaves the
   running firmware untouched, and the board only reboots into the new image
   once it's fully received and its checksum verifies. That only catches a
@@ -428,6 +429,29 @@ itself over ONVIF:
 Each camera's task reads this when the camera first answers and again after
 an edit; a button reads it again from every camera.
 
+## Firmware signing
+
+OTA uploads must be signed. `scripts/board.py` signs with an ECDSA P-256 private
+key kept outside the repository, by default in
+`~/.alarm_onvif_telegram/firmware_signing_key.pem`; the matching public key is
+compiled in from `include/firmware_signing_key.h`. The board hashes the image as
+it arrives and refuses to boot it unless the signature matches. A file with no
+valid signature header is refused before anything is written to flash.
+
+**Back the private key up.** Without it, the only way to update is USB.
+
+If you build this project for your own board, run `python scripts/board.py keygen`
+first (after deleting the committed public key header), so the firmware trusts your key.
+
+This protects uploads over the network. It isn't secure boot: someone with
+physical access can still flash anything over USB, and an older signed build can
+be reinstalled.
+
+A board running firmware from before signing needs one transitional build, which
+still accepts unsigned images but refuses a bad signature:
+`PLATFORMIO_BUILD_FLAGS=-DFIRMWARE_SIGNATURE_AUDIT_ONLY pio run -e esp32s3`.
+Prove the check with `board.py verify`, then flash a normal build.
+
 ## Setup
 
 1. **Clone and copy the templates:**
@@ -607,7 +631,12 @@ src/
 lib/                 # pure-logic modules with no hardware dependencies, split out of the
                       # files above specifically so they're unit-testable - see test/README.md
   xml_helpers/            # ONVIF response substring parsing + XML escaping
-  camera_serialize/       # CameraConfig <-> NVS blob (de)serialization, schema-versioned
+  record_table/           # stored records as a table of fields, shared by the serializers
+  camera_serialize/       # CameraConfig <-> stored record, schema-versioned
+  camera_file_store/      # camera list file format, save and recovery rules, edit rules
+  camera_profiles/        # known settings per camera model, applied when one is added
+  camera_hardware/        # parses what a camera reports about itself over ONVIF
+  snapshot_http/          # snapshot login (Basic/Digest) and body reading
   camera_form/            # camera Add/Edit form: rendering and parsing/clamping
   user_form/              # Telegram user Add/Edit form: rendering and parsing
   hardware_form/          # Hardware page forms: parsing, pin-clash validation
@@ -622,7 +651,7 @@ lib/                 # pure-logic modules with no hardware dependencies, split o
   telegram_parse/         # Telegram JSON escaping, /on,/off,/snap camera-name matching, and
                            # /on,/off timer-token parsing (minutes or HH:MM)
   telegram_multipart/     # multipart/form-data body construction for Telegram's sendPhoto
-  network_serialize/      # WifiCredentials <-> NVS blob (de)serialization, schema-versioned -
+  network_serialize/      # WifiCredentials <-> one-line record for config export -
                            # same shape as camera_serialize/telegram_user_serialize, passwords
                            # never included
   config_import_parse/    # parses the Security page's exported config text back into
@@ -660,8 +689,9 @@ The firmware version comes from git tags (`git describe`), so releasing is:
    and commit.
 2. Tag the commit: `git tag -a v1.1.0 -m "v1.1.0"` and push the tag
    (`git push origin v1.1.0`).
-3. Build (`pio run -e esp32s3`) or take CI's `firmware-esp32s3` artifact, and
-   upload `firmware.bin` from the dashboard's Firmware page.
+3. Build (`pio run -e esp32s3`) or take CI's `firmware-esp32s3` artifact, sign
+   it (`python scripts/board.py sign firmware.bin`), and upload
+   `firmware.signed.bin` from the dashboard's Firmware page.
 
 The board then reports exactly `1.1.0`. Builds between tags report e.g.
 `1.1.0-3-gabc1234`, and `-dirty` means uncommitted changes were built.
@@ -681,7 +711,10 @@ have their own token rather than relying on the optional dashboard login.
 | `status` | Version, reset reason, heap, failed allocations, per-task stack use, camera state, crash summary, and the saved heap-low record |
 | `log [--follow]` | The last 64 KB of `Serial` output, each line stamped with uptime |
 | `coredump [FILE]` | Downloads the stored crash dump |
-| `flash FILE --yes` | OTA upload, which **reboots the board** |
+| `flash FILE --yes` | Signs and uploads over OTA, which **reboots the board** |
+| `sign FILE` | Writes `firmware.signed.bin` next to `FILE` |
+| `verify FILE` | Has the board check a signed file; changes nothing |
+| `keygen` | Creates the signing key, once |
 
 `flash` keeps a copy of the build's ELF in `.pio/flashed/`, since a crash dump can
 only be decoded with the ELF of the build that crashed.

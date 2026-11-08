@@ -3,7 +3,7 @@
 
 // Clamped at use (imported configs bypass the form). 0 isn't "off": it would
 // alert on every poll with no digest throttling - the multi-camera burst that
-// once broke TLS.
+// starves TLS of memory.
 unsigned long safeAlertCooldownMs(const CameraConfig& cfg) {
   unsigned long ms = cfg.alertCooldownMs;
   if (ms == 0) ms = CameraConfig().alertCooldownMs;

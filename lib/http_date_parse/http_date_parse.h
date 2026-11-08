@@ -1,5 +1,5 @@
 #pragma once
-#include <Arduino.h> // explicit, not chained - see camera_serialize.h's comment
+#include <Arduino.h> // explicit: PlatformIO's LDF only scans a lib's own includes
 #include <ctime>
 
 // Pure HTTP Date header parsing, tested natively. Used by time_sync.cpp's

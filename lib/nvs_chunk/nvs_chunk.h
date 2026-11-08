@@ -1,9 +1,9 @@
 #pragma once
-#include <Arduino.h> // explicit, not chained - see camera_serialize.h's comment
+#include <Arduino.h> // explicit: PlatformIO's LDF only scans a lib's own includes
 #include <vector>
 
-// NVS entries top out around 4000 bytes. Storing a whole record list as one
-// string once silently dropped the last cameras of a ~10-camera list, so lists
+// NVS entries top out around 4000 bytes. A whole record list stored as one
+// string would silently lose its tail, so lists
 // are split across keys "list0", "list1", ...
 
 // Empty input gives zero chunks (no pointless empty write).
