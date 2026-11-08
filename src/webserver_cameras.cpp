@@ -6,6 +6,7 @@
 #include "camera_form.h"
 #include "request_params.h"
 #include "camera_tasks.h"
+#include "camera_file_store.h" // keepStoredPasswordIfBlank, liveActionAfterSave
 #include "event_log_store.h"
 #include "snapshot_history.h"
 #include "snapshot_source.h" // snapshotSourceLabel - Preview column thumbnail tooltips
@@ -525,11 +526,7 @@ bool saveCameraSubmission(CameraConfig cam, const String& originalName, String& 
     return true;
   }
 
-  if (cam.pass.length() == 0) {
-    for (auto& existing : loadCameras()) {
-      if (existing.name.equalsIgnoreCase(originalName)) { cam.pass = existing.pass; break; }
-    }
-  }
+  if (cam.pass.length() == 0) keepStoredPasswordIfBlank(cam, originalName, loadCameras());
 
   // The rest runs under cameraSaveMutex() (see camera_tasks.h). It also serializes the
   // store's read-modify-write for saves of different cameras.
@@ -560,24 +557,30 @@ bool saveCameraSubmission(CameraConfig cam, const String& originalName, String& 
     // Not escaped here: applyNote travels in the redirect and is escaped once,
     // where it's rendered. Escaping twice once let a direct ?note= request
     // skip escaping entirely (reflected XSS).
-    if (wasRunning && cam.enabled) {
-      // Stage the config for the running task; this task must never write its
-      // CameraConfig directly (see requestLiveConfigReload).
-      requestLiveConfigReload((*liveStates)[idx], cam);
-      applyNote = "\"" + cam.name + "\" updated - applying live, reconnecting now (no reboot needed).";
-    } else if (!wasRunning && cam.enabled) {
-      // Newly enabled, or its task had stopped: stage the config via pendingConfig (other tasks read
-      // enabled/name unlocked, so don't write the slot directly) and create
-      // the lock first.
-      cameraStateInit((*liveStates)[idx]);
-      requestLiveConfigReload((*liveStates)[idx], cam);
-      spawnCameraTask(idx); // its own startup applies the staged config - see applyPendingConfigIfAny
-      logEvent(cam.name + ": enabled via dashboard, monitoring started live");
-      applyNote = "\"" + cam.name + "\" enabled - monitoring started live (no reboot needed).";
-    } else if (wasRunning && !cam.enabled) {
-      // A disable wins over any other change in the same save.
-      requestCameraStop((*liveStates)[idx]);
-      applyNote = "\"" + cam.name + "\" disabled - monitoring stopped live (no reboot needed).";
+    switch (liveActionAfterSave(wasRunning, cam.enabled)) {
+      case LiveCameraAction::Reload:
+        // Stage the config for the running task; this task must never write its
+        // CameraConfig directly (see requestLiveConfigReload).
+        requestLiveConfigReload((*liveStates)[idx], cam);
+        applyNote = "\"" + cam.name + "\" updated - applying live, reconnecting now (no reboot needed).";
+        break;
+      case LiveCameraAction::Start:
+        // Newly enabled, or its task had stopped: stage the config via pendingConfig (other tasks read
+        // enabled/name unlocked, so don't write the slot directly) and create
+        // the lock first.
+        cameraStateInit((*liveStates)[idx]);
+        requestLiveConfigReload((*liveStates)[idx], cam);
+        spawnCameraTask(idx); // its own startup applies the staged config - see applyPendingConfigIfAny
+        logEvent(cam.name + ": enabled via dashboard, monitoring started live");
+        applyNote = "\"" + cam.name + "\" enabled - monitoring started live (no reboot needed).";
+        break;
+      case LiveCameraAction::Stop:
+        // A disable wins over any other change in the same save.
+        requestCameraStop((*liveStates)[idx]);
+        applyNote = "\"" + cam.name + "\" disabled - monitoring stopped live (no reboot needed).";
+        break;
+      case LiveCameraAction::None:
+        break;
     }
   }
   // idx < 0: no live slot (added while capacity was full) - needs a reboot.

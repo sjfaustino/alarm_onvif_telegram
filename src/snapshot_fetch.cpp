@@ -1,4 +1,4 @@
-#include "http_digest.h"
+#include "snapshot_http.h"
 #include "telegram_internal.h"
 #include "config.h"
 #include <HTTPClient.h>
@@ -18,24 +18,25 @@ static uint8_t* allocateSnapshotBuffer(size_t& cap) {
   return (uint8_t*)malloc(cap);
 }
 
-// Reads until `want` bytes, the end of the stream, or a stall.
+struct HttpBodyConn {
+  HTTPClient& http;
+  NetworkClient* stream;
+  bool connected() { return http.connected(); }
+  size_t available() { return stream->available(); }
+  size_t read(uint8_t* buf, size_t n) { return stream->readBytes(buf, n); }
+};
+
+struct ArduinoClock {
+  uint32_t nowMs() { return millis(); }
+  void sleepMs(uint32_t ms) { delay(ms); }
+};
+
 static size_t readSomeBytes(HTTPClient& http, NetworkClient* stream, uint8_t* buf, size_t want) {
-  size_t total = 0;
-  uint32_t stallStart = millis();
-  while (http.connected() && total < want) {
-    size_t avail = stream->available();
-    if (avail) {
-      size_t toRead = min(avail, want - total);
-      total += stream->readBytes(buf + total, toRead);
-      stallStart = millis();
-    } else if (millis() - stallStart > 5000) {
-      Serial.println("readSomeBytes: stalled, no progress for 5s");
-      break;
-    } else {
-      delay(2);
-    }
-  }
-  return total;
+  HttpBodyConn conn{http, stream};
+  ArduinoClock clock;
+  SnapshotBodyRead read = readSnapshotBody(conn, clock, buf, want, 5000);
+  if (read.stalled) Serial.println("readSomeBytes: stalled, no progress for 5s");
+  return read.total;
 }
 
 // Raw-socket read (getStreamPtr), for Content-Length or close-delimited bodies
@@ -114,46 +115,17 @@ uint8_t* fetchOneSnapshot(const CameraConfig& cfg, CameraState& st, size_t& outL
   uint32_t startMs = millis();
 
   HTTPClient http;
-  // HTTPClient only exposes headers registered with collectHeaders().
-  static const char* kCollectedHeaders[] = {"Transfer-Encoding", "WWW-Authenticate"};
-
-  // Some cameras (a Vatilon H46) refuse Basic and challenge for Digest, which
-  // HTTPClient can't do. An empty challenge means Basic.
-  auto get = [&](const String& challenge) -> int {
-    http.begin(snapshotUri);
-    http.setTimeout(HTTP_TIMEOUT_MS);
-    http.collectHeaders(kCollectedHeaders, 2);
-    if (challenge.length() == 0) {
-      http.setAuthorization(user, pass);
-      return http.GET();
-    }
+  auto makeCnonce = []() {
     char cnonce[17];
     snprintf(cnonce, sizeof(cnonce), "%08lx%08lx", (unsigned long)esp_random(), (unsigned long)esp_random());
-    String authorization = digestAuthorization(challenge, "GET", requestUriFromUrl(snapshotUri), user ? user : "",
-                                               pass ? pass : "", cnonce);
-    if (authorization.length() == 0) return 401;
-    // After an earlier end() the Basic credentials are still set, and while they
-    // are HTTPClient sends them and silently drops an added Authorization header.
-    http.setAuthorization("");
-    http.addHeader("Authorization", authorization);
-    return http.GET();
+    return String(cnonce);
   };
-
-  int code = get(cachedChallenge);
-  bool usedDigest = cachedChallenge.length() > 0;
-  // First Digest camera fetch, or a cached nonce the camera no longer accepts:
-  // answer the fresh challenge once.
-  if (code == 401) {
-    String challenge = http.header("WWW-Authenticate");
-    http.end();
-    String head = challenge.substring(0, 6);
-    head.toLowerCase();
-    if (head == "digest") {
-      code = get(challenge);
-      usedDigest = true;
-      CameraStateLock lock(st);
-      st.snapshotDigestChallenge = (code == 200) ? challenge : String();
-    }
+  SnapshotGetResult got = snapshotGetWithLogin(http, snapshotUri, HTTP_TIMEOUT_MS, user, pass, cachedChallenge, makeCnonce);
+  int code = got.code;
+  bool usedDigest = got.usedDigest;
+  if (got.challengeChanged) {
+    CameraStateLock lock(st);
+    st.snapshotDigestChallenge = got.challenge;
   }
   uint32_t headersMs = millis() - startMs;
   if (code != 200) {
@@ -162,16 +134,11 @@ uint8_t* fetchOneSnapshot(const CameraConfig& cfg, CameraState& st, size_t& outL
     return nullptr;
   }
 
-  int len = http.getSize();
-  // Read exactly Content-Length when given; reading toward the cap waited out
-  // a 5s stall on keep-alive (a Reolink), long enough to fail the send.
-  size_t cap = (len > 0) ? (size_t)len : SNAPSHOT_MAX_BYTES_PSRAM;
-
+  size_t cap = snapshotReadCap(http.getSize(), SNAPSHOT_MAX_BYTES_PSRAM);
   String transferEncoding = http.header("Transfer-Encoding");
-  transferEncoding.toLowerCase();
 
   size_t jpgLen = 0;
-  uint8_t* jpg = (transferEncoding.indexOf("chunked") >= 0) ? fetchSnapshotBufferedChunked(http, jpgLen)
+  uint8_t* jpg = snapshotBodyIsChunked(transferEncoding) ? fetchSnapshotBufferedChunked(http, jpgLen)
                                                               : fetchSnapshotBuffered(http, jpgLen, cap);
   http.end();
   if (!jpg) {

@@ -593,8 +593,60 @@ void test_sortCamerasByName_zero_padded_numeric_suffixes_in_order(void) {
   TEST_ASSERT_EQUAL_STRING("D10-2Lentes", cams[3].name.c_str());
 }
 
+// The stored layout itself: every position, in order. A row inserted or moved
+// in the table fails here, and would otherwise misread every saved camera.
+void test_stored_layout_is_pinned(void) {
+  CameraConfig c;
+  c.name = "n"; c.deviceServiceUrl = "u"; c.enabled = true; c.useWSSecurity = false;
+  c.includeInitialTerminationTime = true; c.includeReplyToAnonymous = false;
+  c.snapshotUriOverride = "snap"; c.preferredProfileKeyword = "kw"; c.user = "usr"; c.pass = "pw"; c.notes = "nt";
+  c.alertCooldownMs = 111; c.offlineThresholdMs = 222; c.snapshotBurstCount = 3;
+  c.quietHoursEnabled = true; c.quietStartMinute = 44; c.quietEndMinute = 55;
+  c.motionWatchdogHours = 66; c.timelapseIntervalMin = 77; c.pollIntervalMs = 888;
+  c.timelapseSendToTelegram = true; c.retentionDays = 99;
+  c.petAlertsEnabled = true; c.petAlertsTextOnly = false;
+  c.snapshotMaxWidth = 640; c.snapshotMaxHeight = 360;
+  c.personAlertsEnabled = false; c.vehicleAlertsEnabled = true; c.motionDigestEnabled = false;
+
+  String expected = joinFields({"n", "u", "1", "0", "1", "0", "snap", "kw", "usr", "pw", "nt", "111", "222", "3",
+                                "1", "44", "55", "66", "77", "888", "1", "99", "1", "0", "640", "360", "0", "1", "0"});
+  TEST_ASSERT_EQUAL_STRING(expected.c_str(), serializeCamera(c).c_str());
+  TEST_ASSERT_EQUAL_STRING(expected.c_str(), serializeCamera(deserializeCamera(expected, CAMERA_SCHEMA_VERSION)).c_str());
+}
+
+void test_current_layout_matches_the_schema_version(void) {
+  // A row added without bumping CAMERA_SCHEMA_VERSION would write records this
+  // build then refuses to read.
+  TEST_ASSERT_EQUAL_STRING(String((unsigned)cameraRecordFieldCount(serializeCamera(CameraConfig()))).c_str(),
+                           cameraRecordExpectedFields(CAMERA_SCHEMA_VERSION).c_str());
+}
+
+void test_empty_alert_flags_keep_their_default_on(void) {
+  String record = joinFields({"n", "u", "1", "1", "0", "0", "", "", "usr", "pw", "", "", "", "", "0", "", "", "", "",
+                              "", "0", "", "0", "0", "", "", "", "", ""});
+  CameraConfig c = deserializeCamera(record, CAMERA_SCHEMA_VERSION);
+  TEST_ASSERT_EQUAL_STRING("n", c.name.c_str());
+  TEST_ASSERT_TRUE(c.personAlertsEnabled);
+  TEST_ASSERT_TRUE(c.vehicleAlertsEnabled);
+  TEST_ASSERT_TRUE(c.motionDigestEnabled);
+  TEST_ASSERT_EQUAL_UINT32(CameraConfig().alertCooldownMs, c.alertCooldownMs);
+  TEST_ASSERT_EQUAL_UINT32(CameraConfig().pollIntervalMs, c.pollIntervalMs);
+}
+
+void test_expected_field_counts_per_version(void) {
+  static const char* const kExpected[] = {"11-14", "14", "19", "20", "22", "24", "26", "28", "29"};
+  for (uint16_t v = 0; v < sizeof(kExpected) / sizeof(kExpected[0]); v++) {
+    TEST_ASSERT_EQUAL_STRING(kExpected[v], cameraRecordExpectedFields(v).c_str());
+  }
+  TEST_ASSERT_EQUAL_STRING("29", cameraRecordExpectedFields(CAMERA_SCHEMA_VERSION + 5).c_str());
+}
+
 int main(int argc, char** argv) {
   UNITY_BEGIN();
+  RUN_TEST(test_stored_layout_is_pinned);
+  RUN_TEST(test_empty_alert_flags_keep_their_default_on);
+  RUN_TEST(test_current_layout_matches_the_schema_version);
+  RUN_TEST(test_expected_field_counts_per_version);
   RUN_TEST(test_round_trip_preserves_every_field);
   RUN_TEST(test_round_trip_person_vehicle_alerts_default_true);
   RUN_TEST(test_round_trip_with_falsy_flags_and_empty_optionals);

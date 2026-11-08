@@ -1,3 +1,4 @@
+#include "camera_file_store.h" // keepStoredPasswordIfBlank
 #include "webserver_internal.h"
 #include "webserver_cameras.h"
 #include "camera_store.h"
@@ -73,11 +74,7 @@ void registerCameraRoutes(PsychicHttpServer& server) {
     bool isEdit = originalName.length() > 0;
 
     CameraConfig testCfg = submitted;
-    if (isEdit && testCfg.pass.length() == 0) {
-      for (auto& existing : loadCameras()) {
-        if (existing.name.equalsIgnoreCase(originalName)) { testCfg.pass = existing.pass; break; }
-      }
-    }
+    if (isEdit && testCfg.pass.length() == 0) keepStoredPasswordIfBlank(testCfg, originalName, loadCameras());
     // Background task; testCfg (with the resolved password) is copied.
     String banner = backgroundJobBanner(
         startTestConnectionAsync(testCfg),

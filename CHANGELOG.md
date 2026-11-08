@@ -8,6 +8,10 @@ config exports - see [Releases](README.md#releases) for how to cut one.
 
 ## [Unreleased]
 
+### Fixed
+- A camera list file that exists but can't be read is no longer replaced by an
+  empty list when the board loads it.
+
 ### Added
 - Hardware > Cameras page: each camera's manufacturer, model, firmware,
   serial number, MAC and IP address, link speed, ONVIF scopes, clock offset

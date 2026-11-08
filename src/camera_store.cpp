@@ -1,4 +1,5 @@
 #include "camera_store.h"
+#include "camera_file_store.h"
 #include "camera_serialize.h"
 #include "nvs_chunk.h" // joinChunks, for the old chunked list
 #include "secrets.h"
@@ -13,13 +14,9 @@
 // layer's own save mutex.
 static SemaphoreHandle_t g_camerasMutex = xSemaphoreCreateMutex();
 
-// The list lives in a LittleFS file: the schema version (2 bytes, little-endian),
-// then the records. A save writes CAMERA_FILE_TMP and renames it over
-// CAMERA_FILE, so a failed save changes nothing. NVS (20 KB, shared with WiFi
-// and PHY calibration) had no room for a 14-camera list plus the new copy a safe
-// save needs.
-static const char* CAMERA_FILE     = "/cameras.dat";
-static const char* CAMERA_FILE_TMP = "/cameras.tmp";
+// The list lives in a LittleFS file; camera_file_store has the format and the
+// save and recovery rules. NVS (20 KB, shared with WiFi and PHY calibration)
+// had no room for a 14-camera list plus the new copy a safe save needs.
 
 static const char* NVS_NAMESPACE  = "camstore";
 // Older NVS formats: read once to migrate, then erased. The single-key list hit
@@ -30,9 +27,6 @@ static const char* NVS_KEY_LIST_CHUNKS = "listChunks"; // uint16_t chunk count
 static const char* NVS_KEY_SCHEMA = "schema"; // the chunked list's version
 // Bumped to rerun the restore once more after the chunking fix.
 static const char* NVS_KEY_SEED_RESTORED = "seedRestore3"; // see restoreMissingCamerasFromSeed()
-
-// Separates records; FIELD_SEP (camera_serialize) separates fields.
-static const char RECORD_SEP = '\x1E';
 
 static std::vector<CameraConfig> seedFromSecrets() {
   std::vector<CameraConfig> cams;
@@ -73,22 +67,31 @@ static bool cameraFsReady() {
   return ready;
 }
 
-static bool readCameraFile(const char* path, uint16_t& version, String& records) {
-  File f = LittleFS.open(path, "r");
-  if (!f) return false;
-  size_t len = f.size();
-  std::vector<uint8_t> raw(len);
-  bool ok = len >= 2 && f.read(raw.data(), len) == len;
-  f.close();
-  if (!ok) {
-    Serial.printf("[camera_store] ERROR: could not read %s (%u bytes).\n", path, (unsigned)len);
-    return false;
+class LittleFsCameraOps : public CameraFileOps {
+ public:
+  bool exists(const char* path) override { return LittleFS.exists(path); }
+  bool read(const char* path, std::vector<uint8_t>& out) override {
+    File f = LittleFS.open(path, "r");
+    if (!f) return false;
+    size_t len = f.size();
+    out.resize(len);
+    bool ok = f.read(out.data(), len) == len;
+    f.close();
+    if (!ok) Serial.printf("[camera_store] ERROR: could not read %s (%u bytes).\n", path, (unsigned)len);
+    return ok;
   }
-  version = (uint16_t)(raw[0] | (raw[1] << 8));
-  records = "";
-  records.concat((const char*)raw.data() + 2, len - 2);
-  return true;
-}
+  size_t write(const char* path, const std::vector<uint8_t>& data) override {
+    File f = LittleFS.open(path, "w");
+    if (!f) return 0;
+    size_t written = f.write(data.data(), data.size());
+    f.close();
+    return written;
+  }
+  bool rename(const char* from, const char* to) override { return LittleFS.rename(from, to); }
+  bool remove(const char* path) override { return LittleFS.remove(path); }
+};
+
+static LittleFsCameraOps g_cameraFileOps;
 
 static void eraseNvsCameraList() {
   Preferences prefs;
@@ -104,15 +107,11 @@ static void eraseNvsCameraList() {
 std::vector<CameraConfig> loadCameras() {
   String blob;
   uint16_t storedVersion = 0; // 0 = pre-versioning records
-  bool fromFile = false;
-  bool alreadyInitialized = false;
-  if (cameraFsReady()) {
-    // The temporary file only survives alone if a save was cut off between
-    // removing the old file and renaming (see saveCameras).
-    fromFile = readCameraFile(CAMERA_FILE, storedVersion, blob) ||
-               (!LittleFS.exists(CAMERA_FILE) && readCameraFile(CAMERA_FILE_TMP, storedVersion, blob));
-    alreadyInitialized = fromFile || LittleFS.exists(CAMERA_FILE);
-  }
+  CameraFileStatus fileStatus = CameraFileStatus::Missing;
+  if (cameraFsReady()) fileStatus = readCameraListFile(g_cameraFileOps, storedVersion, blob);
+  bool fromFile = fileStatus == CameraFileStatus::Loaded;
+  bool alreadyInitialized = fileStatus != CameraFileStatus::Missing;
+  bool fromNvs = false;
 
   if (!fromFile) {
     Preferences prefs;
@@ -120,7 +119,8 @@ std::vector<CameraConfig> loadCameras() {
     prefs.begin(NVS_NAMESPACE, false);
     bool hasChunkedList = prefs.isKey(NVS_KEY_LIST_CHUNKS);
     bool hasLegacyList  = prefs.isKey(NVS_KEY_LIST_LEGACY);
-    alreadyInitialized = alreadyInitialized || hasChunkedList || hasLegacyList;
+    fromNvs = hasChunkedList || hasLegacyList;
+    alreadyInitialized = alreadyInitialized || fromNvs;
     if (hasChunkedList) {
       uint16_t chunkCount = prefs.getUShort(NVS_KEY_LIST_CHUNKS, 0);
       std::vector<String> chunks;
@@ -154,43 +154,26 @@ std::vector<CameraConfig> loadCameras() {
                   (unsigned)storedVersion, (unsigned)CAMERA_SCHEMA_VERSION);
   }
 
-  std::vector<CameraConfig> cams;
-  int totalRecords = 0;
-  int droppedRecords = 0;
-  int recStart = 0;
-  for (int i = 0; i <= (int)blob.length(); i++) {
-    if (i == (int)blob.length() || blob[i] == RECORD_SEP) {
-      if (i > recStart) {
-        totalRecords++;
-        String record = blob.substring(recStart, i);
-        CameraConfig c = deserializeCamera(record, storedVersion);
-        if (c.name.length() > 0) {
-          cams.push_back(c);
-        } else {
-          droppedRecords++;
-          // Expected field count per version, for the log (kept by hand).
-          static const char* const kExpected[] = {"11-14", "14", "19", "20", "22", "24", "26", "28", "29"};
-          const char* expected = storedVersion < sizeof(kExpected) / sizeof(kExpected[0])
-                                     ? kExpected[storedVersion] : "?";
-          Serial.printf("[camera_store] WARNING: dropped a camera record (\"%s\") that failed to parse "
-                        "under schema %u (found %u field(s), expected %s).\n",
-                        record.substring(0, record.indexOf('\x1F')).c_str(), (unsigned)storedVersion,
-                        (unsigned)cameraRecordFieldCount(record), expected);
-        }
-      }
-      recStart = i + 1;
-    }
-  }
+  ParsedCameraList parsed = parseCameraList(blob, storedVersion, [storedVersion](const String& record) {
+    Serial.printf("[camera_store] WARNING: dropped a camera record (\"%s\") that failed to parse "
+                  "under schema %u (found %u field(s), expected %s).\n",
+                  record.substring(0, record.indexOf('\x1F')).c_str(), (unsigned)storedVersion,
+                  (unsigned)cameraRecordFieldCount(record), cameraRecordExpectedFields(storedVersion).c_str());
+  });
+  std::vector<CameraConfig>& cams = parsed.cameras;
 
   // Rewrite in the current schema, unless a record failed to parse: saving
-  // then would permanently drop it. Leave NVS alone and retry each boot
-  // instead.
-  if (droppedRecords > 0) {
+  // then would permanently drop it. Leave the stored list alone and retry each
+  // boot instead.
+  if (parsed.dropped > 0) {
     Serial.printf("[camera_store] %d of %d camera record(s) failed to parse - NOT migrating/rewriting "
-                  "NVS this boot so the raw data isn't lost. Only the %u that parsed are active for "
-                  "now; saving anything from this dashboard will overwrite the stored list, including "
-                  "the unparsed records.\n", droppedRecords, totalRecords, (unsigned)cams.size());
-  } else if (storedVersion != CAMERA_SCHEMA_VERSION || !fromFile) {
+                  "the stored list this boot so the raw data isn't lost. Only the %u that parsed are active "
+                  "for now; saving anything from this dashboard will overwrite the stored list, including "
+                  "the unparsed records.\n", parsed.dropped, parsed.total, (unsigned)cams.size());
+  } else if (fileStatus == CameraFileStatus::Unreadable && !fromNvs) {
+    Serial.println("[camera_store] ERROR: the camera list exists but could not be read - NOT rewriting it. "
+                   "No cameras are active; saving anything from this dashboard will overwrite it.");
+  } else if (shouldRewriteCameraList(fromFile, fromNvs, parsed.dropped, storedVersion)) {
     // Once per boot: this runs on every page load, and a save that fails for
     // lack of space would fail again.
     static bool migrationTried = false;
@@ -208,32 +191,8 @@ std::vector<CameraConfig> loadCameras() {
 }
 
 bool saveCameras(const std::vector<CameraConfig>& cameras) {
-  std::vector<uint8_t> raw = {(uint8_t)(CAMERA_SCHEMA_VERSION & 0xFF), (uint8_t)(CAMERA_SCHEMA_VERSION >> 8)};
-  for (size_t i = 0; i < cameras.size(); i++) {
-    if (i > 0) raw.push_back((uint8_t)RECORD_SEP);
-    String record = serializeCamera(cameras[i]);
-    raw.insert(raw.end(), record.c_str(), record.c_str() + record.length());
-  }
-
-  const char* failure = nullptr;
-  if (!cameraFsReady()) {
-    failure = "LittleFS is not mounted";
-  } else {
-    File f = LittleFS.open(CAMERA_FILE_TMP, "w");
-    size_t written = f ? f.write(raw.data(), raw.size()) : 0;
-    if (f) f.close();
-    if (written != raw.size()) {
-      failure = "writing the new list failed (filesystem full?)";
-      LittleFS.remove(CAMERA_FILE_TMP);
-    } else if (!LittleFS.rename(CAMERA_FILE_TMP, CAMERA_FILE)) {
-      // LittleFS's rename replaces the target atomically; this fallback is in
-      // case a VFS layer refuses an existing one. loadCameras reads the
-      // temporary file if a reset lands between the two steps.
-      if (!LittleFS.remove(CAMERA_FILE) || !LittleFS.rename(CAMERA_FILE_TMP, CAMERA_FILE)) {
-        failure = "replacing the old list failed";
-      }
-    }
-  }
+  std::vector<uint8_t> raw = encodeCameraList(cameras);
+  const char* failure = cameraFsReady() ? writeCameraListFile(g_cameraFileOps, raw) : "LittleFS is not mounted";
 
   if (failure) {
     Serial.printf("[camera_store] ERROR: could not save %u camera(s) (%u bytes): %s. The stored list is "
@@ -247,14 +206,8 @@ bool saveCameras(const std::vector<CameraConfig>& cameras) {
 CameraSaveResult addCamera(const CameraConfig& cam) {
   xSemaphoreTake(g_camerasMutex, portMAX_DELAY);
   std::vector<CameraConfig> cams = loadCameras();
-  CameraSaveResult result = CameraSaveResult::Saved;
-  for (auto& c : cams) {
-    if (c.name.equalsIgnoreCase(cam.name)) { result = CameraSaveResult::NameTaken; break; }
-  }
-  if (result == CameraSaveResult::Saved) {
-    cams.push_back(cam);
-    if (!saveCameras(cams)) result = CameraSaveResult::WriteFailed;
-  }
+  CameraSaveResult result = applyCameraAdd(cams, cam);
+  if (result == CameraSaveResult::Saved && !saveCameras(cams)) result = CameraSaveResult::WriteFailed;
   xSemaphoreGive(g_camerasMutex);
   return result;
 }
@@ -262,14 +215,7 @@ CameraSaveResult addCamera(const CameraConfig& cam) {
 bool deleteCamera(const String& name) {
   xSemaphoreTake(g_camerasMutex, portMAX_DELAY);
   std::vector<CameraConfig> cams = loadCameras();
-  bool ok = false;
-  for (size_t i = 0; i < cams.size(); i++) {
-    if (cams[i].name.equalsIgnoreCase(name)) {
-      cams.erase(cams.begin() + i);
-      ok = saveCameras(cams);
-      break;
-    }
-  }
+  bool ok = applyCameraDelete(cams, name) && saveCameras(cams);
   xSemaphoreGive(g_camerasMutex);
   return ok;
 }
@@ -297,20 +243,8 @@ bool updateAllCameras(const std::function<void(CameraConfig&)>& mutate) {
 CameraSaveResult updateCamera(const String& originalName, const CameraConfig& cam) {
   xSemaphoreTake(g_camerasMutex, portMAX_DELAY);
   std::vector<CameraConfig> cams = loadCameras();
-  int idx = -1;
-  for (size_t i = 0; i < cams.size(); i++) {
-    if (cams[i].name.equalsIgnoreCase(originalName)) { idx = (int)i; break; }
-  }
-  CameraSaveResult result = idx >= 0 ? CameraSaveResult::Saved : CameraSaveResult::NotFound;
-  if (idx >= 0) {
-    for (size_t i = 0; i < cams.size(); i++) {
-      if ((int)i != idx && cams[i].name.equalsIgnoreCase(cam.name)) { result = CameraSaveResult::NameTaken; break; }
-    }
-    if (result == CameraSaveResult::Saved) {
-      cams[idx] = cam;
-      if (!saveCameras(cams)) result = CameraSaveResult::WriteFailed;
-    }
-  }
+  CameraSaveResult result = applyCameraUpdate(cams, originalName, cam);
+  if (result == CameraSaveResult::Saved && !saveCameras(cams)) result = CameraSaveResult::WriteFailed;
   xSemaphoreGive(g_camerasMutex);
   return result;
 }
