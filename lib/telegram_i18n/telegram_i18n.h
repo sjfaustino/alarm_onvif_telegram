@@ -136,6 +136,15 @@ String trLogEmpty(TelegramLang lang);
 String trElapsedSince(TelegramLang lang, unsigned long eventMs, unsigned long nowMs);
 String trAmbiguousCamera(TelegramLang lang, const String& name, const String& matchList);
 String trUnknownCamera(TelegramLang lang, const String& name);
+
+// /enable and /disable.
+String trCameraToggleUsage(TelegramLang lang, const String& commandDisplayName);
+String trNoSuchCamera(TelegramLang lang, const String& name);
+String trCameraAlreadySet(TelegramLang lang, const String& name, bool enabled);
+String trCameraToggled(TelegramLang lang, const String& name, bool enabled);
+String trCameraToggleFailed(TelegramLang lang, const String& name);
+String trAllCamerasAlreadySet(TelegramLang lang, bool enabled);
+String trAllCamerasToggled(TelegramLang lang, bool enabled, size_t changed, size_t failed);
 String trNoCamerasToChoose(TelegramLang lang);
 String trCameraPickerPrompt(TelegramLang lang, const String& commandDisplayName);
 // Label only; the "all" callback token itself is protocol and never

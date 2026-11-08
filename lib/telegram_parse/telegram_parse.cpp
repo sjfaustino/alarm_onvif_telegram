@@ -108,6 +108,8 @@ TelegramCommandPermission requiredPermissionForCommand(TelegramCommand command) 
     case TelegramCommand::Log:
     case TelegramCommand::On:
     case TelegramCommand::Off:  return TelegramCommandPermission::Command;
+    case TelegramCommand::Enable:  return TelegramCommandPermission::Command;
+    case TelegramCommand::Disable:  return TelegramCommandPermission::Command;
     case TelegramCommand::Snap: return TelegramCommandPermission::Snap;
     case TelegramCommand::Reset: return TelegramCommandPermission::Reset;
     case TelegramCommand::Backup: return TelegramCommandPermission::Backup;
@@ -134,6 +136,40 @@ static void splitNameAndDuration(const String& rest, String& name, String& durat
   name = trimmed.substring(0, sp);
   duration = trimmed.substring(sp + 1);
   duration.trim();
+}
+
+CameraTogglePlan planCameraToggle(const CameraConfig cameras[], size_t numCameras, const String& needle, bool enable) {
+  CameraTogglePlan plan;
+  String wanted = needle;
+  wanted.trim();
+  wanted.toLowerCase();
+  if (wanted.length() == 0) return plan;
+
+  if (wanted == "all") {
+    for (size_t i = 0; i < numCameras; i++) {
+      if (cameras[i].enabled != enable) plan.targets.push_back(i);
+    }
+    plan.outcome = plan.targets.empty() ? CameraToggleOutcome::NothingToDo : CameraToggleOutcome::Apply;
+    return plan;
+  }
+
+  for (size_t i = 0; i < numCameras; i++) {
+    String name = cameras[i].name;
+    name.toLowerCase();
+    if (name == wanted) {
+      plan.targets.assign(1, i);
+      break;
+    }
+    if (name.startsWith(wanted)) plan.targets.push_back(i);
+  }
+  if (plan.targets.empty()) {
+    plan.outcome = CameraToggleOutcome::NotFound;
+  } else if (plan.targets.size() > 1) {
+    plan.outcome = CameraToggleOutcome::Ambiguous;
+  } else {
+    plan.outcome = cameras[plan.targets[0]].enabled == enable ? CameraToggleOutcome::AlreadySet : CameraToggleOutcome::Apply;
+  }
+  return plan;
 }
 
 ParsedTelegramCommand parseTelegramCommand(const String& text) {
@@ -170,6 +206,12 @@ ParsedTelegramCommand parseTelegramCommand(const String& text) {
   } else if (lower.startsWith("/off ")) {
     result.command = TelegramCommand::Off;
     splitNameAndDuration(text.substring(5), result.cameraName, result.durationText);
+  } else if (lower == "/enable" || lower.startsWith("/enable ")) {
+    result.command = TelegramCommand::Enable;
+    result.cameraName = text.substring(7);
+  } else if (lower == "/disable" || lower.startsWith("/disable ")) {
+    result.command = TelegramCommand::Disable;
+    result.cameraName = text.substring(8);
   } else if (lower == "/snap") {
     result.command = TelegramCommand::Snap;
   } else if (lower.startsWith("/snap ")) {
@@ -240,6 +282,8 @@ String commandDisplayName(TelegramCommand command) {
     case TelegramCommand::Reset:  return "/reset";
     case TelegramCommand::On:     return "/on";
     case TelegramCommand::Off:    return "/off";
+    case TelegramCommand::Enable: return "/enable";
+    case TelegramCommand::Disable: return "/disable";
     case TelegramCommand::Snap:   return "/snap";
     case TelegramCommand::Help:   return "/help";
     case TelegramCommand::Health: return "/health";

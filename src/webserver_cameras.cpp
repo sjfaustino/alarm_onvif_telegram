@@ -614,7 +614,7 @@ bool saveCameraSubmission(CameraConfig cam, const String& originalName, String& 
         cameraStateInit((*liveStates)[idx]);
         requestLiveConfigReload((*liveStates)[idx], cam);
         spawnCameraTask(idx); // its own startup applies the staged config - see applyPendingConfigIfAny
-        logEvent(cam.name + ": enabled via dashboard, monitoring started live");
+        logEvent(cam.name + ": enabled, monitoring started live");
         applyNote = "\"" + cam.name + "\" enabled - monitoring started live (no reboot needed).";
         break;
       case LiveCameraAction::Stop:

@@ -576,6 +576,8 @@ String trHelpText(TelegramLang lang, uint16_t eventLogCapacity, uint16_t maxDura
         "/snap <c\xC3\xA2mara|all> - tira uma foto agora, ignorando sil\xC3\xAAncio/intervalo\n"
         "/on, /off ou /snap sem nome de c\xC3\xA2mara mostra bot\xC3\xB5""es de sele\xC3\xA7\xC3\xA3o (apenas "
         "ligar/desligar/foto permanentes, sem temporizador)\n"
+        "/enable <c\xC3\xA2mara|all> - inicia a monitoriza\xC3\xA7\xC3\xA3o da c\xC3\xA2mara\n"
+        "/disable <c\xC3\xA2mara|all> - para a monitoriza\xC3\xA7\xC3\xA3o da c\xC3\xA2mara (ao contr\xC3\xA1rio de /off, deixa de detetar)\n"
         "/health - sa\xC3\xBA" "de da placa (heap, PSRAM, NVS, sinal WiFi, armazenamento SD)\n"
         "/log [N] - as N entradas mais recentes do log de atividades (padr\xC3\xA3o 10, m\xC3\xA1x " +
         String(eventLogCapacity) + ")\n"
@@ -605,6 +607,8 @@ String trHelpText(TelegramLang lang, uint16_t eventLogCapacity, uint16_t maxDura
       "/snap <camera|all> - fresh photo now, ignoring mute/cooldown\n"
       "/on, /off, or /snap with no camera name shows a tappable button picker instead (permanent "
       "on/off/snap only, no duration timer)\n"
+      "/enable <camera|all> - start monitoring a camera\n"
+      "/disable <camera|all> - stop monitoring a camera (unlike /off, it stops detecting too)\n"
       "/health - board health (heap, PSRAM, NVS, WiFi signal, SD storage)\n"
       "/log [N] - the N most recent Activity log entries (default 10, max " + String(eventLogCapacity) +
       ")\n"
@@ -687,6 +691,52 @@ String trAmbiguousCamera(TelegramLang lang, const String& name, const String& ma
 String trUnknownCamera(TelegramLang lang, const String& name) {
   if (lang == TelegramLang::Portuguese) return "C\xC3\xA2mara desconhecida ou desativada: " + name;
   return "Unknown or disabled camera: " + name;
+}
+
+String trCameraToggleUsage(TelegramLang lang, const String& commandDisplayName) {
+  if (lang == TelegramLang::Portuguese) {
+    return "Indique a c\xC3\xA2mara: " + commandDisplayName + " <nome, in\xC3\xAD" "cio do nome ou all>";
+  }
+  return "Say which camera: " + commandDisplayName + " <name, start of the name, or all>";
+}
+
+String trNoSuchCamera(TelegramLang lang, const String& name) {
+  if (lang == TelegramLang::Portuguese) return "C\xC3\xA2mara desconhecida: " + name;
+  return "Unknown camera: " + name;
+}
+
+String trCameraAlreadySet(TelegramLang lang, const String& name, bool enabled) {
+  if (lang == TelegramLang::Portuguese) return name + (enabled ? " j\xC3\xA1 est\xC3\xA1 ativada." : " j\xC3\xA1 est\xC3\xA1 desativada.");
+  return name + (enabled ? " is already enabled." : " is already disabled.");
+}
+
+String trCameraToggled(TelegramLang lang, const String& name, bool enabled) {
+  if (lang == TelegramLang::Portuguese) {
+    return name + (enabled ? " ativada - monitoriza\xC3\xA7\xC3\xA3o iniciada." : " desativada - monitoriza\xC3\xA7\xC3\xA3o parada.");
+  }
+  return name + (enabled ? " enabled - monitoring started." : " disabled - monitoring stopped.");
+}
+
+String trCameraToggleFailed(TelegramLang lang, const String& name) {
+  if (lang == TelegramLang::Portuguese) return "N\xC3\xA3o foi poss\xC3\xAD" "vel guardar " + name + " - nada foi alterado.";
+  return "Could not save " + name + " - nothing was changed.";
+}
+
+String trAllCamerasAlreadySet(TelegramLang lang, bool enabled) {
+  if (lang == TelegramLang::Portuguese) return enabled ? "Todas as c\xC3\xA2maras j\xC3\xA1 est\xC3\xA3o ativadas." : "Todas as c\xC3\xA2maras j\xC3\xA1 est\xC3\xA3o desativadas.";
+  return enabled ? "Every camera is already enabled." : "Every camera is already disabled.";
+}
+
+String trAllCamerasToggled(TelegramLang lang, bool enabled, size_t changed, size_t failed) {
+  String out;
+  if (lang == TelegramLang::Portuguese) {
+    out = String((unsigned)changed) + (enabled ? " c\xC3\xA2mara(s) ativada(s)." : " c\xC3\xA2mara(s) desativada(s).");
+    if (failed > 0) out += " Falhou ao guardar " + String((unsigned)failed) + ".";
+    return out;
+  }
+  out = String((unsigned)changed) + (enabled ? " camera(s) enabled." : " camera(s) disabled.");
+  if (failed > 0) out += " Could not save " + String((unsigned)failed) + ".";
+  return out;
 }
 
 String trNoCamerasToChoose(TelegramLang lang) {

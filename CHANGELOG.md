@@ -26,6 +26,8 @@ config exports - see [Releases](README.md#releases) for how to cut one.
   empty list when the board loads it.
 
 ### Added
+- Telegram `/enable` and `/disable`, by camera name, the start of one, or `all`.
+  Monitoring starts or stops live.
 - OTA uploads must be signed: an unsigned or tampered file is refused and the
   current firmware keeps running. `board.py` signs with a key kept off the repo.
 - Hardware > Cameras page: each camera's manufacturer, model, firmware,

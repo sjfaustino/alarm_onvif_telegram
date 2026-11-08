@@ -609,8 +609,29 @@ void test_trRestoreResult_contains_summary(void) {
   TEST_ASSERT_TRUE(en.indexOf("Imported 3 camera(s).") >= 0);
 }
 
+void test_camera_toggle_wording_differs_by_state_and_language(void) {
+  TEST_ASSERT_TRUE(trCameraToggled(TelegramLang::English, "D05", true).indexOf("D05") >= 0);
+  TEST_ASSERT_TRUE(trCameraToggled(TelegramLang::English, "D05", true) != trCameraToggled(TelegramLang::English, "D05", false));
+  TEST_ASSERT_TRUE(trCameraToggled(TelegramLang::English, "D05", true) != trCameraToggled(TelegramLang::Portuguese, "D05", true));
+  TEST_ASSERT_TRUE(trCameraAlreadySet(TelegramLang::Portuguese, "D05", false).indexOf("desativada") >= 0);
+  TEST_ASSERT_TRUE(trAllCamerasToggled(TelegramLang::English, false, 3, 0).indexOf("3 camera") == 0);
+  TEST_ASSERT_TRUE(trAllCamerasToggled(TelegramLang::English, true, 2, 1).indexOf("Could not save 1") >= 0);
+  TEST_ASSERT_TRUE(trAllCamerasToggled(TelegramLang::English, true, 2, 0).indexOf("Could not") < 0);
+  TEST_ASSERT_TRUE(trCameraToggleUsage(TelegramLang::Portuguese, "/enable").indexOf("/enable") >= 0);
+}
+
+void test_help_lists_enable_and_disable(void) {
+  for (TelegramLang lang : {TelegramLang::English, TelegramLang::Portuguese}) {
+    String help = trHelpText(lang, 50, 720, true, true, true, true, true);
+    TEST_ASSERT_TRUE(help.indexOf("/enable") >= 0);
+    TEST_ASSERT_TRUE(help.indexOf("/disable") >= 0);
+  }
+}
+
 int main(int argc, char** argv) {
   UNITY_BEGIN();
+  RUN_TEST(test_camera_toggle_wording_differs_by_state_and_language);
+  RUN_TEST(test_help_lists_enable_and_disable);
   RUN_TEST(test_trMotionCaption_pet_vs_motion_and_language);
   RUN_TEST(test_trMotionCaption_person_and_vehicle_kinds);
   RUN_TEST(test_trMotionCaption_pet_event_ignores_kind);

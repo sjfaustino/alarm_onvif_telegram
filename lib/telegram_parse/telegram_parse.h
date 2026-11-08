@@ -38,7 +38,25 @@ bool chatIdMatches(const String& storedChatId, int64_t updateChatId);
 // matches.
 std::vector<size_t> matchCamerasByPrefix(const CameraConfig cameras[], size_t numCameras, const String& needle);
 
-enum class TelegramCommand { Unknown, Status, Uptime, Reset, On, Off, Snap, Help, Health, Log, Lang, Backup, Restore };
+// What /enable or /disable should do with `needle` (a name, the start of one,
+// or "all", ignoring case).
+enum class CameraToggleOutcome {
+  NeedsName,
+  NotFound,
+  Ambiguous,  // targets lists the candidates
+  AlreadySet, // targets holds the one camera
+  NothingToDo, // "all", and every camera is already in that state
+  Apply,      // targets lists the cameras to change
+};
+struct CameraTogglePlan {
+  CameraToggleOutcome outcome = CameraToggleOutcome::NeedsName;
+  std::vector<size_t> targets;
+};
+// Looks at every camera, enabled or not. An exact name beats a longer name it
+// happens to be the start of.
+CameraTogglePlan planCameraToggle(const CameraConfig cameras[], size_t numCameras, const String& needle, bool enable);
+
+enum class TelegramCommand { Unknown, Status, Uptime, Reset, On, Off, Enable, Disable, Snap, Help, Health, Log, Lang, Backup, Restore };
 
 // Permission each command needs - the single source for the authorization
 // check (scattered checks caused the /reset reboot loop). The switches have no
@@ -67,7 +85,7 @@ struct ParsedTelegramCommand {
 // The one place command syntax is parsed (parsing twice caused the /reset
 // loop). Case-insensitive. Bare /on, /off, /snap give cameraName "" (the
 // handler shows a picker); for /on and /off, the rest after the camera goes
-// into durationText.
+// into durationText. /enable and /disable take only a camera.
 ParsedTelegramCommand parseTelegramCommand(const String& text);
 
 // Interprets a timer token against nowLocal (passed in for testability):

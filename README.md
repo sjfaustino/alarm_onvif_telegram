@@ -256,7 +256,9 @@ Arduino-ESP32/IDF releases.
 - Any number of Telegram users, each independently configured for which cameras
   they hear from (specific list or "all, including future ones"), whether they get
   the heartbeat/boot messages, and three independent command permissions:
-  `canCommand` (`/on`, `/off`, `/status` - toggle/view per-camera alerts),
+  `canCommand` (`/on`, `/off`, `/status` - toggle/view per-camera alerts, and
+  `/enable`, `/disable` - start/stop monitoring a camera by name, the start of
+  its name, or `all`; unlike `/off`, a disabled camera stops detecting too),
   `canSnap` (`/snap` - fetch and send a fresh photo on demand, even from a
   camera currently muted with `/off`), and `canReset` (`/reset` - reboot the
   board immediately) - a user can have any combination, since pulling a live
