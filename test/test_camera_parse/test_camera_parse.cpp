@@ -432,8 +432,27 @@ void test_human_shape_detect_false_is_not_a_person(void) {
   TEST_ASSERT_FALSE(motionEventFired(xml, classifyCameraEvent(xml)));
 }
 
+void test_event_mask_gives_each_kind_its_own_bit(void) {
+  TEST_ASSERT_EQUAL_UINT8(0, cameraEventMask(CameraEventClassification()));
+  bool CameraEventClassification::* kinds[] = {
+      &CameraEventClassification::motionAlarm, &CameraEventClassification::cellMotion,
+      &CameraEventClassification::peopleDetect, &CameraEventClassification::vehicleDetect,
+      &CameraEventClassification::dogCatDetect, &CameraEventClassification::signalLoss,
+      &CameraEventClassification::tamper};
+  uint8_t all = 0;
+  for (auto kind : kinds) {
+    CameraEventClassification ev;
+    ev.*kind = true;
+    uint8_t mask = cameraEventMask(ev);
+    TEST_ASSERT_EQUAL_UINT8(0, all & mask); // distinct
+    TEST_ASSERT_NOT_EQUAL(0, mask);
+    all |= mask;
+  }
+}
+
 int main(int argc, char** argv) {
   UNITY_BEGIN();
+  RUN_TEST(test_event_mask_gives_each_kind_its_own_bit);
   RUN_TEST(test_parseProfiles_finds_token_and_name);
   RUN_TEST(test_parseProfiles_finds_multiple_profiles_in_order);
   RUN_TEST(test_parseProfiles_tolerates_single_quoted_token);

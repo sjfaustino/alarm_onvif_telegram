@@ -1,5 +1,5 @@
 #pragma once
-#include <Arduino.h> // explicit, not just via network_store.h - see camera_serialize.h's comment
+#include <Arduino.h> // explicit: PlatformIO's LDF only scans a lib's own includes
 #include "network_store.h"
 
 // WifiCredentials <-> one-line record, for config export/import only

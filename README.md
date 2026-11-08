@@ -149,7 +149,7 @@ Arduino-ESP32/IDF releases.
   on real hardware.
 - Cameras and Telegram recipients are managed at runtime through a built-in
   sidebar dashboard ([hoeken/PsychicHttp](https://github.com/hoeken/PsychicHttp))
-  and persisted in NVS - no more editing and reflashing `config.h`/`secrets.h` to
+  and persisted on the board (cameras in LittleFS, users in NVS) - no more editing and reflashing `config.h`/`secrets.h` to
   change either. Cameras can be added, edited, and deleted (edits can rename a
   camera too); a Test Connection button runs a live GetCapabilities/
   GetEventProperties/GetSnapshotUri check against whatever's currently typed in
@@ -157,9 +157,9 @@ Arduino-ESP32/IDF releases.
   immediately. Camera changes apply immediately too when the edited camera was
   already running and stays enabled (the task reconnects with the new settings
   within about a tick of saving) or when the edit enables a previously-disabled
-  camera (its task starts live); a brand new camera, or disabling one that's
-  currently running, still needs a reboot - the dashboard tells you which
-  happened after you save. The Cameras page also shows a small strip of the most
+  camera (its task starts live). A brand new camera starts live and disabling a
+  running one stops it live; only adding one past the board's reserved camera
+  slots needs a reboot - the dashboard tells you which happened after you save. The Cameras page also shows a small strip of the most
   recent snapshots per camera (motion, tamper, or an on-demand `/snap`), backed
   by whichever of the two snapshot-history stores below is active.
 - Snapshot history is stored either in a small PSRAM ring (last 5 per camera,
@@ -607,7 +607,12 @@ src/
 lib/                 # pure-logic modules with no hardware dependencies, split out of the
                       # files above specifically so they're unit-testable - see test/README.md
   xml_helpers/            # ONVIF response substring parsing + XML escaping
-  camera_serialize/       # CameraConfig <-> NVS blob (de)serialization, schema-versioned
+  record_table/           # stored records as a table of fields, shared by the serializers
+  camera_serialize/       # CameraConfig <-> stored record, schema-versioned
+  camera_file_store/      # camera list file format, save and recovery rules, edit rules
+  camera_profiles/        # known settings per camera model, applied when one is added
+  camera_hardware/        # parses what a camera reports about itself over ONVIF
+  snapshot_http/          # snapshot login (Basic/Digest) and body reading
   camera_form/            # camera Add/Edit form: rendering and parsing/clamping
   user_form/              # Telegram user Add/Edit form: rendering and parsing
   hardware_form/          # Hardware page forms: parsing, pin-clash validation
@@ -622,7 +627,7 @@ lib/                 # pure-logic modules with no hardware dependencies, split o
   telegram_parse/         # Telegram JSON escaping, /on,/off,/snap camera-name matching, and
                            # /on,/off timer-token parsing (minutes or HH:MM)
   telegram_multipart/     # multipart/form-data body construction for Telegram's sendPhoto
-  network_serialize/      # WifiCredentials <-> NVS blob (de)serialization, schema-versioned -
+  network_serialize/      # WifiCredentials <-> one-line record for config export -
                            # same shape as camera_serialize/telegram_user_serialize, passwords
                            # never included
   config_import_parse/    # parses the Security page's exported config text back into

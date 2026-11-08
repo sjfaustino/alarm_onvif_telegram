@@ -51,7 +51,7 @@ this way:
 ### Why the serialization modules are schema-versioned
 
 `camera_serialize`/`telegram_user_serialize` each store a `CAMERA_SCHEMA_VERSION`/
-`TELEGRAM_USER_SCHEMA_VERSION` alongside their NVS blob (`camera_store.cpp`/
+`TELEGRAM_USER_SCHEMA_VERSION` alongside their stored records (`camera_store.cpp`/
 `telegram_users.cpp` read+write a separate `"schema"` key next to `"list"`).
 This exists to close a real gap: a purely positional, pipe-delimited format
 can't tell "an old record that's missing some trailing fields" apart from

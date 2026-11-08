@@ -100,7 +100,7 @@ void pushCameraSnapshot(const CameraConfig& cfg, CameraState& st, uint8_t* jpg, 
     // lastContactMs by the time blocked, so SD delays don't count as camera
     // silence (a false OFFLINE).
     unsigned long before = millis();
-    writeSdSnapshot(cfg, jpg, jpgLen, source); // takes ownership regardless of outcome - see its own comment
+    writeSdSnapshot(cfg, jpg, jpgLen, source); // takes ownership regardless of outcome
     unsigned long blockedMs = millis() - before;
     // Locked: also reached from loop()'s task via /snap.
     { CameraStateLock lock(st); st.lastContactMs += blockedMs; }

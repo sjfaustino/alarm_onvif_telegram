@@ -54,12 +54,12 @@ def log(follow):
             if int(r.headers.get("X-Log-Oldest", 0)) > since > 0:
                 print("--- log lines were missed ---")
             since = int(r.headers["X-Log-Next"])
+            more = r.headers.get("X-Log-More") == "1"
             body = r.read()
         sys.stdout.write(body.decode(errors="replace"))
         sys.stdout.flush()
-        # A short read is caught up: a busy log always has a new line by the
-        # next request, so waiting for an empty one might never end.
-        if len(body) >= 16 * 1024:
+        # The board says whether it had more; a busy log would never run dry.
+        if more:
             continue
         if not follow:
             return

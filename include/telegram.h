@@ -1,7 +1,7 @@
 #pragma once
 #include <Arduino.h>
 #include <functional>
-#include <vector> // explicit, not chained - see camera_serialize.h's comment; recentUnknownChats' return type
+#include <vector> // recentUnknownChats' return type
 #include "config.h"
 #include "camera.h"
 #include "telegram_users.h" // TelegramLang

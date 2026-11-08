@@ -154,6 +154,9 @@ struct CameraState {
   // H46 accepts its nonce again); a 401 refreshes it.
   String snapshotDigestChallenge;
 
+  // Which event topics were last logged (cameraEventMask); owned by the task.
+  uint8_t lastLoggedEventMask = 0;
+
   // What the camera reports about itself (Hardware > Cameras), read once the
   // camera answers and again after an edit or a refresh request. hardwareReadMs
   // is 0 until read; hardwareClockSkewS is camera minus board, valid when

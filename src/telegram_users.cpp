@@ -158,7 +158,7 @@ static bool persistTelegramUsers(const std::vector<TelegramUser>& users) {
   Preferences prefs;
   if (!prefs.begin(NVS_NAMESPACE, false)) return false;
 
-  // Write failures used to look like success.
+  // Check every write: a failed one must not look like success.
   bool chunksOk = true;
   for (size_t i = 0; i < chunks.size(); i++) {
     if (prefs.putString(chunkKey((uint16_t)i).c_str(), chunks[i]) == 0) chunksOk = false;

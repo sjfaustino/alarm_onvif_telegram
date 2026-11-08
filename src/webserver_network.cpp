@@ -236,8 +236,7 @@ void handleSaveNetwork(PsychicRequest* request, String& banner) {
 // WiFi network scan.
 // ============================================================
 
-// Distinguishes a failed scan from a quiet neighbourhood; both used to read
-// "No networks found".
+// Distinguishes a failed scan from a quiet neighbourhood.
 struct WifiScanOutcome {
   bool scanFailed = false;
   std::vector<WifiScanResult> networks;

@@ -150,7 +150,7 @@ static const char* tabListingUrl(Tab active) {
     case Tab::Network: return "/network";
     case Tab::Storage: return "/storage";
     case Tab::HardwareCameras: return "/hardware/cameras";
-    default:           return "/cameras"; // unreachable - see this function's own comment
+    default:           return "/cameras"; // unreachable
   }
 }
 

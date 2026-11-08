@@ -2,6 +2,7 @@
 #include "camera_tasks.h"
 #include "camera.h"
 #include "camera_profiles.h"
+#include "format_utils.h" // extractHost
 #include "config.h"
 #include "event_log_store.h"
 #include "telegram.h"
@@ -100,6 +101,10 @@ bool isPendingNewCamera(const String& name) {
   return pending;
 }
 
+static uint32_t ipAsUint32(const IPAddress& ip) {
+  return ((uint32_t)ip[0] << 24) | ((uint32_t)ip[1] << 16) | ((uint32_t)ip[2] << 8) | ip[3];
+}
+
 // Longest loop() waits on a new camera's GetDeviceInformation.
 static const uint16_t MODEL_LOOKUP_TIMEOUT_MS = 4000;
 
@@ -114,11 +119,12 @@ static void applyModelDefaults(CameraConfig& cam) {
     Serial.printf("[%s] Model lookup failed - no model defaults applied.\n", cam.name.c_str());
     return;
   }
-  const CameraModelProfile* profile = findCameraModelProfile(manufacturer, model);
-  if (!profile) {
+  CameraModelProfile profile = findCameraModelProfile(manufacturer, model);
+  if (!profile.known) {
     logEvent(cam.name + ": " + manufacturer + " " + model + " - no model defaults known");
     return;
   }
+  bool onLocalSubnet = hostIsOnSubnet(extractHost(cam.deviceServiceUrl), ipAsUint32(WiFi.localIP()), ipAsUint32(WiFi.subnetMask()));
   // Applied to the stored record, under the save lock, so a dashboard edit made
   // since the add isn't overwritten; only fields still at defaults change.
   std::vector<String> changes;
@@ -126,7 +132,7 @@ static void applyModelDefaults(CameraConfig& cam) {
     CameraListLock lock;
     for (CameraConfig& stored : loadCameras()) {
       if (!stored.name.equalsIgnoreCase(cam.name)) continue;
-      changes = applyCameraModelProfile(stored, *profile);
+      changes = applyCameraModelProfile(stored, profile, onLocalSubnet);
       if (!changes.empty() && updateCamera(stored.name, stored) == CameraSaveResult::Saved) {
         cam = stored;
       } else if (!changes.empty()) {

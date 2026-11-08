@@ -265,8 +265,8 @@ String trBridgeOutageAlert(TelegramLang lang) {
 }
 
 String trPowerStatusLine(TelegramLang lang, bool present) {
-  // Same \xE2\x9C\x85/\xE2\x9A\xA0\xEF\xB8\x8F icons as trPowerRestored/trPowerLost below - this
-  // line used to be bare text, easy to miss skimming a longer boot
+  // Same \xE2\x9C\x85/\xE2\x9A\xA0\xEF\xB8\x8F icons as trPowerRestored/trPowerLost below - bare
+  // text is easy to miss skimming a longer boot
   // message; OFF specifically (running on UPS, mains actually down) needs
   // to stand out at a glance, not just read the same as every other
   // routine boot-status line around it.

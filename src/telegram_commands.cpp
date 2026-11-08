@@ -29,7 +29,7 @@
 // Telegram commands (short getUpdates polls from loop())
 //
 // lastUpdateId is persisted so a reboot doesn't redeliver commands: a
-// redelivered /reset once caused an endless reboot loop. It's saved once per
+// redelivered /reset would reboot the board forever. It's saved once per
 // poll (not per update, which would let any stranger force NVS writes), and
 // /reset saves it itself just before restarting.
 // ============================================================
@@ -723,7 +723,7 @@ static String downloadTelegramDocument(const String& fileId) {
 
   WiFiClientSecure client;
   client.setCACert(TELEGRAM_ROOT_CA);
-  client.setHandshakeTimeout(HTTP_TIMEOUT_MS / 1000); // seconds, not ms - see sendTelegramPhotoBuffered's comment
+  client.setHandshakeTimeout(HTTP_TIMEOUT_MS / 1000); // seconds, not ms
 
   String filePath;
   {
@@ -853,7 +853,7 @@ void pollTelegramCommands(const CameraConfig cameras[], CameraState states[], si
 
     WiFiClientSecure client;
     client.setCACert(TELEGRAM_ROOT_CA);
-    client.setHandshakeTimeout(HTTP_TIMEOUT_MS / 1000); // seconds, not ms - see sendTelegramPhotoBuffered's comment
+    client.setHandshakeTimeout(HTTP_TIMEOUT_MS / 1000); // seconds, not ms
 
     HTTPClient http;
     String url = "https://api.telegram.org/bot" + String(TELEGRAM_BOT_TOKEN) +

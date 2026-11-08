@@ -25,8 +25,8 @@ static bool usersHaveDuplicateIdentity(const std::vector<TelegramUser>& users) {
   return false;
 }
 
-// Inline parsing for the small primitive sections, still versioned: SD
-// retentionDays was once silently dropped by every import until v2.
+// Inline parsing for the small primitive sections, still versioned so a
+// later field (SD retentionDays, v2) isn't silently dropped on import.
 static const char SD_FIELD_SEP = '\x1F';
 static const uint16_t SDSETTINGS_SCHEMA_VERSION_CURRENT = 2;
 

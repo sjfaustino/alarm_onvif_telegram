@@ -101,7 +101,7 @@ class SnapshotInFlightGuard {
 // One snapshot from st.snapshotUri, or nullptr (logged). Caller free()s.
 uint8_t* fetchOneSnapshot(const CameraConfig& cfg, CameraState& st, size_t& outLen) {
   outLen = 0;
-  SnapshotInFlightGuard snapshotGuard(st); // see its own comment - covers every return path below
+  SnapshotInFlightGuard snapshotGuard(st); // covers every return path below
 
   // Also called from loop() (/snap), so copy these under the lock.
   String snapshotUri, cachedChallenge; const char* user; const char* pass;

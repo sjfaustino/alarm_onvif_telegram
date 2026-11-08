@@ -248,7 +248,7 @@ static bool sendTelegramApiCall(const String& method, JsonDocument& doc) {
 
   WiFiClientSecure client;
   client.setCACert(TELEGRAM_ROOT_CA); // see telegram_ca.h if this needs refreshing
-  client.setHandshakeTimeout(HTTP_TIMEOUT_MS / 1000); // seconds, not ms - see sendTelegramPhotoBuffered's comment
+  client.setHandshakeTimeout(HTTP_TIMEOUT_MS / 1000); // seconds, not ms
 
   HTTPClient http;
   String url = "https://api.telegram.org/bot" + String(TELEGRAM_BOT_TOKEN) + "/" + method;

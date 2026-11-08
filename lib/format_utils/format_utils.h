@@ -1,5 +1,5 @@
 #pragma once
-#include <Arduino.h> // explicit, not chained - see camera_serialize.h's comment
+#include <Arduino.h> // explicit: PlatformIO's LDF only scans a lib's own includes
 
 // Pure formatting helpers shared by Telegram and the dashboard, tested
 // natively.
@@ -11,8 +11,7 @@ String formatUptime(unsigned long ms);
 String formatElapsedSince(unsigned long eventMs, unsigned long nowMs);
 
 // Escapes & < > " and ' (as &#39;) - the quote matters for single-quoted JS
-// inside attributes (onsubmit="return confirm('...')"), which was once an XSS
-// hole.
+// inside attributes (onsubmit="return confirm('...')"), or it's an XSS hole.
 String htmlEscape(const String& s);
 
 // RFC 3986 percent-encoding for query-string values.

@@ -143,8 +143,8 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
     String liveStatus;
     String lastAlertStr = "never";
     String previewCell = "<span class=\"hint\">(none yet)</span>";
-    String rtspUri;  // populated below only if isLive - see CameraState::streamUri's own comment
-    String mjpegUri; // populated below only if isLive - see CameraState::mjpegUri's own comment
+    String rtspUri;  // only if isLive
+    String mjpegUri; // only if isLive
     String liveRowHtml; // set below only if mjpegUri is non-empty - a sibling <tr> appended after this row's own
     // c.enabled (fresh from NVS) too: a stopped camera keeps its slot, so idx
     // alone can't tell a live task from a finished one.
@@ -481,11 +481,11 @@ String renderCamerasPanel(const CameraConfig* prefill, bool isEdit,
   html += renderTestAlertStatus();
   html += renderCameraForm(prefill ? *prefill : CameraConfig(), isEdit);
 
-  html += "<p class=\"hint\">Adding, editing, or deleting a camera updates storage immediately, "
-          "but only takes effect after the board reboots. Test Connection doesn't save anything - "
-          "it just runs GetCapabilities/GetEventProperties/GetSnapshotUri against whatever is "
-          "currently typed in, so you can catch a wrong URL or credential before rebooting. Runs "
-          "in the background; reload this page after clicking to see the result.</p>";
+  html += "<p class=\"hint\">Adding, editing, or deleting a camera applies straight away, without a "
+          "reboot. Test Connection doesn't save anything - it just runs "
+          "GetCapabilities/GetEventProperties/GetSnapshotUri against whatever is currently typed in, "
+          "so you can catch a wrong URL or credential before saving. Runs in the background; reload "
+          "this page after clicking to see the result.</p>";
   return html;
 }
 
@@ -553,8 +553,8 @@ bool saveCameraSubmission(CameraConfig cam, const String& originalName, String& 
 
   if (idx >= 0 && liveStates && idx < (int)liveStates->size()) {
     // Not escaped here: applyNote travels in the redirect and is escaped once,
-    // where it's rendered. Escaping twice once let a direct ?note= request
-    // skip escaping entirely (reflected XSS).
+    // where it's rendered. A note escaped here would need the render side to
+    // skip escaping, and a direct ?note= request would then go out raw (reflected XSS).
     switch (liveActionAfterSave(wasRunning, cam.enabled)) {
       case LiveCameraAction::Reload:
         // Stage the config for the running task; this task must never write its
@@ -624,8 +624,7 @@ static String applySettingToAllCameras(const std::function<void(CameraConfig&)>&
   if (liveReloaded > 0) {
     result += " " + String(liveReloaded) + " already-running camera(s) are reconnecting now with it.";
   }
-  result += " Any camera not currently running (disabled, or added after this board's last boot) "
-            "needs a reboot to pick this up.";
+  result += " A disabled camera picks this up when it's enabled.";
   return result;
 }
 
@@ -646,7 +645,7 @@ String applyQuietHoursToAllCameras(PsychicRequest* request, std::vector<CameraCo
       done, "", "Quiet hours were", liveCameras, liveStates);
 }
 
-// Each alert type has its own button: a combined form once re-enabled a
+// Each alert type has its own button: a combined form would re-enable a
 // camera's deliberately-disabled vehicle alerts.
 String applyPersonAlertsToAllCameras(PsychicRequest* request, std::vector<CameraConfig>* liveCameras,
                                       std::vector<CameraState>* liveStates) {
@@ -797,7 +796,7 @@ static BackgroundJob<TestAlertResult> g_testAlertJob;
 
 struct TestAlertTaskParams {
   CameraConfig cfg; // heap-copied snapshot - only cfg.name is actually read by sendTestAlert
-  CameraState* st;  // NOT owned - must be the live CameraState (liveStates[idx]), see startTestAlertAsync's comment
+  CameraState* st;  // NOT owned - must be the live CameraState (liveStates[idx])
   MotionDetectionKind kind;
   bool isPetEvent;
 };
