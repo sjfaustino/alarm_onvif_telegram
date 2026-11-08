@@ -337,7 +337,10 @@ String renderCameraHardwarePage(const std::vector<CameraConfig>* liveCameras, st
   for (size_t i = 0; i < liveCameras->size() && i < liveStates->size(); i++) {
     const CameraConfig& cfg = (*liveCameras)[i];
     CameraState& st = (*liveStates)[i];
-    html += "<fieldset><legend>" + htmlEscape(cfg.name) + (cfg.enabled ? "" : " (disabled)") + "</legend>";
+    // Disabled cameras stand out in the theme's danger red.
+    html += cfg.enabled ? "<fieldset><legend>" + htmlEscape(cfg.name) + "</legend>"
+                        : "<fieldset style=\"border-color:var(--danger)\"><legend style=\"color:var(--danger)\">" +
+                              htmlEscape(cfg.name) + " (disabled)</legend>";
     if (cfg.enabled && st.stateMutex) {
       CameraHardwareReading r = readingFromState(cfg.name, st);
       html += r.read ? renderReading(r, nowMs)
