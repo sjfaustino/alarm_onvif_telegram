@@ -12,3 +12,15 @@ String renderInternetWatchdogPage();
 String renderBridgeWatchdogPage(const std::vector<CameraConfig>* liveCameras);
 
 String renderPowerMonitorPage();
+
+String renderExternalRtcPage();
+
+struct CameraState;
+
+// What each camera reports about itself over ONVIF (camera_hardware.h),
+// index-aligned lists as in g_liveCameras/g_liveStates.
+String renderCameraHardwarePage(const std::vector<CameraConfig>* liveCameras,
+                                std::vector<CameraState>* liveStates);
+
+// Whether disabled cameras are being read in the background.
+bool hardwareJobsInProgress();

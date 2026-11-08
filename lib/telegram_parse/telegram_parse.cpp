@@ -1,3 +1,4 @@
+#include "ntp_policy.h" // clockYearIsSet
 #include "telegram_parse.h"
 #include <ArduinoJson.h>
 #include <cstdlib>
@@ -219,7 +220,7 @@ ParsedDuration parseDurationToken(const String& token, const struct tm& nowLocal
   if (hour > 23 || minute > 59) return result;
 
   // HH:MM needs a synced clock (tm_year stays at the epoch until NTP runs).
-  if (nowLocal.tm_year <= (2016 - 1900)) return result;
+  if (!clockYearIsSet(nowLocal.tm_year)) return result;
 
   int nowSecOfDay = nowLocal.tm_hour * 3600 + nowLocal.tm_min * 60 + nowLocal.tm_sec;
   int targetSecOfDay = hour * 3600 + minute * 60;

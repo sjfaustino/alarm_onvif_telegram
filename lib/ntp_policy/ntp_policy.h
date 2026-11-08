@@ -1,4 +1,9 @@
 #pragma once
+#include <time.h>
+
+// Whether the clock has been set: until the first sync it counts up from 1970.
+inline bool clockYearIsSet(int tmYear) { return tmYear > (2016 - 1900); }
+inline bool clockIsSet(time_t now) { return now >= 1483228800; } // 2017-01-01 UTC
 
 // Whether to resolve the NTP server again and restart SNTP, tested natively.
 // At most once per retryMs. Restarts if SNTP isn't running (the lookup failed)

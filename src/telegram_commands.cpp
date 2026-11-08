@@ -425,7 +425,7 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
       // Don't restart mid SD write: FAT isn't journaled.
       waitForSdIdle();
       ESP.restart();
-      return; // unreachable - ESP.restart() doesn't return - kept for a tidy switch
+      return;
 
     case TelegramCommand::Backup: {
       Serial.printf("[Telegram] Config backup requested by user \"%s\" via /backup.\n", sender.name.c_str());

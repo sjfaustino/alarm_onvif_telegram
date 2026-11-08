@@ -8,6 +8,39 @@ config exports - see [Releases](README.md#releases) for how to cut one.
 
 ## [Unreleased]
 
+### Changed
+- The External RTC settings moved from the Network page to Hardware > External
+  RTC.
+
+### Removed
+- The one-time recovery that re-added cameras from `secrets.h` at boot. It only
+  ever applied to boards hit by the old chunked-storage bug.
+
+### Fixed
+- A camera list file that exists but can't be read is no longer replaced by an
+  empty list when the board loads it.
+
+### Added
+- Hardware > Cameras page: each camera's manufacturer, model, firmware,
+  serial number, MAC and IP address, link speed, ONVIF scopes, clock offset
+  and video streams, as the camera reports them over ONVIF.
+- Model defaults: a newly added camera is asked for its manufacturer and model,
+  and known settings for it are filled in where the add form was left at the
+  default. Entries so far:
+  - Vatilon: `/cgi-bin/snapshot.cgi` and 500 ms polls.
+  - REOLINK RLC-520A: InitialTerminationTime.
+  - Tips in the notes for the Vatilon H46, Tapo TC65 and Vstarcam
+    "IP Camera".
+
+### Changed
+- Event polls now ask the camera to hold the request for up to 5 seconds
+  instead of 1, so while the camera holds them they run back to back. An event used to
+  wait up to about a second for the next poll; now it arrives as it happens.
+  The poll interval is now the minimum time between polls.
+- A camera whose snapshot URL wants Digest login now gets it on the first
+  request, using the last challenge, instead of being refused first.
+- Each snapshot fetch logs its size, time and login type to the serial log.
+
 ## [1.1.0] - 2026-11-07
 
 The code is reorganised and much better tested, and running it on a live board

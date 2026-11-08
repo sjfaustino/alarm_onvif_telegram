@@ -1,26 +1,10 @@
 #include "network_serialize.h"
+#include "record_table.h"
 #include <vector>
 
-// Same field separator as the other serializers.
-static const char FIELD_SEP = '\x1F';
+static const char FIELD_SEP = RECORD_FIELD_SEP;
 
-static String stripSeparators(const String& s) {
-  String out = s;
-  out.replace(String(FIELD_SEP), "");
-  return out;
-}
-
-static std::vector<String> splitFields(const String& record) {
-  std::vector<String> fields;
-  int fieldStart = 0;
-  for (int i = 0; i <= (int)record.length(); i++) {
-    if (i == (int)record.length() || record[i] == FIELD_SEP) {
-      fields.push_back(record.substring(fieldStart, i));
-      fieldStart = i + 1;
-    }
-  }
-  return fields;
-}
+static String stripSeparators(const String& s) { return stripFieldSeparator(s); }
 
 // One layout per version, never edited.
 String serializeNetworkConfig(const WifiCredentials& creds) {
@@ -59,7 +43,7 @@ static WifiCredentials deserializeNetworkConfigV1(const std::vector<String>& fie
 }
 
 WifiCredentials deserializeNetworkConfig(const String& record, uint16_t recordVersion) {
-  std::vector<String> fields = splitFields(record);
+  std::vector<String> fields = splitRecordFields(record);
 
   if (recordVersion == NETWORK_SCHEMA_VERSION) return deserializeNetworkConfigV1(fields);
 

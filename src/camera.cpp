@@ -1,5 +1,6 @@
 #include "camera_clamps.h"
 #include "camera.h"
+#include "ntp_policy.h" // clockIsSet
 #include "onvif_soap.h"
 #include "telegram.h"
 #include "telegram_i18n.h"
@@ -77,6 +78,51 @@ static String cameraSoapCall(const CameraConfig& cfg, CameraState& st, const Str
   String response = soapPost(cfg.name.c_str(), url, action, xml, basicUser, basicPass);
   if (response.length() > 0) { CameraStateLock lock(st); st.lastContactMs = millis(); }
   return response;
+}
+
+bool fetchCameraIdentity(const CameraConfig& cfg, String& manufacturer, String& model, uint16_t timeoutMs) {
+  String action = "http://www.onvif.org/ver10/device/wsdl/GetDeviceInformation";
+  String xml = soapEnvelope(action, "<tds:GetDeviceInformation/>", "", cfg.user.c_str(), cfg.pass.c_str(),
+                            cfg.includeReplyToAnonymous, cfg.useWSSecurity);
+  const char* basicUser = cfg.useWSSecurity ? nullptr : cfg.user.c_str();
+  const char* basicPass = cfg.useWSSecurity ? nullptr : cfg.pass.c_str();
+  String response = soapPost(cfg.name.c_str(), cfg.deviceServiceUrl, action, xml, basicUser, basicPass, timeoutMs);
+  if (response.length() == 0 || responseHasFault(response)) return false;
+  manufacturer = findElementByLocalName(response, "Manufacturer");
+  model = findElementByLocalName(response, "Model");
+  manufacturer.trim();
+  model.trim();
+  return manufacturer.length() > 0 && model.length() > 0;
+}
+
+bool cameraFetchHardwareInfo(const CameraConfig& cfg, CameraState& st) {
+  static const char* kDevice = "http://www.onvif.org/ver10/device/wsdl/";
+  CameraHardwareInfo info;
+  String response = cameraSoapCall(cfg, st, cfg.deviceServiceUrl, "", String(kDevice) + "GetDeviceInformation",
+                                   "<tds:GetDeviceInformation/>");
+  bool answered = response.length() > 0 && !responseHasFault(response);
+  if (answered) parseDeviceInformation(response, info);
+  parseNetworkInterfaces(cameraSoapCall(cfg, st, cfg.deviceServiceUrl, "", String(kDevice) + "GetNetworkInterfaces",
+                                        "<tds:GetNetworkInterfaces/>"),
+                         info);
+  parseScopes(cameraSoapCall(cfg, st, cfg.deviceServiceUrl, "", String(kDevice) + "GetScopes", "<tds:GetScopes/>"),
+              info);
+  parseSystemDateAndTime(cameraSoapCall(cfg, st, cfg.deviceServiceUrl, "",
+                                        String(kDevice) + "GetSystemDateAndTime", "<tds:GetSystemDateAndTime/>"),
+                         info);
+  time_t boardNow = time(nullptr);
+  if (st.mediaServiceUrl.length() > 0) {
+    parseVideoStreams(cameraSoapCall(cfg, st, st.mediaServiceUrl, "", "http://www.onvif.org/ver10/media/wsdl/GetProfiles",
+                                     "<trt:GetProfiles/>"),
+                      info);
+  }
+  bool skewKnown = info.clockUtcEpoch > 0 && clockIsSet(boardNow);
+  CameraStateLock lock(st);
+  st.hardware = info;
+  st.hardwareReadMs = millis();
+  st.hardwareClockSkewKnown = skewKnown;
+  st.hardwareClockSkewS = skewKnown ? (long)(info.clockUtcEpoch - (long long)boardNow) : 0;
+  return answered;
 }
 
 bool cameraDiscoverServices(const CameraConfig& cfg, CameraState& st) {
@@ -474,8 +520,12 @@ bool cameraPullMessages(const CameraConfig& cfg, CameraState& st) {
   if (!st.subscriptionActive || st.pullPointUrl.length() == 0) return false; // same-task read, no lock needed
 
   String action = "http://www.onvif.org/ver10/events/wsdl/PullPointSubscription/PullMessagesRequest";
-  // PT1S long-poll. PT5S would cut request volume at the cost of latency.
-  String body = "<tev:PullMessages><tev:Timeout>PT1S</tev:Timeout>"
+  // Long poll: the camera holds the request until an event or the timeout, so
+  // events arrive as they happen. Polls start pollIntervalMs apart, so while
+  // the camera holds them they run back to back. One that ignores the timeout
+  // and answers at once is still polled every pollIntervalMs. Stays well under
+  // HTTP_TIMEOUT_MS.
+  String body = "<tev:PullMessages><tev:Timeout>PT" + String(PULL_LONG_POLL_SECONDS) + "S</tev:Timeout>"
                 "<tev:MessageLimit>20</tev:MessageLimit></tev:PullMessages>";
   String response = cameraSoapCall(cfg, st, st.pullPointUrl, st.pullPointUrl, action, body);
 
@@ -626,7 +676,8 @@ void cameraTaskFn(void* pvParameters) {
       // Any URL/token may be stale after an edit, so rediscover everything via
       // the normal resubscribe path. snapshotUri is locked because /snap reads
       // it from loop()'s task.
-      { CameraStateLock lock(st); st.subscriptionActive = false; st.snapshotUri = ""; }
+      { CameraStateLock lock(st); st.subscriptionActive = false; st.snapshotUri = ""; st.snapshotDigestChallenge = "";
+        st.hardwareReadMs = 0; } // re-read the hardware page's details with the new settings
       st.eventServiceUrl = ""; st.mediaServiceUrl = ""; st.pullPointUrl = ""; st.profileToken = "";
       st.retryDelayMs = 0; st.retryStreak = 0; st.lastRetry = 0; // retry immediately, not after a stale backoff
 
@@ -711,6 +762,15 @@ void cameraTaskFn(void* pvParameters) {
                         cfg.name.c_str());
         }
       }
+    }
+
+    // Hardware > Cameras: read once the camera has answered discovery, and again
+    // on request. A failed read isn't retried until then.
+    if (!snapshotBusy && st.mediaServiceUrl.length() > 0) {
+      bool wantHardware;
+      { CameraStateLock lock(st); wantHardware = st.hardwareReadMs == 0 || st.hardwareRefreshRequested;
+        st.hardwareRefreshRequested = false; }
+      if (wantHardware) cameraFetchHardwareInfo(cfg, st);
     }
 
     checkCameraOnlineStatus(cfg, st);

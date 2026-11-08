@@ -5,6 +5,7 @@
 #include "webserver_cameras.h"
 #include "webserver_users.h"
 #include "webserver_storage.h"
+#include "webserver_hardware.h" // hardwareJobsInProgress
 #include "ui_settings.h"
 #include "auth_store.h"
 #include "sd_store.h" // waitForSdIdle
@@ -134,6 +135,7 @@ static bool tabHasActiveBackgroundJob(Tab active) {
     case Tab::Users:   return userJobsInProgress();
     case Tab::Network: return networkJobsInProgress();
     case Tab::Storage: return storageJobsInProgress();
+    case Tab::HardwareCameras: return hardwareJobsInProgress();
     default:           return false;
   }
 }
@@ -147,6 +149,7 @@ static const char* tabListingUrl(Tab active) {
     case Tab::Users:   return "/users";
     case Tab::Network: return "/network";
     case Tab::Storage: return "/storage";
+    case Tab::HardwareCameras: return "/hardware/cameras";
     default:           return "/cameras"; // unreachable - see this function's own comment
   }
 }
@@ -275,7 +278,8 @@ String renderShell(Tab active, const String& banner, const String& contentHtml) 
   bool systemOpen = (active == Tab::Firmware || active == Tab::Maintenance || active == Tab::Storage ||
                       active == Tab::Capabilities);
   bool hardwareOpen = (active == Tab::HardwareInternet || active == Tab::HardwareBridge ||
-                        active == Tab::HardwarePower);
+                        active == Tab::HardwarePower || active == Tab::HardwareRtc ||
+                        active == Tab::HardwareCameras);
 
   html += "<nav class=\"sidebar\"><div class=\"brand\">Camera Monitor v" + String(FIRMWARE_VERSION) + "</div>";
   html += "<a href=\"/network\" class=\"";
@@ -325,6 +329,12 @@ String renderShell(Tab active, const String& banner, const String& contentHtml) 
   html += "<a href=\"/hardware/power\" class=\"";
   html += (active == Tab::HardwarePower) ? "active" : "";
   html += "\">220V Power</a>";
+  html += "<a href=\"/hardware/rtc\" class=\"";
+  html += (active == Tab::HardwareRtc) ? "active" : "";
+  html += "\">External RTC</a>";
+  html += "<a href=\"/hardware/cameras\" class=\"";
+  html += (active == Tab::HardwareCameras) ? "active" : "";
+  html += "\">Cameras</a>";
   html += "</div>";
   html += "<a href=\"/security\" class=\"";
   html += (active == Tab::Security) ? "active" : "";

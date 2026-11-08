@@ -24,7 +24,10 @@ this way:
 | Module (`lib/`)             | Extracted from                         | Covers |
 |---|---|---|
 | `xml_helpers`                | `onvif_soap.cpp`                       | ONVIF response substring parsing (`findElementByLocalName`, `findAttributeValue`/`findAttributeInTag`, `responseHasFault`) and `xmlEscape` - hardened against inconsistent attribute quoting and a closing tag that drops its namespace prefix |
-| `camera_serialize`           | `camera_store.cpp`                     | `CameraConfig` <-> NVS blob (de)serialization, schema-versioned (see below) |
+| `record_table`               | the three serializers                  | One table of fields per stored struct: each row's version, reading and writing. Exercised through `camera_serialize` and `telegram_user_serialize` |
+| `camera_serialize`           | `camera_store.cpp`                     | `CameraConfig` <-> stored record, one table for every schema version (see below) |
+| `camera_file_store`          | `camera_store.cpp`, `webserver_cameras.cpp` | The camera list's file format; save and recovery with each filesystem step failing (`CameraFileOps` is faked); when loading may rewrite the list; add/rename/delete rules; keeping a blank password; what a save means for the running task |
+| `snapshot_http`              | `snapshot_fetch.cpp`                   | Basic and Digest login and the remembered challenge, against a fake that copies `HTTPClient`'s real quirks; reading a body: Content-Length, stalls, closed connections |
 | `camera_form`                | `webserver_cameras.cpp`                | Camera Add/Edit form: rendered HTML submitted back through the parser (`html_form_reader`), plus every parse default and limit |
 | `user_form`                  | `webserver_users.cpp`                  | Telegram user Add/Edit form, tested the same way |
 | `hardware_form`              | `webserver_hardware.cpp`               | Hardware page parsing and pin-clash validation, including the overflow-safe duration clamp |
@@ -64,9 +67,10 @@ on the next boot, with no crash and no error.
 
 Versioning turns that from an assumption into a rule: the *current* schema
 version's parser now requires an *exact* field count (a mismatch is treated
-as corruption, not guessed at), and any future layout change must add a new
-explicitly-numbered version branch rather than editing the current one in
-place. Old data (schema 0 - "written before this existed") still parses via
+as corruption, not guessed at), and any future layout change must append a
+row to the table in `camera_serialize.cpp` with the next version number,
+never insert or reorder one (`test_stored_layout_is_pinned` fails if a row
+moves). `telegram_user_serialize` works the same way. Old data (schema 0 - "written before this existed") still parses via
 the original tolerant logic, and gets transparently rewritten in the
 current format + version the next time it's loaded. `test_v1_wrong_field_count_is_rejected_not_reinterpreted`
 in both test files is what demonstrates the fix directly: the exact same
@@ -77,7 +81,9 @@ now comes back empty instead.
 
 - **`onvif_soap.cpp`'s `soapPost`/`makeSecurityHeader`/`isoTimeNow`, the SOAP
   call sequencing in `camera.cpp`, `telegram_transport.cpp`'s actual send paths,
-  the dashboard's route handlers, `main.cpp`'s boot sequence** - all
+  the dashboard's route handlers, `main.cpp`'s boot sequence, and the thin
+  LittleFS/NVS/`HTTPClient` wiring left in `camera_store.cpp` and
+  `snapshot_fetch.cpp`** - all
   fundamentally about talking to a network/clock/NVS that doesn't exist on a
   CI runner. Testing these for real would mean either running against actual
   ONVIF cameras and a real Telegram bot (not reproducible, not CI-safe), or

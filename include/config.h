@@ -18,6 +18,8 @@ static const unsigned long BOOT_SETTLE_MS = 250UL;
 // PULL_INTERVAL_MS is only CameraConfig::pollIntervalMs's default; camera.cpp
 // reads the per-camera value.
 static const unsigned long PULL_INTERVAL_MS         = 2000UL;
+// PullMessages long-poll timeout. Must stay under HTTP_TIMEOUT_MS.
+static const unsigned int  PULL_LONG_POLL_SECONDS   = 5;
 static const unsigned long SUBSCRIPTION_LIFETIME_MS = 4UL * 60UL * 1000UL;
 static const unsigned long RENEW_MARGIN_MS          = 60UL * 1000UL;
 static const unsigned long RETRY_INTERVAL_MS        = 10000UL;

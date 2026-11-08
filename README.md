@@ -14,10 +14,10 @@ Arduino-ESP32/IDF releases.
 - Polls each enabled camera's ONVIF PullPoint subscription on its own FreeRTOS task
   (parallel, not round-robin) and auto-resubscribes/retries on failure. The poll
   interval is per-camera and dashboard-editable (default 2000ms - see the Cameras
-  page below), since PullMessages' own 1-second long-poll is designed for frequent
-  re-polling and some cameras notice motion sooner with a shorter interval, while a
-  cheaper camera's embedded HTTP stack may not tolerate that as well as a more
-  capable one does. Whenever a snapshot fetch (a motion/tamper photo, a timelapse
+  page below). Each PullMessages request asks the camera to hold it for up to 5
+  seconds, so a camera that honours that reports an event the moment it happens
+  and is polled back to back. The interval is the minimum time between poll
+  starts, which only matters for a camera that answers at once. Whenever a snapshot fetch (a motion/tamper photo, a timelapse
   capture, or an on-demand `/snap`) is in flight to a given camera, that camera's
   own task skips its next scheduled poll/renewal/resubscribe attempt rather than
   risk a second concurrent HTTP connection to the same device - some embedded
@@ -138,6 +138,15 @@ Arduino-ESP32/IDF releases.
   board - a camera on a different VLAN/subnet, or one that doesn't support
   WS-Discovery at all, won't show up here even if it's reachable directly by
   URL; add those manually instead.
+- Known camera models get their settings filled in when added. Before a new
+  camera starts, the board asks it for its manufacturer and model (ONVIF
+  GetDeviceInformation) and applies the matching entry from
+  `lib/camera_profiles`: snapshot URL, poll interval, InitialTerminationTime,
+  plus a tip in the notes for anything only the camera's own web UI can change.
+  Only fields still at their defaults are filled, so values typed in the add
+  form win; it runs once per add and never touches later edits. The Activity
+  log lists what was applied. Add a model to the table once it's been verified
+  on real hardware.
 - Cameras and Telegram recipients are managed at runtime through a built-in
   sidebar dashboard ([hoeken/PsychicHttp](https://github.com/hoeken/PsychicHttp))
   and persisted in NVS - no more editing and reflashing `config.h`/`secrets.h` to
@@ -361,7 +370,7 @@ has, on the PSRAM-only ring, without one.
 **An external RTC (DS3231) is optional.** A generic I2C breakout module wired to
 `RTC_SDA_PIN`/`RTC_SCL_PIN` in `include/config.h` (**verify and adjust these for
 your actual wiring before flashing**; they're common ESP32-S3 default I2C pins,
-not guaranteed for your specific board) and enabled on the Network dashboard page
+not guaranteed for your specific board) and enabled on the dashboard's Hardware > External RTC page
 seeds the system clock at boot before WiFi/NTP have had any chance to run, and is
 kept corrected from NTP after every real sync. Without one, the board behaves
 exactly as it always has - NTP is the only clock source, with no accurate time at
@@ -406,6 +415,18 @@ is validated the same way as the internet watchdog's own pin, and all three
 are cross-checked against each other, pairwise, so no two of them can be
 pointed at the same pin. Without any of these enabled, the board behaves
 exactly as it always has.
+
+The Hardware > Cameras page lists what each monitored camera reports about
+itself over ONVIF:
+- **Device:** manufacturer, model, hardware ID, firmware and serial number.
+- **Network:** MAC address, IP address (DHCP or static) and link speed.
+- **ONVIF scopes:** name, location and hardware.
+- **Clock:** time source, time zone and offset from the board's clock.
+- **Video streams:** codec, resolution, frame rate and bitrate of each.
+- **From the board:** the snapshot and live-stream URLs and the event types.
+
+Each camera's task reads this when the camera first answers and again after
+an edit; a button reads it again from every camera.
 
 ## Setup
 

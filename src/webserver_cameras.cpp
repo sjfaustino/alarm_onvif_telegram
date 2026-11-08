@@ -6,6 +6,7 @@
 #include "camera_form.h"
 #include "request_params.h"
 #include "camera_tasks.h"
+#include "camera_file_store.h" // keepStoredPasswordIfBlank, liveActionAfterSave
 #include "event_log_store.h"
 #include "snapshot_history.h"
 #include "snapshot_source.h" // snapshotSourceLabel - Preview column thumbnail tooltips
@@ -17,10 +18,6 @@
 #include <WiFiUdp.h>
 #include <cctype>
 
-// Serializes saves: two quick saves of a newly enabled camera could both see
-// it not running (enabled flips only when the task applies its config) and
-// spawn two tasks.
-static SemaphoreHandle_t g_saveMutex = xSemaphoreCreateMutex();
 
 // Live slot index by name, or -1 if the camera has no live slot.
 static int findLiveCameraIndex(std::vector<CameraConfig>* liveCameras, const String& name) {
@@ -519,7 +516,8 @@ bool saveCameraSubmission(CameraConfig cam, const String& originalName, String& 
     // (then a reboot is needed, and the note says so).
     if (stagePendingNewCamera(cam)) {
       applyNote = cam.enabled
-          ? ("\"" + cam.name + "\" added - starting monitoring now (no reboot needed).")
+          ? ("\"" + cam.name + "\" added - starting monitoring now (no reboot needed). Known settings for its "
+             "model are filled in where you left the default; the Activity log lists them.")
           : ("\"" + cam.name + "\" added (disabled) - no reboot needed; enable it whenever you're ready.");
     } else {
       applyNote = "\"" + cam.name + "\" added, but this board's reserved camera capacity is already used "
@@ -528,15 +526,10 @@ bool saveCameraSubmission(CameraConfig cam, const String& originalName, String& 
     return true;
   }
 
-  if (cam.pass.length() == 0) {
-    for (auto& existing : loadCameras()) {
-      if (existing.name.equalsIgnoreCase(originalName)) { cam.pass = existing.pass; break; }
-    }
-  }
+  if (cam.pass.length() == 0) keepStoredPasswordIfBlank(cam, originalName, loadCameras());
 
-  // The rest runs under g_saveMutex (see above). It also serializes the
-  // store's read-modify-write for saves of different cameras.
-  xSemaphoreTake(g_saveMutex, portMAX_DELAY);
+  // Held across the save and the live action that depends on it.
+  CameraListLock listLock;
 
   // By original name (a rename keeps the slot). A live task exists exactly
   // when the slot's in-memory enabled is true.
@@ -547,7 +540,6 @@ bool saveCameraSubmission(CameraConfig cam, const String& originalName, String& 
 
   CameraSaveResult updated = updateCamera(originalName, cam);
   if (updated != CameraSaveResult::Saved) {
-    xSemaphoreGive(g_saveMutex);
     if (updated == CameraSaveResult::NameTaken) {
       banner = "Could not save \"" + htmlEscape(cam.name) + "\" - a different camera already uses that name.";
     } else if (updated == CameraSaveResult::NotFound) {
@@ -563,29 +555,34 @@ bool saveCameraSubmission(CameraConfig cam, const String& originalName, String& 
     // Not escaped here: applyNote travels in the redirect and is escaped once,
     // where it's rendered. Escaping twice once let a direct ?note= request
     // skip escaping entirely (reflected XSS).
-    if (wasRunning && cam.enabled) {
-      // Stage the config for the running task; this task must never write its
-      // CameraConfig directly (see requestLiveConfigReload).
-      requestLiveConfigReload((*liveStates)[idx], cam);
-      applyNote = "\"" + cam.name + "\" updated - applying live, reconnecting now (no reboot needed).";
-    } else if (!wasRunning && cam.enabled) {
-      // Newly enabled, or its task had stopped: stage the config via pendingConfig (other tasks read
-      // enabled/name unlocked, so don't write the slot directly) and create
-      // the lock first.
-      cameraStateInit((*liveStates)[idx]);
-      requestLiveConfigReload((*liveStates)[idx], cam);
-      spawnCameraTask(idx); // its own startup applies the staged config - see applyPendingConfigIfAny
-      logEvent(cam.name + ": enabled via dashboard, monitoring started live");
-      applyNote = "\"" + cam.name + "\" enabled - monitoring started live (no reboot needed).";
-    } else if (wasRunning && !cam.enabled) {
-      // A disable wins over any other change in the same save.
-      requestCameraStop((*liveStates)[idx]);
-      applyNote = "\"" + cam.name + "\" disabled - monitoring stopped live (no reboot needed).";
+    switch (liveActionAfterSave(wasRunning, cam.enabled)) {
+      case LiveCameraAction::Reload:
+        // Stage the config for the running task; this task must never write its
+        // CameraConfig directly (see requestLiveConfigReload).
+        requestLiveConfigReload((*liveStates)[idx], cam);
+        applyNote = "\"" + cam.name + "\" updated - applying live, reconnecting now (no reboot needed).";
+        break;
+      case LiveCameraAction::Start:
+        // Newly enabled, or its task had stopped: stage the config via pendingConfig (other tasks read
+        // enabled/name unlocked, so don't write the slot directly) and create
+        // the lock first.
+        cameraStateInit((*liveStates)[idx]);
+        requestLiveConfigReload((*liveStates)[idx], cam);
+        spawnCameraTask(idx); // its own startup applies the staged config - see applyPendingConfigIfAny
+        logEvent(cam.name + ": enabled via dashboard, monitoring started live");
+        applyNote = "\"" + cam.name + "\" enabled - monitoring started live (no reboot needed).";
+        break;
+      case LiveCameraAction::Stop:
+        // A disable wins over any other change in the same save.
+        requestCameraStop((*liveStates)[idx]);
+        applyNote = "\"" + cam.name + "\" disabled - monitoring stopped live (no reboot needed).";
+        break;
+      case LiveCameraAction::None:
+        break;
     }
   }
   // idx < 0: no live slot (added while capacity was full) - needs a reboot.
 
-  xSemaphoreGive(g_saveMutex);
   return true;
 }
 
@@ -597,162 +594,85 @@ bool stopLiveCameraIfRunning(const String& name, std::vector<CameraConfig>* live
   return running;
 }
 
+// Every camera, including disabled ones, so the setting sticks if enabled later;
+// each running one reloads, like a single edit. `done` opens the success banner
+// and `notChanged` finishes the failure one.
+static String applySettingToAllCameras(const std::function<void(CameraConfig&)>& mutate, const String& done,
+                                       const String& afterCount, const char* notChanged,
+                                       std::vector<CameraConfig>* liveCameras, std::vector<CameraState>* liveStates) {
+  std::vector<CameraConfig> cams;
+  CameraSaveResult saved = updateAllCameras(mutate, cams);
+  if (saved == CameraSaveResult::NotFound) return "No cameras configured - nothing to apply this to.";
+  if (saved != CameraSaveResult::Saved) {
+    return "Failed to save - storage write error (see Serial log). " + String(notChanged) +
+           " NOT changed for any camera.";
+  }
+
+  size_t liveReloaded = 0;
+  if (liveCameras && liveStates) {
+    for (auto& c : cams) {
+      int idx = findLiveCameraIndex(liveCameras, c.name);
+      bool wasRunning = idx >= 0 && idx < (int)liveStates->size() && (*liveCameras)[idx].enabled;
+      if (wasRunning) {
+        requestLiveConfigReload((*liveStates)[idx], c);
+        liveReloaded++;
+      }
+    }
+  }
+
+  String result = done + " - applied to all " + String(cams.size()) + " camera(s)." + afterCount;
+  if (liveReloaded > 0) {
+    result += " " + String(liveReloaded) + " already-running camera(s) are reconnecting now with it.";
+  }
+  result += " Any camera not currently running (disabled, or added after this board's last boot) "
+            "needs a reboot to pick this up.";
+  return result;
+}
+
 String applyQuietHoursToAllCameras(PsychicRequest* request, std::vector<CameraConfig>* liveCameras,
                                     std::vector<CameraState>* liveStates) {
   bool quietHoursEnabled = request->hasParam("quietHoursEnabled");
   uint16_t quietStartMinute = parseHHMMToMinutes(request->getParam("quietStart", "00:00"));
   uint16_t quietEndMinute = parseHHMMToMinutes(request->getParam("quietEnd", "00:00"));
-
-  // Every camera, including disabled ones, so the setting sticks if enabled
-  // later. updateAllCameras reads and writes in one critical section.
-  size_t cameraCount = loadCameras().size();
-  if (cameraCount == 0) return "No cameras configured - nothing to apply this to.";
-
-  bool saved = updateAllCameras([&](CameraConfig& c) {
-    c.quietHoursEnabled = quietHoursEnabled;
-    c.quietStartMinute = quietStartMinute;
-    c.quietEndMinute = quietEndMinute;
-  });
-  if (!saved) {
-    return "Failed to save - NVS write error (see Serial log). Quiet hours were NOT changed for any camera.";
-  }
-
-  // Live-reload each running enabled camera, like a single edit. Re-reads the
-  // list, which the write above has committed.
-  std::vector<CameraConfig> cams = loadCameras();
-  size_t liveReloaded = 0;
-  if (liveCameras && liveStates) {
-    for (auto& c : cams) {
-      int idx = findLiveCameraIndex(liveCameras, c.name);
-      bool wasRunning = idx >= 0 && idx < (int)liveStates->size() && (*liveCameras)[idx].enabled;
-      if (wasRunning) {
-        requestLiveConfigReload((*liveStates)[idx], c);
-        liveReloaded++;
-      }
-    }
-  }
-
-  String result = "Quiet hours " +
+  String done = "Quiet hours " +
       (quietHoursEnabled ? ("enabled, " + minutesToHHMM(quietStartMinute) + "-" + minutesToHHMM(quietEndMinute))
-                          : String("disabled")) +
-      " - applied to all " + String(cams.size()) + " camera(s).";
-  if (liveReloaded > 0) {
-    result += " " + String(liveReloaded) + " already-running camera(s) are reconnecting now with it.";
-  }
-  result += " Any camera not currently running (disabled, or added after this board's last boot) "
-            "needs a reboot to pick this up.";
-  return result;
+                          : String("disabled"));
+  return applySettingToAllCameras(
+      [&](CameraConfig& c) {
+        c.quietHoursEnabled = quietHoursEnabled;
+        c.quietStartMinute = quietStartMinute;
+        c.quietEndMinute = quietEndMinute;
+      },
+      done, "", "Quiet hours were", liveCameras, liveStates);
 }
 
-// Like applyQuietHoursToAllCameras, for personAlertsEnabled. Each alert type
-// has its own button: a combined form once re-enabled a camera's
-// deliberately-disabled vehicle alerts.
+// Each alert type has its own button: a combined form once re-enabled a
+// camera's deliberately-disabled vehicle alerts.
 String applyPersonAlertsToAllCameras(PsychicRequest* request, std::vector<CameraConfig>* liveCameras,
                                       std::vector<CameraState>* liveStates) {
   bool enabled = request->hasParam("enabled");
-
-  size_t cameraCount = loadCameras().size();
-  if (cameraCount == 0) return "No cameras configured - nothing to apply this to.";
-
-  bool saved = updateAllCameras([&](CameraConfig& c) { c.personAlertsEnabled = enabled; });
-  if (!saved) {
-    return "Failed to save - NVS write error (see Serial log). Person alert settings were NOT changed for "
-           "any camera.";
-  }
-
-  std::vector<CameraConfig> cams = loadCameras();
-  size_t liveReloaded = 0;
-  if (liveCameras && liveStates) {
-    for (auto& c : cams) {
-      int idx = findLiveCameraIndex(liveCameras, c.name);
-      bool wasRunning = idx >= 0 && idx < (int)liveStates->size() && (*liveCameras)[idx].enabled;
-      if (wasRunning) {
-        requestLiveConfigReload((*liveStates)[idx], c);
-        liveReloaded++;
-      }
-    }
-  }
-
-  String result = "Person alerts " + String(enabled ? "enabled" : "disabled") + " - applied to all " +
-      String(cams.size()) + " camera(s). Vehicle alert settings were left untouched.";
-  if (liveReloaded > 0) {
-    result += " " + String(liveReloaded) + " already-running camera(s) are reconnecting now with it.";
-  }
-  result += " Any camera not currently running (disabled, or added after this board's last boot) "
-            "needs a reboot to pick this up.";
-  return result;
+  return applySettingToAllCameras([&](CameraConfig& c) { c.personAlertsEnabled = enabled; },
+                                  "Person alerts " + String(enabled ? "enabled" : "disabled"),
+                                  " Vehicle alert settings were left untouched.", "Person alert settings were",
+                                  liveCameras, liveStates);
 }
 
 String applyVehicleAlertsToAllCameras(PsychicRequest* request, std::vector<CameraConfig>* liveCameras,
                                        std::vector<CameraState>* liveStates) {
   bool enabled = request->hasParam("enabled");
-
-  size_t cameraCount = loadCameras().size();
-  if (cameraCount == 0) return "No cameras configured - nothing to apply this to.";
-
-  bool saved = updateAllCameras([&](CameraConfig& c) { c.vehicleAlertsEnabled = enabled; });
-  if (!saved) {
-    return "Failed to save - NVS write error (see Serial log). Vehicle alert settings were NOT changed for "
-           "any camera.";
-  }
-
-  std::vector<CameraConfig> cams = loadCameras();
-  size_t liveReloaded = 0;
-  if (liveCameras && liveStates) {
-    for (auto& c : cams) {
-      int idx = findLiveCameraIndex(liveCameras, c.name);
-      bool wasRunning = idx >= 0 && idx < (int)liveStates->size() && (*liveCameras)[idx].enabled;
-      if (wasRunning) {
-        requestLiveConfigReload((*liveStates)[idx], c);
-        liveReloaded++;
-      }
-    }
-  }
-
-  String result = "Vehicle alerts " + String(enabled ? "enabled" : "disabled") + " - applied to all " +
-      String(cams.size()) + " camera(s). Person alert settings were left untouched.";
-  if (liveReloaded > 0) {
-    result += " " + String(liveReloaded) + " already-running camera(s) are reconnecting now with it.";
-  }
-  result += " Any camera not currently running (disabled, or added after this board's last boot) "
-            "needs a reboot to pick this up.";
-  return result;
+  return applySettingToAllCameras([&](CameraConfig& c) { c.vehicleAlertsEnabled = enabled; },
+                                  "Vehicle alerts " + String(enabled ? "enabled" : "disabled"),
+                                  " Person alert settings were left untouched.", "Vehicle alert settings were",
+                                  liveCameras, liveStates);
 }
 
 String applyPetAlertsToAllCameras(PsychicRequest* request, std::vector<CameraConfig>* liveCameras,
                                    std::vector<CameraState>* liveStates) {
   bool enabled = request->hasParam("enabled");
-
-  size_t cameraCount = loadCameras().size();
-  if (cameraCount == 0) return "No cameras configured - nothing to apply this to.";
-
-  bool saved = updateAllCameras([&](CameraConfig& c) { c.petAlertsEnabled = enabled; });
-  if (!saved) {
-    return "Failed to save - NVS write error (see Serial log). Pet alert settings were NOT changed for "
-           "any camera.";
-  }
-
-  std::vector<CameraConfig> cams = loadCameras();
-  size_t liveReloaded = 0;
-  if (liveCameras && liveStates) {
-    for (auto& c : cams) {
-      int idx = findLiveCameraIndex(liveCameras, c.name);
-      bool wasRunning = idx >= 0 && idx < (int)liveStates->size() && (*liveCameras)[idx].enabled;
-      if (wasRunning) {
-        requestLiveConfigReload((*liveStates)[idx], c);
-        liveReloaded++;
-      }
-    }
-  }
-
-  String result = "Pet alerts " + String(enabled ? "enabled" : "disabled") + " - applied to all " +
-      String(cams.size()) + " camera(s). Person/vehicle alert settings were left untouched.";
-  if (liveReloaded > 0) {
-    result += " " + String(liveReloaded) + " already-running camera(s) are reconnecting now with it.";
-  }
-  result += " Any camera not currently running (disabled, or added after this board's last boot) "
-            "needs a reboot to pick this up.";
-  return result;
+  return applySettingToAllCameras([&](CameraConfig& c) { c.petAlertsEnabled = enabled; },
+                                  "Pet alerts " + String(enabled ? "enabled" : "disabled"),
+                                  " Person/vehicle alert settings were left untouched.", "Pet alert settings were",
+                                  liveCameras, liveStates);
 }
 
 // Creates one real test subscription, left to expire. The banner is built from

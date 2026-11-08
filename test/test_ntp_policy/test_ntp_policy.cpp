@@ -33,8 +33,22 @@ void test_long_interval_does_not_overflow(void) {
   TEST_ASSERT_FALSE(shouldRestartSntp(true, true, 4000000000UL, 10 * HOUR, thirtyDays, RETRY));
 }
 
+void test_clock_is_set_only_after_the_threshold(void) {
+  TEST_ASSERT_FALSE(clockIsSet(0));              // never synced
+  TEST_ASSERT_FALSE(clockIsSet(1483228799));     // the last second of 2016
+  TEST_ASSERT_TRUE(clockIsSet(1483228800));      // 2017-01-01 00:00:00 UTC
+}
+
+void test_clock_year_uses_the_same_threshold(void) {
+  TEST_ASSERT_FALSE(clockYearIsSet(70));         // 1970
+  TEST_ASSERT_FALSE(clockYearIsSet(116));        // 2016
+  TEST_ASSERT_TRUE(clockYearIsSet(117));         // 2017
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
+  RUN_TEST(test_clock_is_set_only_after_the_threshold);
+  RUN_TEST(test_clock_year_uses_the_same_threshold);
   RUN_TEST(test_retries_after_a_failed_lookup);
   RUN_TEST(test_waits_out_the_retry_interval);
   RUN_TEST(test_retries_when_started_but_never_synced);

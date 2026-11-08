@@ -1,6 +1,7 @@
 #include "telegram.h"
 #include "telegram_internal.h"
 #include "config.h"
+#include "ntp_policy.h" // clockYearIsSet
 #include "telegram_ca.h"
 #include "telegram_users.h"
 #include "telegram_i18n.h"
@@ -214,7 +215,7 @@ String nowTimestampString() {
 bool localClockSynced() {
   time_t now; time(&now);
   struct tm tmStruct; localtime_r(&now, &tmStruct);
-  return tmStruct.tm_year > (2016 - 1900);
+  return clockYearIsSet(tmStruct.tm_year);
 }
 
 int currentLocalMinuteOfDay() {
