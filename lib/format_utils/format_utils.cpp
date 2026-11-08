@@ -71,8 +71,6 @@ String extractHost(const String& url) {
 bool isSameOriginRequest(const String& origin, const String& referer, const String& host) {
   String source = origin.length() > 0 ? origin : referer;
   if (source.length() == 0) return true;
-  // Sandboxed frames and some redirects send the literal "null".
-  if (source.indexOf("://") < 0) return false;
   return extractHost(source).equalsIgnoreCase(host);
 }
 
