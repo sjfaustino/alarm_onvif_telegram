@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Remote diagnostics for the board. Reads DEBUG_TOKEN from include/secrets.h.
+"""Remote diagnostics for the board. Reads DEBUG_TOKEN from include/secrets.h,
+and DASHBOARD_LOGIN ("user:password") too if the dashboard has a login.
 
   scripts/board.py status              /debug/status as JSON
   scripts/board.py log [--follow]      the log ring; --follow keeps polling
@@ -8,6 +9,7 @@
 
 Set BOARD_HOST to override the address.
 """
+import base64
 import json
 import os
 import re
@@ -20,16 +22,27 @@ import urllib.request
 HOST = os.environ.get("BOARD_HOST", "192.168.8.132")
 
 
-def token():
+def secret(name):
     with open("include/secrets.h") as f:
-        m = re.search(r'^\s*#define\s+DEBUG_TOKEN\s+"([^"]+)"', f.read(), re.M)
-    if not m:
+        m = re.search(r'^\s*#define\s+%s\s+"([^"]+)"' % name, f.read(), re.M)
+    return m.group(1) if m else None
+
+
+def token():
+    value = secret("DEBUG_TOKEN")
+    if not value:
         sys.exit("No DEBUG_TOKEN in include/secrets.h")
-    return m.group(1)
+    return value
 
 
 def get(path):
-    req = urllib.request.Request(f"http://{HOST}{path}", headers={"X-Debug-Token": token()})
+    headers = {"X-Debug-Token": token()}
+    login = secret("DASHBOARD_LOGIN")
+    if login:
+        # Without it a dashboard login answers 401, and five of those lock this
+        # address out of every route.
+        headers["Authorization"] = "Basic " + base64.b64encode(login.encode()).decode()
+    req = urllib.request.Request(f"http://{HOST}{path}", headers=headers)
     return urllib.request.urlopen(req, timeout=30)
 
 
@@ -71,8 +84,12 @@ def main():
         elf = os.path.join(os.path.dirname(args[1]), "firmware.elf")
         if os.path.exists(elf):
             shutil.copy(elf, f".pio/flashed/firmware-{version}.elf")
-        subprocess.run(["curl", "-sS", "-m", "300", "-F", f"firmware=@{args[1]}",
-                        f"http://{HOST}/firmware/update"], check=True, stdout=subprocess.DEVNULL)
+        login = secret("DASHBOARD_LOGIN")
+        upload = subprocess.run(["curl", "-sS", "--fail", "-m", "300", *(["-u", login] if login else []),
+                                 "-F", f"firmware=@{args[1]}", f"http://{HOST}/firmware/update"],
+                                stdout=subprocess.DEVNULL)
+        if upload.returncode != 0:
+            sys.exit("Upload FAILED - the board was not updated.")
         print("Uploaded. The board reboots if the image was accepted; check `status` in about 20 seconds.")
     else:
         sys.exit(__doc__)
