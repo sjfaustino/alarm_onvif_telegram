@@ -1,5 +1,6 @@
 #include "camera_clamps.h"
 #include "camera.h"
+#include "ntp_policy.h" // clockIsSet
 #include "onvif_soap.h"
 #include "telegram.h"
 #include "telegram_i18n.h"
@@ -115,8 +116,7 @@ bool cameraFetchHardwareInfo(const CameraConfig& cfg, CameraState& st) {
                                      "<trt:GetProfiles/>"),
                       info);
   }
-  // Skew only against a synced board clock (2020 or later).
-  bool skewKnown = info.clockUtcEpoch > 0 && boardNow > 1577836800;
+  bool skewKnown = info.clockUtcEpoch > 0 && clockIsSet(boardNow);
   CameraStateLock lock(st);
   st.hardware = info;
   st.hardwareReadMs = millis();

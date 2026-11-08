@@ -2,6 +2,7 @@
 #include "build_version.h"
 #include "config.h"
 #include "heap_health.h"
+#include "ntp_policy.h" // clockIsSet
 #include <ArduinoJson.h>
 #include <Preferences.h>
 #include <esp_heap_caps.h>
@@ -103,7 +104,7 @@ void diagnosticsOnHeapTick(uint32_t minFreeHeap, bool isNewLow) {
     g_heapLowLargest = ESP.getMaxAllocHeap();
     g_heapLowAtMs = millis();
     time_t now = time(nullptr);
-    g_heapLowEpoch = now > 1500000000 ? now : 0; // 0 = clock not synced
+    g_heapLowEpoch = clockIsSet(now) ? now : 0; // 0 = clock not synced
     if (g_heapLowTail) {
       uint32_t end = logTeeEnd();
       uint32_t from = end > HEAP_LOW_LOG_TAIL_BYTES ? end - HEAP_LOW_LOG_TAIL_BYTES : 0;

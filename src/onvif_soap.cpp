@@ -1,5 +1,6 @@
 #include "onvif_soap.h"
 #include "config.h"
+#include "ntp_policy.h" // clockYearIsSet
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <time.h>
@@ -33,11 +34,11 @@ String isoTimeNow() {
   do {
     time(&now);
     gmtime_r(&now, &timeinfo);
-    if (timeinfo.tm_year > (2016 - 1900)) break;
+    if (clockYearIsSet(timeinfo.tm_year)) break;
     delay(10);
   } while (millis() - start <= 2000);
 
-  if (timeinfo.tm_year <= (2016 - 1900)) {
+  if (!clockYearIsSet(timeinfo.tm_year)) {
     Serial.println("ERROR: NTP time unavailable");
     return "";
   }

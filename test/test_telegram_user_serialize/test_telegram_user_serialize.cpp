@@ -263,8 +263,52 @@ void test_wantsCamera_false_for_unlisted_camera(void) {
   TEST_ASSERT_FALSE(telegramUserWantsCamera(u, "D02-BackGate"));
 }
 
+// The stored layout itself: every position, in order.
+void test_stored_layout_is_pinned(void) {
+  TelegramUser u;
+  u.name = "n"; u.chatId = "42"; u.allCameras = true; u.cameraNames = {"A", "B"};
+  u.systemMessages = false; u.canCommand = true; u.canSnap = false; u.canReset = true;
+  u.maxCommandsPerMinute = 7; u.language = TelegramLang::Portuguese; u.canBackup = false; u.canRestore = true;
+
+  const char* expected = "n\x1F" "42\x1F" "1\x1F" "A\x1D" "B\x1F" "0\x1F" "1\x1F" "0\x1F" "1\x1F" "7\x1F" "1\x1F" "0\x1F" "1";
+  TEST_ASSERT_EQUAL_STRING(expected, serializeUser(u).c_str());
+  TEST_ASSERT_EQUAL_STRING(expected, serializeUser(deserializeUser(expected, TELEGRAM_USER_SCHEMA_VERSION)).c_str());
+}
+
+void test_current_layout_matches_the_schema_version(void) {
+  // A row added without bumping the version would write records this build
+  // then refuses to read.
+  TelegramUser u;
+  u.name = "n";
+  TEST_ASSERT_EQUAL_STRING("n", deserializeUser(serializeUser(u), TELEGRAM_USER_SCHEMA_VERSION).name.c_str());
+}
+
+void test_empty_rate_limit_keeps_the_default(void) {
+  const char* record = "n\x1F" "42\x1F" "1\x1F\x1F" "0\x1F" "0\x1F" "0\x1F" "0\x1F\x1F" "0\x1F" "0\x1F" "0";
+  TelegramUser u = deserializeUser(record, TELEGRAM_USER_SCHEMA_VERSION);
+  TEST_ASSERT_EQUAL_STRING("n", u.name.c_str());
+  TEST_ASSERT_EQUAL_UINT16(TelegramUser().maxCommandsPerMinute, u.maxCommandsPerMinute);
+}
+
+// A stray list separator would split one camera name into two on reload.
+void test_separators_inside_values_are_stripped(void) {
+  TelegramUser u;
+  u.name = "a\x1D" "b";
+  u.chatId = "1\x1D" "2";
+  u.cameraNames = {"x\x1D" "y"};
+  TelegramUser back = deserializeUser(serializeUser(u), TELEGRAM_USER_SCHEMA_VERSION);
+  TEST_ASSERT_EQUAL_STRING("ab", back.name.c_str());
+  TEST_ASSERT_EQUAL_STRING("12", back.chatId.c_str());
+  TEST_ASSERT_EQUAL(1, (int)back.cameraNames.size());
+  TEST_ASSERT_EQUAL_STRING("xy", back.cameraNames[0].c_str());
+}
+
 int main(int argc, char** argv) {
   UNITY_BEGIN();
+  RUN_TEST(test_separators_inside_values_are_stripped);
+  RUN_TEST(test_stored_layout_is_pinned);
+  RUN_TEST(test_current_layout_matches_the_schema_version);
+  RUN_TEST(test_empty_rate_limit_keeps_the_default);
   RUN_TEST(test_round_trip_preserves_every_field);
   RUN_TEST(test_round_trip_allCameras_true_with_empty_camera_list);
   RUN_TEST(test_malformed_record_returns_empty_name_v0);

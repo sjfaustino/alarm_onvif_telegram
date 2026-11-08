@@ -11,11 +11,6 @@
 std::vector<CameraConfig> g_cameras;
 std::vector<CameraState> g_cameraStates;
 
-SemaphoreHandle_t cameraSaveMutex() {
-  static SemaphoreHandle_t mutex = xSemaphoreCreateMutex();
-  return mutex;
-}
-
 // Camera task stacks are in PSRAM, which must be freed with vTaskDeleteWithCaps
 // and preferably not by the task itself. A stopping task suspends itself instead,
 // and it's deleted here, from loop() or from spawnCameraTask reusing the slot.
@@ -126,19 +121,20 @@ static void applyModelDefaults(CameraConfig& cam) {
   }
   // Applied to the stored record, under the save lock, so a dashboard edit made
   // since the add isn't overwritten; only fields still at defaults change.
-  xSemaphoreTake(cameraSaveMutex(), portMAX_DELAY);
   std::vector<String> changes;
-  for (CameraConfig& stored : loadCameras()) {
-    if (!stored.name.equalsIgnoreCase(cam.name)) continue;
-    changes = applyCameraModelProfile(stored, *profile);
-    if (!changes.empty() && updateCamera(stored.name, stored) == CameraSaveResult::Saved) {
-      cam = stored;
-    } else if (!changes.empty()) {
-      changes.clear(); // not saved, so not applied either - updateCamera logged why
+  {
+    CameraListLock lock;
+    for (CameraConfig& stored : loadCameras()) {
+      if (!stored.name.equalsIgnoreCase(cam.name)) continue;
+      changes = applyCameraModelProfile(stored, *profile);
+      if (!changes.empty() && updateCamera(stored.name, stored) == CameraSaveResult::Saved) {
+        cam = stored;
+      } else if (!changes.empty()) {
+        changes.clear(); // not saved, so not applied either - updateCamera logged why
+      }
+      break;
     }
-    break;
   }
-  xSemaphoreGive(cameraSaveMutex());
   String summary;
   for (const String& c : changes) summary += (summary.length() ? ", " : "") + c;
   logEvent(cam.name + ": " + manufacturer + " " + model + " - " +

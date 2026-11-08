@@ -4,7 +4,7 @@
 #include <functional>
 #include "config.h" // PULL_INTERVAL_MS - CameraConfig::pollIntervalMs's own default
 
-// A camera's configuration, persisted in NVS ("camstore") and edited from the
+// A camera's configuration, persisted in LittleFS and edited from the
 // dashboard.
 struct CameraConfig {
   String name;
@@ -94,13 +94,26 @@ struct CameraConfig {
   bool motionDigestEnabled = true;
 };
 
-// Loads from NVS, seeding from secrets.h's CAMERA_SEED on first boot.
+// Loads from LittleFS (migrating an older NVS list), seeding from secrets.h's CAMERA_SEED on first boot.
 std::vector<CameraConfig> loadCameras();
 
 // Overwrites the entire persisted camera list.
 bool saveCameras(const std::vector<CameraConfig>& cameras);
 
 enum class CameraSaveResult { Saved, NameTaken, NotFound, WriteFailed };
+
+// Guards every change to the camera list. Recursive, so a caller can hold it
+// across a store call plus what depends on it: two quick saves of a newly
+// enabled camera could otherwise both see it not running and spawn two tasks.
+void lockCameraList();
+void unlockCameraList();
+class CameraListLock {
+ public:
+  CameraListLock() { lockCameraList(); }
+  ~CameraListLock() { unlockCameraList(); }
+  CameraListLock(const CameraListLock&) = delete;
+  CameraListLock& operator=(const CameraListLock&) = delete;
+};
 
 // Load-mutate-save helpers. Cameras are keyed by name: add fails on a
 // duplicate, delete on a missing name. A failed write leaves the stored list
@@ -117,10 +130,7 @@ bool replaceAllCameras(const std::vector<CameraConfig>& cameras);
 
 // Read-modify-write of every camera inside one critical section, so a
 // concurrent single-camera edit isn't overwritten. False if there are no
-// cameras or the save fails.
-bool updateAllCameras(const std::function<void(CameraConfig&)>& mutate);
+// cameras (NotFound) or the save fails. On success `updated` is the saved list.
+CameraSaveResult updateAllCameras(const std::function<void(CameraConfig&)>& mutate,
+                                  std::vector<CameraConfig>& updated);
 
-// One-time recovery: adds CAMERA_SEED entries missing by name, even on an
-// initialised store. Gated by an NVS flag, so safe to call every boot. Returns
-// the number added.
-size_t restoreMissingCamerasFromSeed();

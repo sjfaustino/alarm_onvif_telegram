@@ -8,6 +8,10 @@ config exports - see [Releases](README.md#releases) for how to cut one.
 
 ## [Unreleased]
 
+### Removed
+- The one-time recovery that re-added cameras from `secrets.h` at boot. It only
+  ever applied to boards hit by the old chunked-storage bug.
+
 ### Fixed
 - A camera list file that exists but can't be read is no longer replaced by an
   empty list when the board loads it.

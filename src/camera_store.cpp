@@ -5,14 +5,13 @@
 #include "secrets.h"
 #include <LittleFS.h>
 #include <Preferences.h>
-#include <esp_task_wdt.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
-// Serializes the load-modify-save sequence so concurrent edits (two tabs, a
-// retried submit) can't lose each other's changes. Separate from the web
-// layer's own save mutex.
-static SemaphoreHandle_t g_camerasMutex = xSemaphoreCreateMutex();
+static SemaphoreHandle_t g_camerasMutex = xSemaphoreCreateRecursiveMutex();
+
+void lockCameraList() { xSemaphoreTakeRecursive(g_camerasMutex, portMAX_DELAY); }
+void unlockCameraList() { xSemaphoreGiveRecursive(g_camerasMutex); }
 
 // The list lives in a LittleFS file; camera_file_store has the format and the
 // save and recovery rules. NVS (20 KB, shared with WiFi and PHY calibration)
@@ -25,9 +24,6 @@ static const char* NVS_NAMESPACE  = "camstore";
 static const char* NVS_KEY_LIST_LEGACY = "list";
 static const char* NVS_KEY_LIST_CHUNKS = "listChunks"; // uint16_t chunk count
 static const char* NVS_KEY_SCHEMA = "schema"; // the chunked list's version
-// Bumped to rerun the restore once more after the chunking fix.
-static const char* NVS_KEY_SEED_RESTORED = "seedRestore3"; // see restoreMissingCamerasFromSeed()
-
 static std::vector<CameraConfig> seedFromSecrets() {
   std::vector<CameraConfig> cams;
   for (size_t i = 0; i < NUM_CAMERA_SEED; i++) {
@@ -204,95 +200,39 @@ bool saveCameras(const std::vector<CameraConfig>& cameras) {
 }
 
 CameraSaveResult addCamera(const CameraConfig& cam) {
-  xSemaphoreTake(g_camerasMutex, portMAX_DELAY);
+  CameraListLock lock;
   std::vector<CameraConfig> cams = loadCameras();
   CameraSaveResult result = applyCameraAdd(cams, cam);
   if (result == CameraSaveResult::Saved && !saveCameras(cams)) result = CameraSaveResult::WriteFailed;
-  xSemaphoreGive(g_camerasMutex);
   return result;
 }
 
 bool deleteCamera(const String& name) {
-  xSemaphoreTake(g_camerasMutex, portMAX_DELAY);
+  CameraListLock lock;
   std::vector<CameraConfig> cams = loadCameras();
-  bool ok = applyCameraDelete(cams, name) && saveCameras(cams);
-  xSemaphoreGive(g_camerasMutex);
-  return ok;
+  return applyCameraDelete(cams, name) && saveCameras(cams);
 }
 
 bool replaceAllCameras(const std::vector<CameraConfig>& cameras) {
-  xSemaphoreTake(g_camerasMutex, portMAX_DELAY);
-  bool ok = saveCameras(cameras);
-  xSemaphoreGive(g_camerasMutex);
-  return ok;
+  CameraListLock lock;
+  return saveCameras(cameras);
 }
 
-bool updateAllCameras(const std::function<void(CameraConfig&)>& mutate) {
-  xSemaphoreTake(g_camerasMutex, portMAX_DELAY);
-  std::vector<CameraConfig> cams = loadCameras(); // safe under the mutex - same as addCamera/updateCamera/deleteCamera do
-  if (cams.empty()) {
-    xSemaphoreGive(g_camerasMutex);
-    return false;
-  }
+CameraSaveResult updateAllCameras(const std::function<void(CameraConfig&)>& mutate,
+                                  std::vector<CameraConfig>& updated) {
+  CameraListLock lock;
+  std::vector<CameraConfig> cams = loadCameras();
+  if (cams.empty()) return CameraSaveResult::NotFound;
   for (auto& c : cams) mutate(c);
-  bool ok = saveCameras(cams);
-  xSemaphoreGive(g_camerasMutex);
-  return ok;
+  if (!saveCameras(cams)) return CameraSaveResult::WriteFailed;
+  updated = cams;
+  return CameraSaveResult::Saved;
 }
 
 CameraSaveResult updateCamera(const String& originalName, const CameraConfig& cam) {
-  xSemaphoreTake(g_camerasMutex, portMAX_DELAY);
+  CameraListLock lock;
   std::vector<CameraConfig> cams = loadCameras();
   CameraSaveResult result = applyCameraUpdate(cams, originalName, cam);
   if (result == CameraSaveResult::Saved && !saveCameras(cams)) result = CameraSaveResult::WriteFailed;
-  xSemaphoreGive(g_camerasMutex);
   return result;
-}
-
-size_t restoreMissingCamerasFromSeed() {
-  Preferences prefs;
-  // Read-write (see loadDashboardAuth).
-  prefs.begin(NVS_NAMESPACE, false);
-  bool alreadyRestored = prefs.getBool(NVS_KEY_SEED_RESTORED, false);
-  prefs.end();
-  if (alreadyRestored) return 0;
-
-  std::vector<CameraConfig> existing = loadCameras();
-  std::vector<CameraConfig> seed = seedFromSecrets();
-
-  Serial.printf("[camera_store] Restoring from CAMERA_SEED: %u already stored, %u in secrets.h.\n",
-                (unsigned)existing.size(), (unsigned)seed.size());
-  for (auto& e : existing) Serial.printf("[camera_store]   already have: \"%s\"\n", e.name.c_str());
-
-  size_t added = 0;
-  for (auto& s : seed) {
-    bool found = false;
-    for (auto& e : existing) {
-      if (e.name.equalsIgnoreCase(s.name)) { found = true; break; }
-    }
-    if (found) {
-      Serial.printf("[camera_store]   skip \"%s\": already present.\n", s.name.c_str());
-    } else if (addCamera(s) == CameraSaveResult::Saved) {
-      added++;
-      Serial.printf("[camera_store]   restored \"%s\".\n", s.name.c_str());
-    } else {
-      Serial.printf("[camera_store]   FAILED to restore \"%s\" - addCamera() returned false (name "
-                    "collision detected mid-loop, or the NVS write itself failed - see any "
-                    "saveCameras ERROR line above).\n", s.name.c_str());
-    }
-    // setup() doesn't feed the watchdog, so feed it per NVS write here.
-    esp_task_wdt_reset();
-  }
-
-  Preferences writePrefs;
-  if (writePrefs.begin(NVS_NAMESPACE, false)) {
-    writePrefs.putBool(NVS_KEY_SEED_RESTORED, true);
-    writePrefs.end();
-  }
-
-  if (added > 0) {
-    Serial.printf("[camera_store] Restored %u camera(s) from CAMERA_SEED that were missing from the "
-                  "stored list - review/rename/delete as needed via the dashboard.\n", (unsigned)added);
-  }
-  return added;
 }

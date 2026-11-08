@@ -24,6 +24,7 @@ this way:
 | Module (`lib/`)             | Extracted from                         | Covers |
 |---|---|---|
 | `xml_helpers`                | `onvif_soap.cpp`                       | ONVIF response substring parsing (`findElementByLocalName`, `findAttributeValue`/`findAttributeInTag`, `responseHasFault`) and `xmlEscape` - hardened against inconsistent attribute quoting and a closing tag that drops its namespace prefix |
+| `record_table`               | the three serializers                  | One table of fields per stored struct: each row's version, reading and writing. Exercised through `camera_serialize` and `telegram_user_serialize` |
 | `camera_serialize`           | `camera_store.cpp`                     | `CameraConfig` <-> stored record, one table for every schema version (see below) |
 | `camera_file_store`          | `camera_store.cpp`, `webserver_cameras.cpp` | The camera list's file format; save and recovery with each filesystem step failing (`CameraFileOps` is faked); when loading may rewrite the list; add/rename/delete rules; keeping a blank password; what a save means for the running task |
 | `snapshot_http`              | `snapshot_fetch.cpp`                   | Basic and Digest login and the remembered challenge, against a fake that copies `HTTPClient`'s real quirks; reading a body: Content-Length, stalls, closed connections |
@@ -69,7 +70,7 @@ version's parser now requires an *exact* field count (a mismatch is treated
 as corruption, not guessed at), and any future layout change must append a
 row to the table in `camera_serialize.cpp` with the next version number,
 never insert or reorder one (`test_stored_layout_is_pinned` fails if a row
-moves). Old data (schema 0 - "written before this existed") still parses via
+moves). `telegram_user_serialize` works the same way. Old data (schema 0 - "written before this existed") still parses via
 the original tolerant logic, and gets transparently rewritten in the
 current format + version the next time it's loaded. `test_v1_wrong_field_count_is_rejected_not_reinterpreted`
 in both test files is what demonstrates the fix directly: the exact same

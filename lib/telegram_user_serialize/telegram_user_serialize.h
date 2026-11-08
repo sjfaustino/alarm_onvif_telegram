@@ -3,8 +3,8 @@
 #include "telegram_users.h"
 
 // TelegramUser <-> NVS record, tested natively. Versioned like
-// camera_serialize.h: bump the version and add a deserializeUser branch on any
-// layout change.
+// camera_serialize.h: to add a setting, append a row to the table in the .cpp
+// and bump the version to the row's.
 static const uint16_t TELEGRAM_USER_SCHEMA_VERSION = 6;
 
 String serializeUser(const TelegramUser& u);
