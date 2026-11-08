@@ -22,7 +22,7 @@ String urlEncode(const String& s);
 String extractHost(const String& url);
 
 // url with any password replaced by "***": the user:password@ part, and the
-// values of password/pwd/pass/passwd query parameters (a Reolink's snapshot URI
+// values of password/pwd/pass/passwd/loginpas/psw query parameters (a Reolink's or Vstarcam's snapshot URI
 // carries its login that way). For showing URLs on the dashboard.
 String redactUrlSecrets(const String& url);
 

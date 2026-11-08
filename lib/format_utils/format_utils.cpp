@@ -80,7 +80,7 @@ String redactUrlSecrets(const String& url) {
   }
   int query = out.indexOf('?');
   if (query < 0) return out;
-  static const char* kKeys[] = {"password", "pwd", "pass", "passwd"};
+  static const char* kKeys[] = {"password", "pwd", "pass", "passwd", "loginpas", "psw"};
   int p = query + 1;
   while (p < (int)out.length()) {
     int amp = out.indexOf('&', p);

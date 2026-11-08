@@ -128,6 +128,9 @@ void test_redactUrlSecrets_masks_query_passwords(void) {
   TEST_ASSERT_EQUAL_STRING("http://10.0.0.5/cgi-bin/api.cgi?cmd=Snap&user=admin&password=***&width=800",
                            redactUrlSecrets("http://10.0.0.5/cgi-bin/api.cgi?cmd=Snap&user=admin&password=s3cret+1&width=800").c_str());
   TEST_ASSERT_EQUAL_STRING("http://h/snap.jpg?PWD=***", redactUrlSecrets("http://h/snap.jpg?PWD=x").c_str());
+  // Vstarcam's snapshot URI.
+  TEST_ASSERT_EQUAL_STRING("http://h:81/snapshot.cgi?loginuse=admin&loginpas=***",
+                           redactUrlSecrets("http://h:81/snapshot.cgi?loginuse=admin&loginpas=x1").c_str());
   TEST_ASSERT_EQUAL_STRING("http://h/a?pass=***&passwd=***", redactUrlSecrets("http://h/a?pass=a&passwd=bb").c_str());
 }
 
