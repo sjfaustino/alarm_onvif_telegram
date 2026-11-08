@@ -5,6 +5,7 @@
 #include "webserver_cameras.h"
 #include "webserver_users.h"
 #include "webserver_storage.h"
+#include "webserver_hardware.h" // hardwareJobsInProgress
 #include "ui_settings.h"
 #include "auth_store.h"
 #include "sd_store.h" // waitForSdIdle
@@ -134,6 +135,7 @@ static bool tabHasActiveBackgroundJob(Tab active) {
     case Tab::Users:   return userJobsInProgress();
     case Tab::Network: return networkJobsInProgress();
     case Tab::Storage: return storageJobsInProgress();
+    case Tab::HardwareCameras: return hardwareJobsInProgress();
     default:           return false;
   }
 }
@@ -147,6 +149,7 @@ static const char* tabListingUrl(Tab active) {
     case Tab::Users:   return "/users";
     case Tab::Network: return "/network";
     case Tab::Storage: return "/storage";
+    case Tab::HardwareCameras: return "/hardware/cameras";
     default:           return "/cameras"; // unreachable - see this function's own comment
   }
 }

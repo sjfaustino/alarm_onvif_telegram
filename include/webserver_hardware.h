@@ -19,3 +19,6 @@ struct CameraState;
 // index-aligned lists as in g_liveCameras/g_liveStates.
 String renderCameraHardwarePage(const std::vector<CameraConfig>* liveCameras,
                                 std::vector<CameraState>* liveStates);
+
+// Whether disabled cameras are being read in the background.
+bool hardwareJobsInProgress();

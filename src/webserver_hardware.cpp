@@ -9,6 +9,7 @@
 #include "hardware_form.h"
 #include "request_params.h"
 #include "camera.h" // CameraState, CameraStateLock
+#include "background_job.h"
 
 // Internet-connectivity watchdog (relay-based router power-cycle) -
 // optional, off by default, same "enable checkbox needs a reboot, status
@@ -217,78 +218,151 @@ static String formatClockSkew(long skewS) {
   return amount + (skewS > 0 ? " ahead of" : " behind") + " the board";
 }
 
+// One camera's reading, from its monitoring task or, for a disabled camera,
+// from the background job below.
+struct CameraHardwareReading {
+  String name;
+  bool read = false; // false: the camera didn't answer discovery
+  CameraHardwareInfo hw;
+  unsigned long readMs = 0;
+  bool skewKnown = false;
+  long skewS = 0;
+  String snapshotUri, streamUri, topics;
+};
+
+static CameraHardwareReading readingFromState(const String& name, CameraState& st) {
+  CameraHardwareReading r;
+  r.name = name;
+  CameraStateLock lock(st);
+  r.read = st.hardwareReadMs != 0;
+  r.hw = st.hardware;
+  r.readMs = st.hardwareReadMs;
+  r.skewKnown = st.hardwareClockSkewKnown;
+  r.skewS = st.hardwareClockSkewS;
+  r.snapshotUri = st.snapshotUri;
+  r.streamUri = st.streamUri;
+  r.topics = st.supportedEventTopics;
+  return r;
+}
+
+// Disabled cameras have no task, so a background job reads them with their
+// stored settings, the way Test Connection does: one camera after another,
+// each with a throwaway CameraState.
+static BackgroundJob<std::vector<CameraHardwareReading>> g_disabledHardwareJob;
+
+static void disabledHardwareTask(void* param) {
+  std::vector<CameraConfig>* cameras = static_cast<std::vector<CameraConfig>*>(param);
+  std::vector<CameraHardwareReading> readings;
+  for (const CameraConfig& cfg : *cameras) {
+    CameraState st;
+    CameraHardwareReading r;
+    r.name = cfg.name;
+    if (resolveCameraCredentials(cfg, st) && cameraDiscoverServices(cfg, st)) {
+      cameraFetchHardwareInfo(cfg, st);
+      cameraFetchProfileAndSnapshotUri(cfg, st);
+      r = readingFromState(cfg.name, st);
+    }
+    readings.push_back(r);
+  }
+  delete cameras;
+  g_disabledHardwareJob.finish(readings);
+  vTaskDelete(nullptr);
+}
+
+static void startDisabledHardwareRead(const std::vector<CameraConfig>* liveCameras) {
+  if (!liveCameras) return;
+  std::vector<CameraConfig>* disabled = new std::vector<CameraConfig>();
+  for (const CameraConfig& c : *liveCameras) {
+    if (!c.enabled) disabled->push_back(c);
+  }
+  if (disabled->empty() || !g_disabledHardwareJob.tryStart()) {
+    delete disabled;
+    return;
+  }
+  // Same stack as Test Connection (same SOAP work).
+  if (xTaskCreate(disabledHardwareTask, "hwRead", 10240, disabled, tskIDLE_PRIORITY + 1, nullptr) != pdPASS) {
+    delete disabled;
+    g_disabledHardwareJob.cancelStart();
+    Serial.println("[webserver_hardware] Could not start reading disabled cameras (out of memory?).");
+  }
+}
+
+bool hardwareJobsInProgress() { return g_disabledHardwareJob.status().inProgress; }
+
+static String renderReading(const CameraHardwareReading& r, unsigned long nowMs) {
+  const CameraHardwareInfo& hw = r.hw;
+  String html;
+  if (hw.model.length() == 0) {
+    html += "<p class=\"hint\">The camera didn't answer GetDeviceInformation; what it did report is below.</p>";
+  }
+  html += "<table>";
+  addRow(html, "Manufacturer", htmlEscape(hw.manufacturer));
+  addRow(html, "Model", htmlEscape(hw.model));
+  if (hw.hardwareId != hw.model) addRow(html, "Hardware ID", htmlEscape(hw.hardwareId));
+  addRow(html, "Firmware", htmlEscape(hw.firmwareVersion));
+  addRow(html, "Serial number", htmlEscape(hw.serialNumber));
+  addRow(html, "MAC address", htmlEscape(hw.macAddress));
+  addRow(html, "IP address", htmlEscape(hw.ipv4) + (hw.ipMode.length() ? " (" + htmlEscape(hw.ipMode) + ")" : String()));
+  addRow(html, "Network link", htmlEscape(hw.link));
+  addRow(html, "ONVIF name", htmlEscape(hw.scopeName));
+  addRow(html, "ONVIF location", htmlEscape(hw.scopeLocation));
+  if (hw.scopeHardware != hw.model) addRow(html, "ONVIF hardware", htmlEscape(hw.scopeHardware));
+  String clock;
+  if (hw.timeSource.length()) clock += "set by " + htmlEscape(hw.timeSource);
+  if (hw.timeZone.length()) clock += (clock.length() ? ", time zone " : "time zone ") + htmlEscape(hw.timeZone);
+  if (r.skewKnown) clock += (clock.length() ? ", " : "") + formatClockSkew(r.skewS);
+  addRow(html, "Clock", clock);
+  String streams;
+  for (const String& v : hw.videoStreams) streams += (streams.length() ? "<br>" : "") + htmlEscape(v);
+  addRow(html, "Video streams", streams);
+  addRow(html, "Snapshot URL", htmlEscape(redactUrlSecrets(r.snapshotUri)));
+  addRow(html, "Live stream URL", htmlEscape(redactUrlSecrets(r.streamUri)));
+  addRow(html, "Event types", htmlEscape(r.topics));
+  addRow(html, "Read", formatElapsedSince(r.readMs, nowMs));
+  html += "</table>";
+  return html;
+}
+
 String renderCameraHardwarePage(const std::vector<CameraConfig>* liveCameras, std::vector<CameraState>* liveStates) {
   String html = "<h1>Hardware - Cameras</h1>";
-  html += "<p class=\"hint\">What each camera reports about itself over ONVIF, read when it connects and "
-          "after an edit. Fields a camera doesn't report are left out.</p>";
+  html += "<p class=\"hint\">What each camera reports about itself over ONVIF. Monitored cameras are read when "
+          "they connect and after an edit; disabled ones are read in the background when this page is first "
+          "opened. Fields a camera doesn't report are left out.</p>";
   html += "<form method=\"POST\" action=\"/hardware/cameras/refresh\"><button type=\"submit\">Read again "
           "from all cameras</button></form>";
   if (!liveCameras || !liveStates) return html;
 
+  auto job = g_disabledHardwareJob.status();
   unsigned long nowMs = millis();
   for (size_t i = 0; i < liveCameras->size() && i < liveStates->size(); i++) {
     const CameraConfig& cfg = (*liveCameras)[i];
     CameraState& st = (*liveStates)[i];
-    html += "<fieldset><legend>" + htmlEscape(cfg.name) + "</legend>";
-    if (!cfg.enabled || !st.stateMutex) {
-      html += "<p class=\"hint\">Not monitored (disabled), so not read.</p></fieldset>";
-      continue;
+    html += "<fieldset><legend>" + htmlEscape(cfg.name) + (cfg.enabled ? "" : " (disabled)") + "</legend>";
+    if (cfg.enabled && st.stateMutex) {
+      CameraHardwareReading r = readingFromState(cfg.name, st);
+      html += r.read ? renderReading(r, nowMs)
+                     : String("<p class=\"hint\">Not read yet - the camera hasn't answered. Reload once it's online.</p>");
+    } else {
+      const CameraHardwareReading* found = nullptr;
+      if (job.hasResult) {
+        for (const CameraHardwareReading& r : job.result) {
+          if (r.name.equalsIgnoreCase(cfg.name)) { found = &r; break; }
+        }
+      }
+      if (found && found->read) html += renderReading(*found, nowMs);
+      else if (job.inProgress) html += "<p class=\"hint\">Reading in the background - this page reloads by itself.</p>";
+      else if (found) html += "<p class=\"hint\">Couldn't reach the camera with its stored settings.</p>";
+      else html += "<p class=\"hint\">Not read yet.</p>";
     }
-    CameraHardwareInfo hw;
-    unsigned long readMs;
-    bool skewKnown;
-    long skewS;
-    String snapshotUri, streamUri, topics;
-    {
-      CameraStateLock lock(st);
-      hw = st.hardware;
-      readMs = st.hardwareReadMs;
-      skewKnown = st.hardwareClockSkewKnown;
-      skewS = st.hardwareClockSkewS;
-      snapshotUri = st.snapshotUri;
-      streamUri = st.streamUri;
-      topics = st.supportedEventTopics;
-    }
-    if (readMs == 0) {
-      html += "<p class=\"hint\">Not read yet - the camera hasn't answered. Reload once it's online.</p>"
-              "</fieldset>";
-      continue;
-    }
-    if (hw.model.length() == 0) {
-      html += "<p class=\"hint\">The camera didn't answer GetDeviceInformation; what it did report is below.</p>";
-    }
-    html += "<table>";
-    addRow(html, "Manufacturer", htmlEscape(hw.manufacturer));
-    addRow(html, "Model", htmlEscape(hw.model));
-    if (hw.hardwareId != hw.model) addRow(html, "Hardware ID", htmlEscape(hw.hardwareId));
-    addRow(html, "Firmware", htmlEscape(hw.firmwareVersion));
-    addRow(html, "Serial number", htmlEscape(hw.serialNumber));
-    addRow(html, "MAC address", htmlEscape(hw.macAddress));
-    addRow(html, "IP address",
-           htmlEscape(hw.ipv4) + (hw.ipMode.length() ? " (" + htmlEscape(hw.ipMode) + ")" : String()));
-    addRow(html, "Network link", htmlEscape(hw.link));
-    addRow(html, "ONVIF name", htmlEscape(hw.scopeName));
-    addRow(html, "ONVIF location", htmlEscape(hw.scopeLocation));
-    if (hw.scopeHardware != hw.model) addRow(html, "ONVIF hardware", htmlEscape(hw.scopeHardware));
-    String clock;
-    if (hw.timeSource.length()) clock += "set by " + htmlEscape(hw.timeSource);
-    if (hw.timeZone.length()) clock += (clock.length() ? ", time zone " : "time zone ") + htmlEscape(hw.timeZone);
-    if (skewKnown) clock += (clock.length() ? ", " : "") + formatClockSkew(skewS);
-    addRow(html, "Clock", clock);
-    String streams;
-    for (const String& s : hw.videoStreams) streams += (streams.length() ? "<br>" : "") + htmlEscape(s);
-    addRow(html, "Video streams", streams);
-    addRow(html, "Snapshot URL", htmlEscape(redactUrlSecrets(snapshotUri)));
-    addRow(html, "Live stream URL", htmlEscape(redactUrlSecrets(streamUri)));
-    addRow(html, "Event types", htmlEscape(topics));
-    addRow(html, "Read", formatElapsedSince(readMs, nowMs));
-    html += "</table></fieldset>";
+    html += "</fieldset>";
   }
   return html;
 }
 
 void registerHardwareRoutes(PsychicHttpServer& server) {
   server.on("/hardware/cameras", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
+    auto job = g_disabledHardwareJob.status();
+    if (!job.inProgress && !job.hasResult) startDisabledHardwareRead(g_liveCameras);
     return response->send(200, "text/html",
                            renderShell(Tab::HardwareCameras, "", renderCameraHardwarePage(g_liveCameras, g_liveStates))
                                .c_str());
@@ -302,6 +376,7 @@ void registerHardwareRoutes(PsychicHttpServer& server) {
         st.hardwareRefreshRequested = true;
       }
     }
+    startDisabledHardwareRead(g_liveCameras);
     return response->send(200, "text/html",
                            renderShell(Tab::HardwareCameras,
                                        "Reading again from every monitored camera - reload in a few seconds.",
