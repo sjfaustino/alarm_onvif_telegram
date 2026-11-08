@@ -154,6 +154,7 @@ void registerDebugRoutes(PsychicHttpServer& server) {
     if (!authorized(request)) return response->send(403, "text/plain", "Forbidden");
     JsonDocument doc;
     doc["version"] = FIRMWARE_VERSION;
+    doc["otaSigned"] = true;
     doc["uptimeMs"] = millis();
     doc["resetReason"] = describeResetReason();
     JsonObject heap = doc["heap"].to<JsonObject>();

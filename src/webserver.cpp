@@ -154,15 +154,16 @@ static const char* tabListingUrl(Tab active) {
   }
 }
 
-String renderShell(Tab active, const String& banner, const String& contentHtml) {
+static void addNavLink(String& html, const char* href, const char* label, bool isActive) {
+  html += "<a href=\"" + String(href) + "\" class=\"" + String(isActive ? "active" : "") + "\">" + label + "</a>";
+}
+
+static String renderShellHead(bool darkMode) {
   String html;
-  // Theme is a saved setting (ui_settings.h), not the OS preference.
-  bool darkMode = loadUiSettings().darkMode;
   html += "<!DOCTYPE html><html";
   if (darkMode) html += " data-theme=\"dark\"";
   html += "><head><meta charset=\"utf-8\">";
   html += "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">";
-  bool autoRefresh = tabHasActiveBackgroundJob(active);
   // Inline SVG favicon; no extra route.
   html += "<link rel=\"icon\" type=\"image/svg+xml\" href=\"data:image/svg+xml;base64,"
           "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj48cmVjdCB3aWR0"
@@ -272,7 +273,11 @@ String renderShell(Tab active, const String& banner, const String& contentHtml) 
           "border-color:var(--secondary-hover-border);}";
   html += ".row-actions{display:flex;gap:6px;}";
   html += "</style></head><body>";
+  return html;
+}
 
+static String renderSidebar(Tab active, bool darkMode, const DashboardAuth& currentAuth) {
+  String html;
   // Submenus start open when one of their pages is active, so the current
   // page's entry isn't hidden. Inline onclick toggles only.
   bool systemOpen = (active == Tab::Firmware || active == Tab::Maintenance || active == Tab::Storage ||
@@ -282,65 +287,34 @@ String renderShell(Tab active, const String& banner, const String& contentHtml) 
                         active == Tab::HardwareCameras);
 
   html += "<nav class=\"sidebar\"><div class=\"brand\">Camera Monitor v" + String(FIRMWARE_VERSION) + "</div>";
-  html += "<a href=\"/network\" class=\"";
-  html += (active == Tab::Network) ? "active" : "";
-  html += "\">Network</a>";
-  html += "<a href=\"/cameras\" class=\"";
-  html += (active == Tab::Cameras) ? "active" : "";
-  html += "\">Cameras</a>";
-  html += "<a href=\"/users\" class=\"";
-  html += (active == Tab::Users) ? "active" : "";
-  html += "\">Telegram Users</a>";
-  html += "<a href=\"/activity\" class=\"";
-  html += (active == Tab::Activity) ? "active" : "";
-  html += "\">Activity</a>";
-  html += "<a href=\"/gallery\" class=\"";
-  html += (active == Tab::Gallery) ? "active" : "";
-  html += "\">Gallery</a>";
+  addNavLink(html, "/network", "Network", active == Tab::Network);
+  addNavLink(html, "/cameras", "Cameras", active == Tab::Cameras);
+  addNavLink(html, "/users", "Telegram Users", active == Tab::Users);
+  addNavLink(html, "/activity", "Activity", active == Tab::Activity);
+  addNavLink(html, "/gallery", "Gallery", active == Tab::Gallery);
   html += "<a href=\"#\" class=\"sidebar-parent\" onclick=\"var m=document.getElementById('system-submenu');"
           "m.style.display=(m.style.display==='block')?'none':'block';return false;\">System</a>";
   html += "<div id=\"system-submenu\" class=\"sidebar-submenu\" style=\"display:";
   html += systemOpen ? "block" : "none";
   html += ";\">";
-  html += "<a href=\"/firmware\" class=\"";
-  html += (active == Tab::Firmware) ? "active" : "";
-  html += "\">Firmware</a>";
-  html += "<a href=\"/maintenance\" class=\"";
-  html += (active == Tab::Maintenance) ? "active" : "";
-  html += "\">Maintenance</a>";
-  html += "<a href=\"/storage\" class=\"";
-  html += (active == Tab::Storage) ? "active" : "";
-  html += "\">Storage</a>";
-  html += "<a href=\"/capabilities\" class=\"";
-  html += (active == Tab::Capabilities) ? "active" : "";
-  html += "\">Capabilities</a>";
+  addNavLink(html, "/firmware", "Firmware", active == Tab::Firmware);
+  addNavLink(html, "/maintenance", "Maintenance", active == Tab::Maintenance);
+  addNavLink(html, "/storage", "Storage", active == Tab::Storage);
+  addNavLink(html, "/capabilities", "Capabilities", active == Tab::Capabilities);
   html += "</div>";
   html += "<a href=\"#\" class=\"sidebar-parent\" onclick=\"var m=document.getElementById('hardware-submenu');"
           "m.style.display=(m.style.display==='block')?'none':'block';return false;\">Hardware</a>";
   html += "<div id=\"hardware-submenu\" class=\"sidebar-submenu\" style=\"display:";
   html += hardwareOpen ? "block" : "none";
   html += ";\">";
-  html += "<a href=\"/hardware/internet\" class=\"";
-  html += (active == Tab::HardwareInternet) ? "active" : "";
-  html += "\">Internet</a>";
-  html += "<a href=\"/hardware/bridge\" class=\"";
-  html += (active == Tab::HardwareBridge) ? "active" : "";
-  html += "\">WiFi Bridge</a>";
-  html += "<a href=\"/hardware/power\" class=\"";
-  html += (active == Tab::HardwarePower) ? "active" : "";
-  html += "\">220V Power</a>";
-  html += "<a href=\"/hardware/rtc\" class=\"";
-  html += (active == Tab::HardwareRtc) ? "active" : "";
-  html += "\">External RTC</a>";
-  html += "<a href=\"/hardware/cameras\" class=\"";
-  html += (active == Tab::HardwareCameras) ? "active" : "";
-  html += "\">Cameras</a>";
+  addNavLink(html, "/hardware/internet", "Internet", active == Tab::HardwareInternet);
+  addNavLink(html, "/hardware/bridge", "WiFi Bridge", active == Tab::HardwareBridge);
+  addNavLink(html, "/hardware/power", "220V Power", active == Tab::HardwarePower);
+  addNavLink(html, "/hardware/rtc", "External RTC", active == Tab::HardwareRtc);
+  addNavLink(html, "/hardware/cameras", "Cameras", active == Tab::HardwareCameras);
   html += "</div>";
-  html += "<a href=\"/security\" class=\"";
-  html += (active == Tab::Security) ? "active" : "";
-  html += "\">Security</a>";
+  addNavLink(html, "/security", "Security", active == Tab::Security);
 
-  DashboardAuth currentAuth = loadDashboardAuth();
   html += "<div class=\"sidebar-footer\">";
   html += "<form method=\"POST\" action=\"/ui/theme/toggle\"><button type=\"submit\">";
   html += darkMode ? "&#9728; Light mode" : "&#127769; Dark mode";
@@ -354,6 +328,17 @@ String renderShell(Tab active, const String& banner, const String& contentHtml) 
   }
   html += "</div>";
   html += "</nav>";
+  return html;
+}
+
+String renderShell(Tab active, const String& banner, const String& contentHtml) {
+  String html;
+  // Theme is a saved setting (ui_settings.h), not the OS preference.
+  bool darkMode = loadUiSettings().darkMode;
+  bool autoRefresh = tabHasActiveBackgroundJob(active);
+  DashboardAuth currentAuth = loadDashboardAuth();
+  html += renderShellHead(darkMode);
+  html += renderSidebar(active, darkMode, currentAuth);
 
   html += "<main class=\"content\">";
   if (currentAuth.username.length() == 0 || currentAuth.password.length() == 0) {

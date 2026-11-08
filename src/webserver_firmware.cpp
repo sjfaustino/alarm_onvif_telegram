@@ -11,6 +11,16 @@
 #include <time.h>
 #include "webserver_internal.h"
 #include <Update.h>
+#include "firmware_signature.h"
+#include "signed_firmware.h"
+
+// Only for the build that first adds signing, so an unsigned upload can still
+// install it; see "Firmware signing" in the README.
+#ifdef FIRMWARE_SIGNATURE_AUDIT_ONLY
+static const bool kAllowUnsignedFirmware = true;
+#else
+static const bool kAllowUnsignedFirmware = false;
+#endif
 
 // "" for epoch 0 (no timestamp recorded).
 static String formatEpochLocal(time_t epoch) {
@@ -90,70 +100,125 @@ String renderFirmwarePanel() {
   html += "<form method=\"POST\" action=\"/firmware/update\" enctype=\"multipart/form-data\" "
           "onsubmit=\"return confirm('Flash this firmware and reboot the board? "
           "Do not power it off while this runs.');\">";
-  html += "<label>Firmware .bin (e.g. .pio/build/esp32s3/firmware.bin from `pio run -e esp32s3`)"
+  html += "<label>Signed firmware (<code>python scripts/board.py sign .pio/build/esp32s3/firmware.bin</code> "
+          "makes firmware.signed.bin)"
           "<input type=\"file\" name=\"firmware\" accept=\".bin\" required></label>";
   html += "<p><button type=\"submit\" class=\"danger\">Upload &amp; Flash</button></p>";
   html += "</form></fieldset>";
 
   html += "<p class=\"hint\">The board reboots automatically once the upload finishes and the new "
-          "image's checksum verifies. If verification fails, nothing is applied and the board keeps "
-          "running the current firmware.</p>";
+          "image's signature and checksum verify. If either fails, nothing is applied and the board "
+          "keeps running the current firmware.</p>";
   return html;
 }
 
 // ============================================================
 // Firmware upload (OTA). Update writes to the inactive app partition and only
-// marks it bootable once verified, so a failed upload changes nothing.
+// marks it bootable once the signature and checksum verify, so a failed upload
+// changes nothing. /firmware/verify runs the same checks and writes nothing.
 // ============================================================
 
 static bool   g_otaError = false;
 static String g_otaErrorMsg;
+static bool   g_otaUpdateStarted = false;
+static SignedFirmwareReader g_otaReader;
+
+static void failOta(const String& message) {
+  g_otaError = true;
+  g_otaErrorMsg = message;
+  Serial.printf("[Firmware] Upload refused: %s\n", message.c_str());
+}
+
+static void startOtaUpload(const String& filename) {
+  g_otaError = false;
+  g_otaErrorMsg = "";
+  g_otaUpdateStarted = false;
+  g_otaReader.reset(kAllowUnsignedFirmware);
+  firmwareHashStart();
+  Serial.printf("[Firmware] Upload started: %s\n", filename.c_str());
+  // An upload that dropped mid-way never gets its final chunk, leaving Update
+  // "running" and refusing every later attempt until reboot.
+  if (Update.isRunning()) {
+    Serial.println("[Firmware] A previous upload never finished (dropped connection?) - "
+                    "aborting it before starting this one.");
+    Update.abort();
+  }
+}
+
+static void writeOtaImage(const uint8_t* image, size_t imageLen) {
+  // Begun only here, so a file with no valid header never touches flash.
+  if (!g_otaUpdateStarted) {
+    if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
+      failOta(Update.errorString());
+      return;
+    }
+    g_otaUpdateStarted = true;
+  }
+  if (Update.write((uint8_t*)image, imageLen) != imageLen) failOta(Update.errorString());
+}
+
+static void finishOtaUpload(bool verifyOnly) {
+  if (!g_otaError && !g_otaReader.headerComplete() && !g_otaReader.isUnsigned()) {
+    failOta("the file ended before its signature header");
+  }
+  if (!g_otaError && g_otaReader.headerComplete() &&
+      !firmwareHashMatchesSignature(g_otaReader.signature(), g_otaReader.signatureLength())) {
+    failOta("the signature doesn't match this firmware");
+  }
+  if (g_otaError) {
+    if (g_otaUpdateStarted) Update.abort();
+  } else if (!verifyOnly && !Update.end(true)) {
+    failOta(Update.errorString());
+  }
+  Serial.printf("[Firmware] Upload finished (%s).\n", g_otaError ? "FAILED" : (verifyOnly ? "signature OK" : "OK - rebooting"));
+}
+
+static esp_err_t handleOtaChunk(bool verifyOnly, const String& filename, uint64_t index, uint8_t* data, size_t len,
+                                bool last) {
+  if (index == 0) startOtaUpload(filename);
+  if (!g_otaError && len > 0) {
+    const uint8_t* image;
+    size_t imageLen;
+    g_otaReader.feed(data, len, image, imageLen);
+    if (g_otaReader.rejected()) {
+      failOta("this file isn't signed firmware - sign it with scripts/board.py");
+    } else if (imageLen > 0) {
+      firmwareHashUpdate(image, imageLen);
+      if (!verifyOnly) writeOtaImage(image, imageLen);
+    }
+  }
+  if (last) finishOtaUpload(verifyOnly);
+  return ESP_OK; // keep accepting bytes even after a failure, so the upload doesn't just hang client-side
+}
+
+static esp_err_t sendOtaFailure(PsychicResponse* response) {
+  String banner = "Firmware update FAILED: " + htmlEscape(g_otaErrorMsg) + " - current firmware keeps running.";
+  return response->send(400, "text/html", renderShell(Tab::Firmware, banner, renderFirmwarePanel()).c_str());
+}
 
 void registerFirmwareRoutes(PsychicHttpServer& server) {
   server.on("/firmware", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
     return response->send(200, "text/html", renderShell(Tab::Firmware, "", renderFirmwarePanel()).c_str());
   });
 
+  static PsychicUploadHandler* verifyHandler = new PsychicUploadHandler();
+  verifyHandler->onUpload([](PsychicRequest* request, const String& filename, uint64_t index, uint8_t* data,
+                              size_t len, bool last) -> esp_err_t {
+    return handleOtaChunk(true, filename, index, data, len, last);
+  });
+  verifyHandler->onRequest([](PsychicRequest* request, PsychicResponse* response) -> esp_err_t {
+    if (g_otaError) return sendOtaFailure(response);
+    return response->send(200, "text/plain", g_otaReader.isUnsigned() ? "Unsigned - allowed by this build." : "Signature OK.");
+  });
+  server.on("/firmware/verify", HTTP_POST, verifyHandler);
+
   static PsychicUploadHandler* otaHandler = new PsychicUploadHandler();
   otaHandler->onUpload([](PsychicRequest* request, const String& filename, uint64_t index, uint8_t* data,
                            size_t len, bool last) -> esp_err_t {
-    if (index == 0) {
-      g_otaError = false;
-      g_otaErrorMsg = "";
-      Serial.printf("[Firmware] Upload started: %s\n", filename.c_str());
-      // An upload that dropped mid-way never gets its final chunk, leaving
-      // Update "running" and refusing every later attempt until reboot.
-      // index==0 is the start of a new upload, so clear any leftover state.
-      if (Update.isRunning()) {
-        Serial.println("[Firmware] A previous upload never finished (dropped connection?) - "
-                        "aborting it before starting this one.");
-        Update.abort();
-      }
-      if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
-        g_otaError = true;
-        g_otaErrorMsg = Update.errorString();
-        Serial.printf("[Firmware] Update.begin failed: %s\n", g_otaErrorMsg.c_str());
-      }
-    }
-    if (!g_otaError && len > 0 && Update.write(data, len) != len) {
-      g_otaError = true;
-      g_otaErrorMsg = Update.errorString();
-      Serial.printf("[Firmware] Update.write failed: %s\n", g_otaErrorMsg.c_str());
-    }
-    if (last) {
-      if (!g_otaError && !Update.end(true)) {
-        g_otaError = true;
-        g_otaErrorMsg = Update.errorString();
-      }
-      Serial.printf("[Firmware] Upload finished (%s).\n", g_otaError ? "FAILED" : "OK - rebooting");
-    }
-    return ESP_OK; // keep accepting bytes even after a failure, so the upload doesn't just hang client-side
+    return handleOtaChunk(false, filename, index, data, len, last);
   });
   otaHandler->onRequest([](PsychicRequest* request, PsychicResponse* response) -> esp_err_t {
-    if (g_otaError) {
-      String banner = "Firmware update FAILED: " + g_otaErrorMsg + " - current firmware keeps running.";
-      return response->send(200, "text/html", renderShell(Tab::Firmware, banner, renderFirmwarePanel()).c_str());
-    }
+    if (g_otaError) return sendOtaFailure(response);
     esp_err_t result = response->send(
         200, "text/html",
         renderShell(Tab::Firmware, "Firmware accepted - rebooting now, this page will stop responding.",

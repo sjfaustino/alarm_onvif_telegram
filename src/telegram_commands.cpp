@@ -346,200 +346,125 @@ static unsigned long g_pendingRestoreExpiresAtMs = 0;
 //
 // text is parsed once, by parseTelegramCommand. The switch has no default
 // (-Werror=switch), so a new command without a case won't build.
-static void handleTelegramCommand(const TelegramUser& sender, const String& text, const CameraConfig cameras[],
-                                   CameraState states[], size_t numCameras, long lastUpdateId) {
-  Serial.printf("[Telegram] Command from user \"%s\": \"%s\"\n", sender.name.c_str(), text.c_str());
-
-  ParsedTelegramCommand parsed = parseTelegramCommand(text);
-
-  bool authorized = false;
-  switch (parsed.requiredPermission) {
-    case TelegramCommandPermission::Command: authorized = sender.canCommand; break;
-    case TelegramCommandPermission::Snap:    authorized = sender.canSnap;    break;
-    case TelegramCommandPermission::Reset:   authorized = sender.canReset;   break;
-    case TelegramCommandPermission::Backup:  authorized = sender.canBackup;  break;
-    case TelegramCommandPermission::Restore: authorized = sender.canRestore; break;
-    case TelegramCommandPermission::Unknown: authorized = false;             break;
+static bool senderMayRun(const TelegramUser& sender, TelegramCommandPermission required) {
+  switch (required) {
+    case TelegramCommandPermission::Command: return sender.canCommand;
+    case TelegramCommandPermission::Snap:    return sender.canSnap;
+    case TelegramCommandPermission::Reset:   return sender.canReset;
+    case TelegramCommandPermission::Backup:  return sender.canBackup;
+    case TelegramCommandPermission::Restore: return sender.canRestore;
+    case TelegramCommandPermission::Unknown: return false;
   }
-  // Every rejected command is logged.
-  if (parsed.requiredPermission != TelegramCommandPermission::Unknown && !authorized) {
-    String name = commandDisplayName(parsed.command);
-    Serial.printf("[Telegram] User \"%s\" not authorized for %s.\n", sender.name.c_str(), name.c_str());
-    sendTelegramMessageTo(sender.chatId, trNotAuthorized(sender.language, name));
+  return false;
+}
+
+static void replyWithStatus(const TelegramUser& sender, const CameraConfig cameras[], CameraState states[], size_t numCameras) {
+  // isOffline is written by camera tasks; read the whole group under one
+  // lock.
+  String msg = trStatusHeader(sender.language) + "\n";
+  for (size_t i = 0; i < numCameras; i++) {
+    if (!cameras[i].enabled) continue;
+    bool alertsEnabled, offline;
+    unsigned long revertDueMs;
+    bool revertToOn;
+    size_t latencyCount = 0;
+    unsigned long latencySum = 0;
+    {
+      CameraStateLock lock(states[i]);
+      alertsEnabled = states[i].alertsEnabled;
+      offline = states[i].isOffline;
+      revertDueMs = states[i].scheduledRevertDueMs;
+      revertToOn = states[i].scheduledRevertToOn;
+      latencyCount = states[i].motionLatencyHistoryCount;
+      for (size_t j = 0; j < latencyCount; j++) latencySum += states[i].motionLatencyHistory[j];
+    }
+    String timerSuffix;
+    if (revertDueMs != 0 && (long)(millis() - revertDueMs) < 0) {
+      timerSuffix = trTimerSuffix(sender.language, !revertToOn, revertDueMs - millis());
+    }
+    long avgLatencyMs = latencyCount > 0 ? (long)(latencySum / latencyCount) : -1;
+    msg += trStatusCameraLine(sender.language, cameras[i].name, alertsEnabled, offline, timerSuffix,
+                               avgLatencyMs) + "\n";
+  }
+  Serial.printf("[Telegram] Replying to user \"%s\" with camera status.\n", sender.name.c_str());
+  sendTelegramMessageTo(sender.chatId, msg);
+}
+
+static void replyWithHealth(const TelegramUser& sender) {
+  Serial.printf("[Telegram] Replying to user \"%s\" with /health.\n", sender.name.c_str());
+
+  nvs_stats_t nvsStats;
+  bool haveNvsStats = (nvs_get_stats(NULL, &nvsStats) == ESP_OK) && nvsStats.total_entries > 0;
+
+  SdStatus sd = getSdStatus();
+  String sdDetail;
+  if (!sd.settingEnabled) {
+    sdDetail = trSdDisabledDetail(sender.language);
+  } else if (!sd.available) {
+    sdDetail = trSdNotDetectedDetail(sender.language);
+  } else {
+    sdDetail = trSdDetail(sender.language, sd.cardTypeName, (double)sd.usedBytes / (1024.0 * 1024.0),
+                           (double)sd.totalBytes / (1024.0 * 1024.0));
+  }
+
+  String msg = trHealthHeader(sender.language) + "\n";
+  msg += trUptimeLine(sender.language, millis()) + "\n";
+  msg += trFreeHeapLine(sender.language, ESP.getFreeHeap(), ESP.getMinFreeHeap()) + "\n";
+  msg += trFreePsramLine(sender.language, (uint32_t)heap_caps_get_free_size(MALLOC_CAP_SPIRAM)) + "\n";
+  if (haveNvsStats) {
+    unsigned pct = (unsigned)((uint64_t)nvsStats.used_entries * 100 / nvsStats.total_entries);
+    msg += trNvsUsageLine(sender.language, pct) + " (" + String((unsigned)nvsStats.used_entries) + " / " +
+           String((unsigned)nvsStats.total_entries) + " entries)\n";
+  }
+  msg += trWifiSignalLine(sender.language, WiFi.RSSI()) + "\n";
+  msg += trSdStorageLine(sender.language, sdDetail);
+
+  sendTelegramMessageTo(sender.chatId, msg);
+}
+
+static void replyWithLog(const TelegramUser& sender, const ParsedTelegramCommand& parsed) {
+  long count = parsed.logCountText.length() > 0 ? parsed.logCountText.toInt() : 10;
+  if (count < 1) count = 10; // garbage/zero/negative falls back to the default, not an error
+  if (count > (long)EVENT_LOG_CAPACITY) count = (long)EVENT_LOG_CAPACITY;
+
+  std::vector<EventLogEntry> events = recentEvents(); // oldest-first
+  String msg = trLogHeader(sender.language) + "\n";
+  if (events.empty()) {
+    msg += trLogEmpty(sender.language);
+  } else {
+    // Newest first. Entry text stays English; only the prefix is
+    // translated.
+    long shown = 0;
+    for (auto it = events.rbegin(); it != events.rend() && shown < count; ++it, ++shown) {
+      msg += trElapsedSince(sender.language, it->ms, millis()) + " - " + it->text + "\n";
+    }
+  }
+  Serial.printf("[Telegram] Replying to user \"%s\" with /log.\n", sender.name.c_str());
+  sendTelegramMessageTo(sender.chatId, msg);
+}
+
+static void handleLangCommand(const TelegramUser& sender, const ParsedTelegramCommand& parsed) {
+  String argLower = parsed.langArgText;
+  argLower.toLowerCase();
+  if (argLower.length() == 0) {
+    std::vector<std::pair<String, String>> buttons = {
+      {"English", "lang|en"},
+      {"Portugu\xC3\xAAs", "lang|pt"},
+    };
+    sendTelegramKeyboardTo(sender.chatId, trLanguagePickerPrompt(sender.language), buttons);
     return;
   }
-
-  if (sender.maxCommandsPerMinute > 0 && !allowTelegramCommand(sender.chatId, sender.maxCommandsPerMinute)) {
-    Serial.printf("[Telegram] User \"%s\" rate-limited (max %u command(s)/minute).\n", sender.name.c_str(),
-                  (unsigned)sender.maxCommandsPerMinute);
-    sendTelegramMessageTo(sender.chatId, trRateLimited(sender.language));
-    return;
+  if (argLower == "en") {
+    applyLanguageChange(sender, TelegramLang::English);
+  } else if (argLower == "pt") {
+    applyLanguageChange(sender, TelegramLang::Portuguese);
+  } else {
+    sendTelegramMessageTo(sender.chatId, trUnknownLanguageArg(sender.language, parsed.langArgText));
   }
+}
 
-  switch (parsed.command) {
-    case TelegramCommand::Status: {
-      // isOffline is written by camera tasks; read the whole group under one
-      // lock.
-      String msg = trStatusHeader(sender.language) + "\n";
-      for (size_t i = 0; i < numCameras; i++) {
-        if (!cameras[i].enabled) continue;
-        bool alertsEnabled, offline;
-        unsigned long revertDueMs;
-        bool revertToOn;
-        size_t latencyCount = 0;
-        unsigned long latencySum = 0;
-        {
-          CameraStateLock lock(states[i]);
-          alertsEnabled = states[i].alertsEnabled;
-          offline = states[i].isOffline;
-          revertDueMs = states[i].scheduledRevertDueMs;
-          revertToOn = states[i].scheduledRevertToOn;
-          latencyCount = states[i].motionLatencyHistoryCount;
-          for (size_t j = 0; j < latencyCount; j++) latencySum += states[i].motionLatencyHistory[j];
-        }
-        String timerSuffix;
-        if (revertDueMs != 0 && (long)(millis() - revertDueMs) < 0) {
-          timerSuffix = trTimerSuffix(sender.language, !revertToOn, revertDueMs - millis());
-        }
-        long avgLatencyMs = latencyCount > 0 ? (long)(latencySum / latencyCount) : -1;
-        msg += trStatusCameraLine(sender.language, cameras[i].name, alertsEnabled, offline, timerSuffix,
-                                   avgLatencyMs) + "\n";
-      }
-      Serial.printf("[Telegram] Replying to user \"%s\" with camera status.\n", sender.name.c_str());
-      sendTelegramMessageTo(sender.chatId, msg);
-      return;
-    }
-
-    case TelegramCommand::Uptime:
-      Serial.printf("[Telegram] Replying to user \"%s\" with uptime.\n", sender.name.c_str());
-      sendTelegramMessageTo(sender.chatId, trUptimeLine(sender.language, millis()));
-      return;
-
-    case TelegramCommand::Reset:
-      Serial.printf("[Telegram] Reboot requested by user \"%s\" via /reset.\n", sender.name.c_str());
-      // Persist before restarting (see the section comment above).
-      saveLastUpdateId(lastUpdateId);
-      // Reply first - ESP.restart() never returns.
-      sendTelegramMessageTo(sender.chatId, trRebootingNow(sender.language));
-      delay(500); // let the TLS send above finish flushing before the reboot tears down WiFi
-      // Don't restart mid SD write: FAT isn't journaled.
-      waitForSdIdle();
-      ESP.restart();
-      return;
-
-    case TelegramCommand::Backup: {
-      Serial.printf("[Telegram] Config backup requested by user \"%s\" via /backup.\n", sender.name.c_str());
-      String exportText = buildConfigExport();
-      if (!sendTelegramDocumentBuffered(exportText, "camera-monitor-config.txt",
-                                         trBackupCaption(sender.language), sender.chatId)) {
-        Serial.printf("[Telegram] Backup send to user \"%s\" failed.\n", sender.name.c_str());
-        sendTelegramMessageTo(sender.chatId, trBackupFailed(sender.language));
-      }
-      return;
-    }
-
-    case TelegramCommand::Restore:
-      Serial.printf("[Telegram] Restore armed by user \"%s\" via /restore.\n", sender.name.c_str());
-      g_pendingRestoreChatId = sender.chatId;
-      g_pendingRestoreExpiresAtMs = millis() + RESTORE_PENDING_WINDOW_MS;
-      sendTelegramMessageTo(sender.chatId, trRestorePrompt(sender.language));
-      return;
-
-    case TelegramCommand::On:
-    case TelegramCommand::Off:
-    case TelegramCommand::Snap:
-      break; // handled below - shares the camera-name-matching logic
-
-    case TelegramCommand::Help: {
-      Serial.printf("[Telegram] Replying to user \"%s\" with /help.\n", sender.name.c_str());
-      String msg = trHelpText(sender.language, (uint16_t)EVENT_LOG_CAPACITY, MAX_DURATION_MINUTES,
-                               sender.canCommand, sender.canSnap, sender.canReset, sender.canBackup,
-                               sender.canRestore);
-      sendTelegramMessageTo(sender.chatId, msg);
-      return;
-    }
-
-    case TelegramCommand::Health: {
-      Serial.printf("[Telegram] Replying to user \"%s\" with /health.\n", sender.name.c_str());
-
-      nvs_stats_t nvsStats;
-      bool haveNvsStats = (nvs_get_stats(NULL, &nvsStats) == ESP_OK) && nvsStats.total_entries > 0;
-
-      SdStatus sd = getSdStatus();
-      String sdDetail;
-      if (!sd.settingEnabled) {
-        sdDetail = trSdDisabledDetail(sender.language);
-      } else if (!sd.available) {
-        sdDetail = trSdNotDetectedDetail(sender.language);
-      } else {
-        sdDetail = trSdDetail(sender.language, sd.cardTypeName, (double)sd.usedBytes / (1024.0 * 1024.0),
-                               (double)sd.totalBytes / (1024.0 * 1024.0));
-      }
-
-      String msg = trHealthHeader(sender.language) + "\n";
-      msg += trUptimeLine(sender.language, millis()) + "\n";
-      msg += trFreeHeapLine(sender.language, ESP.getFreeHeap(), ESP.getMinFreeHeap()) + "\n";
-      msg += trFreePsramLine(sender.language, (uint32_t)heap_caps_get_free_size(MALLOC_CAP_SPIRAM)) + "\n";
-      if (haveNvsStats) {
-        unsigned pct = (unsigned)((uint64_t)nvsStats.used_entries * 100 / nvsStats.total_entries);
-        msg += trNvsUsageLine(sender.language, pct) + " (" + String((unsigned)nvsStats.used_entries) + " / " +
-               String((unsigned)nvsStats.total_entries) + " entries)\n";
-      }
-      msg += trWifiSignalLine(sender.language, WiFi.RSSI()) + "\n";
-      msg += trSdStorageLine(sender.language, sdDetail);
-
-      sendTelegramMessageTo(sender.chatId, msg);
-      return;
-    }
-
-    case TelegramCommand::Log: {
-      long count = parsed.logCountText.length() > 0 ? parsed.logCountText.toInt() : 10;
-      if (count < 1) count = 10; // garbage/zero/negative falls back to the default, not an error
-      if (count > (long)EVENT_LOG_CAPACITY) count = (long)EVENT_LOG_CAPACITY;
-
-      std::vector<EventLogEntry> events = recentEvents(); // oldest-first
-      String msg = trLogHeader(sender.language) + "\n";
-      if (events.empty()) {
-        msg += trLogEmpty(sender.language);
-      } else {
-        // Newest first. Entry text stays English; only the prefix is
-        // translated.
-        long shown = 0;
-        for (auto it = events.rbegin(); it != events.rend() && shown < count; ++it, ++shown) {
-          msg += trElapsedSince(sender.language, it->ms, millis()) + " - " + it->text + "\n";
-        }
-      }
-      Serial.printf("[Telegram] Replying to user \"%s\" with /log.\n", sender.name.c_str());
-      sendTelegramMessageTo(sender.chatId, msg);
-      return;
-    }
-
-    case TelegramCommand::Lang: {
-      String argLower = parsed.langArgText;
-      argLower.toLowerCase();
-      if (argLower.length() == 0) {
-        std::vector<std::pair<String, String>> buttons = {
-          {"English", "lang|en"},
-          {"Portugu\xC3\xAAs", "lang|pt"},
-        };
-        sendTelegramKeyboardTo(sender.chatId, trLanguagePickerPrompt(sender.language), buttons);
-        return;
-      }
-      if (argLower == "en") {
-        applyLanguageChange(sender, TelegramLang::English);
-      } else if (argLower == "pt") {
-        applyLanguageChange(sender, TelegramLang::Portuguese);
-      } else {
-        sendTelegramMessageTo(sender.chatId, trUnknownLanguageArg(sender.language, parsed.langArgText));
-      }
-      return;
-    }
-
-    case TelegramCommand::Unknown:
-      Serial.println("[Telegram] Unrecognized command - ignored.");
-      return;
-  }
-
+// /on, /off and /snap, once the command is known to name a camera (or none).
+static void handleCameraCommand(const TelegramUser& sender, const ParsedTelegramCommand& parsed, const CameraConfig cameras[], CameraState states[], size_t numCameras) {
   // Bare command: show the picker (an empty prefix would match every camera).
   if (parsed.cameraName.length() == 0) {
     sendCameraPickerKeyboard(sender, parsed.command, cameras, numCameras);
@@ -594,6 +519,102 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
   }
 
   applyOnOffToCamera(cameras[i], states[i], i, turnOn, timer, sender.name, sender.chatId, sender.language);
+}
+
+static void handleTelegramCommand(const TelegramUser& sender, const String& text, const CameraConfig cameras[],
+                                   CameraState states[], size_t numCameras, long lastUpdateId) {
+  Serial.printf("[Telegram] Command from user \"%s\": \"%s\"\n", sender.name.c_str(), text.c_str());
+
+  ParsedTelegramCommand parsed = parseTelegramCommand(text);
+
+  bool authorized = senderMayRun(sender, parsed.requiredPermission);
+  // Every rejected command is logged.
+  if (parsed.requiredPermission != TelegramCommandPermission::Unknown && !authorized) {
+    String name = commandDisplayName(parsed.command);
+    Serial.printf("[Telegram] User \"%s\" not authorized for %s.\n", sender.name.c_str(), name.c_str());
+    sendTelegramMessageTo(sender.chatId, trNotAuthorized(sender.language, name));
+    return;
+  }
+
+  if (sender.maxCommandsPerMinute > 0 && !allowTelegramCommand(sender.chatId, sender.maxCommandsPerMinute)) {
+    Serial.printf("[Telegram] User \"%s\" rate-limited (max %u command(s)/minute).\n", sender.name.c_str(),
+                  (unsigned)sender.maxCommandsPerMinute);
+    sendTelegramMessageTo(sender.chatId, trRateLimited(sender.language));
+    return;
+  }
+
+  switch (parsed.command) {
+    case TelegramCommand::Status:
+      replyWithStatus(sender, cameras, states, numCameras);
+      return;
+
+    case TelegramCommand::Uptime:
+      Serial.printf("[Telegram] Replying to user \"%s\" with uptime.\n", sender.name.c_str());
+      sendTelegramMessageTo(sender.chatId, trUptimeLine(sender.language, millis()));
+      return;
+
+    case TelegramCommand::Reset:
+      Serial.printf("[Telegram] Reboot requested by user \"%s\" via /reset.\n", sender.name.c_str());
+      // Persist before restarting (see the section comment above).
+      saveLastUpdateId(lastUpdateId);
+      // Reply first - ESP.restart() never returns.
+      sendTelegramMessageTo(sender.chatId, trRebootingNow(sender.language));
+      delay(500); // let the TLS send above finish flushing before the reboot tears down WiFi
+      // Don't restart mid SD write: FAT isn't journaled.
+      waitForSdIdle();
+      ESP.restart();
+      return;
+
+    case TelegramCommand::Backup: {
+      Serial.printf("[Telegram] Config backup requested by user \"%s\" via /backup.\n", sender.name.c_str());
+      String exportText = buildConfigExport();
+      if (!sendTelegramDocumentBuffered(exportText, "camera-monitor-config.txt",
+                                         trBackupCaption(sender.language), sender.chatId)) {
+        Serial.printf("[Telegram] Backup send to user \"%s\" failed.\n", sender.name.c_str());
+        sendTelegramMessageTo(sender.chatId, trBackupFailed(sender.language));
+      }
+      return;
+    }
+
+    case TelegramCommand::Restore:
+      Serial.printf("[Telegram] Restore armed by user \"%s\" via /restore.\n", sender.name.c_str());
+      g_pendingRestoreChatId = sender.chatId;
+      g_pendingRestoreExpiresAtMs = millis() + RESTORE_PENDING_WINDOW_MS;
+      sendTelegramMessageTo(sender.chatId, trRestorePrompt(sender.language));
+      return;
+
+    case TelegramCommand::On:
+    case TelegramCommand::Off:
+    case TelegramCommand::Snap:
+      break; // handled below - shares the camera-name-matching logic
+
+    case TelegramCommand::Help: {
+      Serial.printf("[Telegram] Replying to user \"%s\" with /help.\n", sender.name.c_str());
+      String msg = trHelpText(sender.language, (uint16_t)EVENT_LOG_CAPACITY, MAX_DURATION_MINUTES,
+                               sender.canCommand, sender.canSnap, sender.canReset, sender.canBackup,
+                               sender.canRestore);
+      sendTelegramMessageTo(sender.chatId, msg);
+      return;
+    }
+
+    case TelegramCommand::Health:
+      replyWithHealth(sender);
+      return;
+
+    case TelegramCommand::Log:
+      replyWithLog(sender, parsed);
+      return;
+
+    case TelegramCommand::Lang:
+      handleLangCommand(sender, parsed);
+      return;
+
+    case TelegramCommand::Unknown:
+      Serial.println("[Telegram] Unrecognized command - ignored.");
+      return;
+  }
+
+  handleCameraCommand(sender, parsed, cameras, states, numCameras);
 }
 
 // Button tap: callbackData is "<verb>|<name or all>". Re-checks the verb's own

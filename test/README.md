@@ -24,6 +24,7 @@ this way:
 | Module (`lib/`)             | Extracted from                         | Covers |
 |---|---|---|
 | `xml_helpers`                | `onvif_soap.cpp`                       | ONVIF response substring parsing (`findElementByLocalName`, `findAttributeValue`/`findAttributeInTag`, `responseHasFault`) and `xmlEscape` - hardened against inconsistent attribute quoting and a closing tag that drops its namespace prefix |
+| `signed_firmware`            | `webserver_firmware.cpp`               | Separating the signature header from the image across any upload chunk size, and refusing unsigned or damaged files. The ECDSA check itself needs mbedTLS and is proven on the board with `board.py verify` |
 | `record_table`               | the three serializers                  | One table of fields per stored struct: each row's version, reading and writing. Exercised through `camera_serialize` and `telegram_user_serialize` |
 | `camera_serialize`           | `camera_store.cpp`                     | `CameraConfig` <-> stored record, one table for every schema version (see below) |
 | `camera_file_store`          | `camera_store.cpp`, `webserver_cameras.cpp` | The camera list's file format; save and recovery with each filesystem step failing (`CameraFileOps` is faked); when loading may rewrite the list; add/rename/delete rules; keeping a blank password; what a save means for the running task |

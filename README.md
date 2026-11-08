@@ -232,8 +232,9 @@ Arduino-ESP32/IDF releases.
   the Internet Watchdog, Camera Bridge Watchdog, and 220V Power Monitor each get
   their own page under a separate "Hardware" submenu, one per relay/sensor
   feature rather than stacked together on one page.
-  Firmware updates over the dashboard: upload a `.bin` built with
-  `pio run -e esp32s3` on the Firmware page instead of reflashing over USB. Uses
+  Firmware updates over the dashboard: upload a signed image (see
+  [Firmware signing](#firmware-signing)) on the Firmware page instead of
+  reflashing over USB. Uses
   the board's dual OTA app partitions - a failed or aborted upload leaves the
   running firmware untouched, and the board only reboots into the new image
   once it's fully received and its checksum verifies. That only catches a
@@ -427,6 +428,29 @@ itself over ONVIF:
 
 Each camera's task reads this when the camera first answers and again after
 an edit; a button reads it again from every camera.
+
+## Firmware signing
+
+OTA uploads must be signed. `scripts/board.py` signs with an ECDSA P-256 private
+key kept outside the repository, by default in
+`~/.alarm_onvif_telegram/firmware_signing_key.pem`; the matching public key is
+compiled in from `include/firmware_signing_key.h`. The board hashes the image as
+it arrives and refuses to boot it unless the signature matches. A file with no
+valid signature header is refused before anything is written to flash.
+
+**Back the private key up.** Without it, the only way to update is USB.
+
+If you build this project for your own board, run `python scripts/board.py keygen`
+first (after deleting the committed public key header), so the firmware trusts your key.
+
+This protects uploads over the network. It isn't secure boot: someone with
+physical access can still flash anything over USB, and an older signed build can
+be reinstalled.
+
+A board running firmware from before signing needs one transitional build, which
+still accepts unsigned images but refuses a bad signature:
+`PLATFORMIO_BUILD_FLAGS=-DFIRMWARE_SIGNATURE_AUDIT_ONLY pio run -e esp32s3`.
+Prove the check with `board.py verify`, then flash a normal build.
 
 ## Setup
 
@@ -665,8 +689,9 @@ The firmware version comes from git tags (`git describe`), so releasing is:
    and commit.
 2. Tag the commit: `git tag -a v1.1.0 -m "v1.1.0"` and push the tag
    (`git push origin v1.1.0`).
-3. Build (`pio run -e esp32s3`) or take CI's `firmware-esp32s3` artifact, and
-   upload `firmware.bin` from the dashboard's Firmware page.
+3. Build (`pio run -e esp32s3`) or take CI's `firmware-esp32s3` artifact, sign
+   it (`python scripts/board.py sign firmware.bin`), and upload
+   `firmware.signed.bin` from the dashboard's Firmware page.
 
 The board then reports exactly `1.1.0`. Builds between tags report e.g.
 `1.1.0-3-gabc1234`, and `-dirty` means uncommitted changes were built.
@@ -686,7 +711,10 @@ have their own token rather than relying on the optional dashboard login.
 | `status` | Version, reset reason, heap, failed allocations, per-task stack use, camera state, crash summary, and the saved heap-low record |
 | `log [--follow]` | The last 64 KB of `Serial` output, each line stamped with uptime |
 | `coredump [FILE]` | Downloads the stored crash dump |
-| `flash FILE --yes` | OTA upload, which **reboots the board** |
+| `flash FILE --yes` | Signs and uploads over OTA, which **reboots the board** |
+| `sign FILE` | Writes `firmware.signed.bin` next to `FILE` |
+| `verify FILE` | Has the board check a signed file; changes nothing |
+| `keygen` | Creates the signing key, once |
 
 `flash` keeps a copy of the build's ELF in `.pio/flashed/`, since a crash dump can
 only be decoded with the ELF of the build that crashed.
