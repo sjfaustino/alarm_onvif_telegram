@@ -68,6 +68,40 @@ String extractHost(const String& url) {
   return url.substring(start, end);
 }
 
+String redactUrlSecrets(const String& url) {
+  String out = url;
+  int schemeEnd = out.indexOf("://");
+  int start = schemeEnd >= 0 ? schemeEnd + 3 : 0;
+  int pathStart = out.indexOf('/', start);
+  int at = out.indexOf('@', start);
+  if (at >= 0 && (pathStart < 0 || at < pathStart)) {
+    int colon = out.indexOf(':', start);
+    if (colon >= 0 && colon < at) out = out.substring(0, colon + 1) + "***" + out.substring(at);
+  }
+  int query = out.indexOf('?');
+  if (query < 0) return out;
+  static const char* kKeys[] = {"password", "pwd", "pass", "passwd"};
+  int p = query + 1;
+  while (p < (int)out.length()) {
+    int amp = out.indexOf('&', p);
+    int end = amp < 0 ? out.length() : amp;
+    int eq = out.indexOf('=', p);
+    if (eq >= 0 && eq < end) {
+      String key = out.substring(p, eq);
+      key.toLowerCase();
+      for (const char* k : kKeys) {
+        if (key == k) {
+          out = out.substring(0, eq + 1) + "***" + out.substring(end);
+          end = eq + 4;
+          break;
+        }
+      }
+    }
+    p = end + 1;
+  }
+  return out;
+}
+
 String jsSingleQuoteEscape(const String& s) {
   String out = s;
   out.replace("\\", "\\\\"); // must run first - otherwise this would double-escape the backslashes just inserted below

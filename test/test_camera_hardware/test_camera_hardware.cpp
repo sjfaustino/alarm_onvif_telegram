@@ -106,6 +106,10 @@ void test_dhcp_address_and_link_speed(void) {
   TEST_ASSERT_EQUAL_STRING("192.168.8.50/24", info.ipv4.c_str());
   TEST_ASSERT_EQUAL_STRING("DHCP", info.ipMode.c_str());
 
+  CameraHardwareInfo dashed;
+  parseNetworkInterfaces("<tds:NetworkInterfaces><tt:HwAddress>58-04-4f-00-00-04</tt:HwAddress></tds:NetworkInterfaces>", dashed);
+  TEST_ASSERT_EQUAL_STRING("58:04:4F:00:00:04", dashed.macAddress.c_str());
+
   CameraHardwareInfo reolink;
   parseNetworkInterfaces(kReolinkNetwork, reolink);
   TEST_ASSERT_EQUAL_STRING("10 Mbit/s, full duplex", reolink.link.c_str());

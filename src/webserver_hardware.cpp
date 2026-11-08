@@ -278,8 +278,8 @@ String renderCameraHardwarePage(const std::vector<CameraConfig>* liveCameras, st
     String streams;
     for (const String& s : hw.videoStreams) streams += (streams.length() ? "<br>" : "") + htmlEscape(s);
     addRow(html, "Video streams", streams);
-    addRow(html, "Snapshot URL", htmlEscape(snapshotUri));
-    addRow(html, "Live stream URL", htmlEscape(streamUri));
+    addRow(html, "Snapshot URL", htmlEscape(redactUrlSecrets(snapshotUri)));
+    addRow(html, "Live stream URL", htmlEscape(redactUrlSecrets(streamUri)));
     addRow(html, "Event types", htmlEscape(topics));
     addRow(html, "Read", formatElapsedSince(readMs, nowMs));
     html += "</table></fieldset>";

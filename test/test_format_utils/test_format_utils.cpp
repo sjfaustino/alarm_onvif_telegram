@@ -124,8 +124,25 @@ void test_jsSingleQuoteEscape_escapes_newlines(void) {
   TEST_ASSERT_TRUE(escaped.indexOf("\\n") >= 0);
 }
 
+void test_redactUrlSecrets_masks_query_passwords(void) {
+  TEST_ASSERT_EQUAL_STRING("http://10.0.0.5/cgi-bin/api.cgi?cmd=Snap&user=admin&password=***&width=800",
+                           redactUrlSecrets("http://10.0.0.5/cgi-bin/api.cgi?cmd=Snap&user=admin&password=s3cret+1&width=800").c_str());
+  TEST_ASSERT_EQUAL_STRING("http://h/snap.jpg?PWD=***", redactUrlSecrets("http://h/snap.jpg?PWD=x").c_str());
+  TEST_ASSERT_EQUAL_STRING("http://h/a?pass=***&passwd=***", redactUrlSecrets("http://h/a?pass=a&passwd=bb").c_str());
+}
+
+void test_redactUrlSecrets_masks_userinfo_and_leaves_plain_urls(void) {
+  TEST_ASSERT_EQUAL_STRING("rtsp://admin:***@10.0.0.5:554/stream1",
+                           redactUrlSecrets("rtsp://admin:secret@10.0.0.5:554/stream1").c_str());
+  TEST_ASSERT_EQUAL_STRING("http://10.0.0.5/cgi-bin/snapshot.cgi?channel=1&passive=1",
+                           redactUrlSecrets("http://10.0.0.5/cgi-bin/snapshot.cgi?channel=1&passive=1").c_str());
+  TEST_ASSERT_EQUAL_STRING("", redactUrlSecrets("").c_str());
+}
+
 int main(int argc, char** argv) {
   UNITY_BEGIN();
+  RUN_TEST(test_redactUrlSecrets_masks_query_passwords);
+  RUN_TEST(test_redactUrlSecrets_masks_userinfo_and_leaves_plain_urls);
   RUN_TEST(test_formatUptime_omits_days_when_zero);
   RUN_TEST(test_formatUptime_includes_days_when_nonzero);
   RUN_TEST(test_formatUptime_zero);

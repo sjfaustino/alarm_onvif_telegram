@@ -21,6 +21,11 @@ String urlEncode(const String& s);
 // "host[:port]" from a URL, for display.
 String extractHost(const String& url);
 
+// url with any password replaced by "***": the user:password@ part, and the
+// values of password/pwd/pass/passwd query parameters (a Reolink's snapshot URI
+// carries its login that way). For showing URLs on the dashboard.
+String redactUrlSecrets(const String& url);
+
 // Escapes for a single-quoted JS string inside <script> text. Not htmlEscape:
 // entities aren't decoded inside <script>, so &#39; would appear literally.
 String jsSingleQuoteEscape(const String& s);

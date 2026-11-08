@@ -113,6 +113,7 @@ void parseNetworkInterfaces(const String& xml, CameraHardwareInfo& info) {
   const String& iface = ifaces[0];
   info.macAddress = first(iface, "HwAddress");
   info.macAddress.toUpperCase();
+  info.macAddress.replace("-", ":"); // a Tapo writes 58-04-4F-...
 
   String ipv4 = first(iface, "IPv4");
   String config = first(ipv4, "Config");
