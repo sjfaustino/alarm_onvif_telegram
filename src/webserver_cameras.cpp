@@ -28,20 +28,6 @@ static int findLiveCameraIndex(std::vector<CameraConfig>* liveCameras, const Str
   return -1;
 }
 
-// Embeds URL-encoded user:pass as userinfo so VLC/an NVR/the browser can use
-// the link directly (the same credentials already in NVS). Leaves a URI that
-// already has userinfo, or no username, unchanged.
-static String buildUriWithCredentials(const String& rawUri, const String& user, const String& pass) {
-  int schemeEnd = rawUri.indexOf("://");
-  if (schemeEnd < 0 || user.length() == 0) return rawUri;
-  int afterScheme = schemeEnd + 3;
-  int nextSlash = rawUri.indexOf('/', afterScheme);
-  String authority = (nextSlash >= 0) ? rawUri.substring(afterScheme, nextSlash) : rawUri.substring(afterScheme);
-  if (authority.indexOf('@') >= 0) return rawUri; // already has credentials embedded
-  return rawUri.substring(0, afterScheme) + urlEncode(user) + ":" + urlEncode(pass) + "@" +
-         rawUri.substring(afterScheme);
-}
-
 // One-line health summary above the table, using the same classification as
 // the rows. Nothing for zero cameras.
 static String renderCameraHealthSummary(const std::vector<CameraConfig>& cams,
@@ -268,12 +254,12 @@ static String renderRowActions(const CameraConfig& c, size_t rowIdx, bool isLive
   html += "<a class=\"icon-btn secondary\" href=\"http://" + htmlEscape(hostOnly) +
           "/\" target=\"_blank\" title=\"Open camera's web UI\" aria-label=\"Open camera's web UI\">"
           "&#8599;</a>";
-  // RTSP link with embedded credentials, ready for VLC. Escaped: the URI
-  // comes from the camera's own (untrusted) response.
+  // No login in the link: anyone who can read the page would get the camera's
+  // password. VLC asks for it. Escaped: the URI comes from the camera's own
+  // (untrusted) response, and a camera can put a login in it too.
   if (rtspUri.length() > 0) {
-    String rtspWithCreds = buildUriWithCredentials(rtspUri, c.user, c.pass);
-    html += " <a class=\"icon-btn secondary\" href=\"" + htmlEscape(rtspWithCreds) +
-            "\" title=\"Open live RTSP stream (e.g. in VLC)\" aria-label=\"Open live RTSP stream\">"
+    html += " <a class=\"icon-btn secondary\" href=\"" + htmlEscape(redactUrlSecrets(rtspUri)) +
+            "\" title=\"Open live RTSP stream (e.g. in VLC, which asks for the camera login)\" aria-label=\"Open live RTSP stream\">"
             "&#9654;</a>";
   }
   // Inline MJPEG preview (rare: needs a JPEG profile with HTTP transport). A
@@ -281,13 +267,12 @@ static String renderRowActions(const CameraConfig& c, size_t rowIdx, bool isLive
   // the camera, which can crowd out our own polling on 1-2-connection
   // cameras.
   if (mjpegUri.length() > 0) {
-    String mjpegWithCreds = buildUriWithCredentials(mjpegUri, c.user, c.pass);
     String liveRowId = "liverow" + String((unsigned)rowIdx);
     String liveImgId = "liveimg" + String((unsigned)rowIdx);
     html += " <button type=\"button\" class=\"icon-btn secondary\" title=\"Toggle live preview - "
             "holds an extra connection open on the camera while showing\" aria-label=\"Toggle live "
             "preview\" onclick=\"toggleLivePreview(this,'" + liveRowId + "','" + liveImgId + "','" +
-            htmlEscape(mjpegWithCreds) + "')\">\xE2\x96\xB6 Live</button>";
+            htmlEscape(redactUrlSecrets(mjpegUri)) + "')\">\xE2\x96\xB6 Live</button>";
     liveRowHtml = "<tr id=\"" + liveRowId + "\" style=\"display:none;\"><td colspan=\"8\">"
                   "<img id=\"" + liveImgId + "\" style=\"max-width:100%;max-height:400px;\" "
                   "alt=\"live preview\"></td></tr>";

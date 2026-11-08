@@ -8,6 +8,12 @@ config exports - see [Releases](README.md#releases) for how to cut one.
 
 ## [Unreleased]
 
+### Security
+- The Cameras page no longer puts camera passwords in its Play links; VLC asks
+  for the login instead.
+- Camera-reported URLs are masked in the log.
+- State-changing requests from another site are refused (CSRF).
+
 **Upgrading:** OTA uploads must now be signed; see "Firmware signing" in the README.
 
 ### Changed

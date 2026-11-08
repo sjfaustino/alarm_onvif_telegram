@@ -25,6 +25,12 @@ String extractHost(const String& url);
 // carries its login that way). For showing URLs on the dashboard.
 String redactUrlSecrets(const String& url);
 
+// Whether a state-changing request comes from a page served by this device.
+// `host` is the Host header. A browser sends Origin on a cross-site POST, and
+// Referer as a fallback; a request with neither isn't from a web page (curl,
+// scripts), so a malicious site can't reach this path with a logged-in browser.
+bool isSameOriginRequest(const String& origin, const String& referer, const String& host);
+
 // Escapes for a single-quoted JS string inside <script> text. Not htmlEscape:
 // entities aren't decoded inside <script>, so &#39; would appear literally.
 String jsSingleQuoteEscape(const String& s);
