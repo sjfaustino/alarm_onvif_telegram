@@ -8,6 +8,10 @@ config exports - see [Releases](README.md#releases) for how to cut one.
 
 ## [Unreleased]
 
+### Changed
+- The External RTC settings moved from the Network page to Hardware > External
+  RTC.
+
 ### Removed
 - The one-time recovery that re-added cameras from `secrets.h` at boot. It only
   ever applied to boards hit by the old chunked-storage bug.

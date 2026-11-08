@@ -13,6 +13,8 @@ String renderBridgeWatchdogPage(const std::vector<CameraConfig>* liveCameras);
 
 String renderPowerMonitorPage();
 
+String renderExternalRtcPage();
+
 struct CameraState;
 
 // What each camera reports about itself over ONVIF (camera_hardware.h),

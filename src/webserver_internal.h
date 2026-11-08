@@ -9,7 +9,7 @@
 #include "camera_store.h"
 
 enum class Tab { None, Network, Cameras, Users, Activity, Gallery, Firmware, Maintenance, Storage, Security,
-                  HardwareInternet, HardwareBridge, HardwarePower, HardwareCameras, Capabilities };
+                  HardwareInternet, HardwareBridge, HardwarePower, HardwareRtc, HardwareCameras, Capabilities };
 
 // Set by startWebServer().
 extern std::vector<CameraConfig>* g_liveCameras;

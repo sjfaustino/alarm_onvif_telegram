@@ -8,13 +8,14 @@
 #include "webserver_internal.h"
 #include "hardware_form.h"
 #include "request_params.h"
+#include "rtc_store.h"
+#include <time.h>
 #include "camera.h" // CameraState, CameraStateLock
 #include "background_job.h"
 
 // Internet-connectivity watchdog (relay-based router power-cycle) -
 // optional, off by default, same "enable checkbox needs a reboot, status
-// reflects what actually happened at boot" shape as the Network page's
-// External RTC section.
+// reflects what actually happened at boot" shape as the External RTC page.
 String renderInternetWatchdogPage() {
   NetWatchdogStatus status = getNetWatchdogStatus();
   NetWatchdogSettings settings = loadNetWatchdogSettings();
@@ -362,7 +363,66 @@ String renderCameraHardwarePage(const std::vector<CameraConfig>* liveCameras, st
   return html;
 }
 
+// Optional DS3231 RTC; enabling needs a reboot and the status shows what
+// happened at boot.
+String renderExternalRtcPage() {
+  RtcStatus status = getRtcStatus();
+
+  String html = "<h1>Hardware - External RTC</h1>";
+  html += "<fieldset><legend>External RTC</legend>";
+  if (!status.settingEnabled) {
+    html += "<p class=\"hint\">No external RTC configured - the system clock relies on NTP only, "
+            "which means it has no accurate time at all until WiFi connects and a sync completes. "
+            "An optional DS3231 module (wired to RTC_SDA_PIN/RTC_SCL_PIN in config.h) lets the board "
+            "seed a roughly-correct clock immediately at boot instead.</p>";
+  } else if (!status.available) {
+    html += "<p class=\"hint\">External RTC is enabled, but no chip ACKed at boot on the configured "
+            "I2C pins - check the wiring and RTC_SDA_PIN/RTC_SCL_PIN/DS3231_I2C_ADDR in "
+            "<code>config.h</code>, then reboot. The system clock is relying on NTP only in the "
+            "meantime.</p>";
+  } else {
+    struct tm rtcTime;
+    if (readRtcTime(&rtcTime)) {
+      char buf[25];
+      strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &rtcTime);
+      time_t now = time(nullptr);
+      struct tm systemTime;
+      gmtime_r(&now, &systemTime);
+      char sysBuf[25];
+      strftime(sysBuf, sizeof(sysBuf), "%Y-%m-%d %H:%M:%S", &systemTime);
+      html += "<table>";
+      html += "<tr><th>RTC reading</th><td>" + String(buf) + " UTC</td></tr>";
+      html += "<tr><th>System clock</th><td>" + String(sysBuf) + " UTC</td></tr>";
+      html += "</table>";
+    } else {
+      html += "<p class=\"hint\">External RTC is active, but reading its current time just failed - "
+              "see the Serial log.</p>";
+    }
+  }
+
+  html += "<form method=\"POST\" action=\"/hardware/rtc/save\">";
+  html += "<label class=\"checkbox\"><input type=\"checkbox\" name=\"enabled\"" +
+          String(status.settingEnabled ? " checked" : "") + "> Use an external RTC module</label>";
+  html += "<p><button type=\"submit\">Save</button></p></form>";
+  html += "<p class=\"hint\">Takes effect after a reboot.</p>";
+  html += "</fieldset>";
+  return html;
+}
+
 void registerHardwareRoutes(PsychicHttpServer& server) {
+  server.on("/hardware/rtc", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
+    return response->send(200, "text/html", renderShell(Tab::HardwareRtc, "", renderExternalRtcPage()).c_str());
+  });
+
+  server.on("/hardware/rtc/save", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
+    RtcSettings settings;
+    settings.enabled = request->hasParam("enabled");
+    String banner = saveRtcSettings(settings)
+        ? "Saved - reboot the board to apply."
+        : "Failed to save - NVS write error (see Serial log). Setting was NOT changed.";
+    return response->send(200, "text/html", renderShell(Tab::HardwareRtc, banner, renderExternalRtcPage()).c_str());
+  });
+
   server.on("/hardware/cameras", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
     auto job = g_disabledHardwareJob.status();
     if (!job.inProgress && !job.hasResult) startDisabledHardwareRead(g_liveCameras);
