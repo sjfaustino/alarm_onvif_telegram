@@ -121,9 +121,9 @@ String heightLabel() {
 
 String pollLabel() {
   return "Poll interval, ms, " + String(CAMERA_POLL_INTERVAL_MIN_MS) + "-" + String(CAMERA_POLL_INTERVAL_MAX_MS) +
-         " (how often this camera is asked \"anything new?\" - lower notices motion sooner, at the cost of more "
-         "frequent requests to this camera; some cheaper cameras' embedded HTTP stacks tolerate that worse than "
-         "others)";
+         " (the shortest time between two \"anything new?\" requests. Most cameras hold each request open until "
+         "something happens, so motion arrives at once whatever this is; it matters for cameras that answer "
+         "immediately, where lower notices motion sooner at the cost of more requests)";
 }
 
 String cooldownLabel() {

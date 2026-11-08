@@ -148,6 +148,11 @@ struct CameraState {
   // connections.
   bool snapshotInFlight = false;
 
+  // Last Digest challenge from the snapshot URL, "" if it takes Basic.
+  // fetchOneSnapshot answers it up front, saving the 401 round trip (a Vatilon
+  // H46 accepts its nonce again); a 401 refreshes it.
+  String snapshotDigestChallenge;
+
   // Ring of recently sent snapshots (PSRAM buffers owned here).
   // snapshotHistoryNext is the next write slot; Count is how many are filled.
   SnapshotHistoryEntry snapshotHistory[SNAPSHOT_HISTORY_SIZE];
@@ -158,7 +163,7 @@ struct CameraState {
   // subscriptionActive, isOffline, alertsEnabled, hasAlerted, lastAlert,
   // snapshotUri, streamUri, mjpegUri, supportedEventTopics, unusedEventTopics,
   // the digest*Count fields, user, pass, scheduledRevert*, pendingConfig,
-  // stopRequested, snapshotInFlight, lastContactMs, totalReconnects,
+  // stopRequested, snapshotInFlight, snapshotDigestChallenge, lastContactMs, totalReconnects,
   // taskRunning, lastTaskBeatMs, taskStallAlerted, and the
   // snapshot/reconnect/offline/motionLatency rings. Everything else belongs to
   // the owning camera task alone.

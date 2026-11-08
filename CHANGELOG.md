@@ -8,6 +8,15 @@ config exports - see [Releases](README.md#releases) for how to cut one.
 
 ## [Unreleased]
 
+### Changed
+- Event polls now ask the camera to hold the request for up to 5 seconds
+  instead of 1, so while the camera holds them they run back to back. An event used to
+  wait up to about a second for the next poll; now it arrives as it happens.
+  The poll interval is now the minimum time between polls.
+- A camera whose snapshot URL wants Digest login now gets it on the first
+  request, using the last challenge, instead of being refused first.
+- Each snapshot fetch logs its size, time and login type to the serial log.
+
 ## [1.1.0] - 2026-11-07
 
 The code is reorganised and much better tested, and running it on a live board

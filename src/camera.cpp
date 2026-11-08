@@ -474,8 +474,12 @@ bool cameraPullMessages(const CameraConfig& cfg, CameraState& st) {
   if (!st.subscriptionActive || st.pullPointUrl.length() == 0) return false; // same-task read, no lock needed
 
   String action = "http://www.onvif.org/ver10/events/wsdl/PullPointSubscription/PullMessagesRequest";
-  // PT1S long-poll. PT5S would cut request volume at the cost of latency.
-  String body = "<tev:PullMessages><tev:Timeout>PT1S</tev:Timeout>"
+  // Long poll: the camera holds the request until an event or the timeout, so
+  // events arrive as they happen. Polls start pollIntervalMs apart, so while
+  // the camera holds them they run back to back. One that ignores the timeout
+  // and answers at once is still polled every pollIntervalMs. Stays well under
+  // HTTP_TIMEOUT_MS.
+  String body = "<tev:PullMessages><tev:Timeout>PT" + String(PULL_LONG_POLL_SECONDS) + "S</tev:Timeout>"
                 "<tev:MessageLimit>20</tev:MessageLimit></tev:PullMessages>";
   String response = cameraSoapCall(cfg, st, st.pullPointUrl, st.pullPointUrl, action, body);
 
@@ -626,7 +630,7 @@ void cameraTaskFn(void* pvParameters) {
       // Any URL/token may be stale after an edit, so rediscover everything via
       // the normal resubscribe path. snapshotUri is locked because /snap reads
       // it from loop()'s task.
-      { CameraStateLock lock(st); st.subscriptionActive = false; st.snapshotUri = ""; }
+      { CameraStateLock lock(st); st.subscriptionActive = false; st.snapshotUri = ""; st.snapshotDigestChallenge = ""; }
       st.eventServiceUrl = ""; st.mediaServiceUrl = ""; st.pullPointUrl = ""; st.profileToken = "";
       st.retryDelayMs = 0; st.retryStreak = 0; st.lastRetry = 0; // retry immediately, not after a stale backoff
 

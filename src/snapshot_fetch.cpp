@@ -103,43 +103,59 @@ uint8_t* fetchOneSnapshot(const CameraConfig& cfg, CameraState& st, size_t& outL
   SnapshotInFlightGuard snapshotGuard(st); // see its own comment - covers every return path below
 
   // Also called from loop() (/snap), so copy these under the lock.
-  String snapshotUri; const char* user; const char* pass;
+  String snapshotUri, cachedChallenge; const char* user; const char* pass;
   {
     CameraStateLock lock(st);
     snapshotUri = st.snapshotUri;
+    cachedChallenge = st.snapshotDigestChallenge;
     user = st.user;
     pass = st.pass;
   }
+  uint32_t startMs = millis();
 
   HTTPClient http;
-  http.begin(snapshotUri);
-  http.setAuthorization(user, pass);
-  http.setTimeout(HTTP_TIMEOUT_MS);
   // HTTPClient only exposes headers registered with collectHeaders().
   static const char* kCollectedHeaders[] = {"Transfer-Encoding", "WWW-Authenticate"};
-  http.collectHeaders(kCollectedHeaders, 2);
 
-  int code = http.GET();
-  // Some cameras (a Vatilon H46) refuse Basic and challenge for Digest; HTTPClient
-  // only does Basic, so answer the challenge once.
-  if (code == 401) {
-    String challenge = http.header("WWW-Authenticate");
-    http.end();
+  // Some cameras (a Vatilon H46) refuse Basic and challenge for Digest, which
+  // HTTPClient can't do. An empty challenge means Basic.
+  auto get = [&](const String& challenge) -> int {
+    http.begin(snapshotUri);
+    http.setTimeout(HTTP_TIMEOUT_MS);
+    http.collectHeaders(kCollectedHeaders, 2);
+    if (challenge.length() == 0) {
+      http.setAuthorization(user, pass);
+      return http.GET();
+    }
     char cnonce[17];
     snprintf(cnonce, sizeof(cnonce), "%08lx%08lx", (unsigned long)esp_random(), (unsigned long)esp_random());
     String authorization = digestAuthorization(challenge, "GET", requestUriFromUrl(snapshotUri), user ? user : "",
                                                pass ? pass : "", cnonce);
-    if (authorization.length() > 0) {
-      http.begin(snapshotUri);
-      http.setTimeout(HTTP_TIMEOUT_MS);
-      http.collectHeaders(kCollectedHeaders, 2);
-      // end() keeps the Basic credentials, and while they're set HTTPClient
-      // sends them and silently drops an added Authorization header.
-      http.setAuthorization("");
-      http.addHeader("Authorization", authorization);
-      code = http.GET();
+    if (authorization.length() == 0) return 401;
+    // After an earlier end() the Basic credentials are still set, and while they
+    // are HTTPClient sends them and silently drops an added Authorization header.
+    http.setAuthorization("");
+    http.addHeader("Authorization", authorization);
+    return http.GET();
+  };
+
+  int code = get(cachedChallenge);
+  bool usedDigest = cachedChallenge.length() > 0;
+  // First Digest camera fetch, or a cached nonce the camera no longer accepts:
+  // answer the fresh challenge once.
+  if (code == 401) {
+    String challenge = http.header("WWW-Authenticate");
+    http.end();
+    String head = challenge.substring(0, 6);
+    head.toLowerCase();
+    if (head == "digest") {
+      code = get(challenge);
+      usedDigest = true;
+      CameraStateLock lock(st);
+      st.snapshotDigestChallenge = (code == 200) ? challenge : String();
     }
   }
+  uint32_t headersMs = millis() - startMs;
   if (code != 200) {
     Serial.printf("[%s] Snapshot GET failed, HTTP %d\n", cfg.name.c_str(), code);
     http.end();
@@ -162,6 +178,9 @@ uint8_t* fetchOneSnapshot(const CameraConfig& cfg, CameraState& st, size_t& outL
     Serial.printf("[%s] Snapshot fetch failed.\n", cfg.name.c_str());
     return nullptr;
   }
+  // Where a slow fetch spends its time: the camera's answer, or the body.
+  Serial.printf("[%s] Snapshot %u bytes in %lums (%s, headers after %lums)\n", cfg.name.c_str(), (unsigned)jpgLen,
+                (unsigned long)(millis() - startMs), usedDigest ? "Digest" : "Basic", (unsigned long)headersMs);
   outLen = jpgLen;
   return jpg;
 }
