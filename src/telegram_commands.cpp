@@ -1,3 +1,6 @@
+#include "webserver_cameras.h" // saveCameraSubmission
+#include "camera_tasks.h" // g_cameras, g_cameraStates
+#include "camera_store.h" // loadCameras
 #include "telegram.h"
 #include "telegram_internal.h"
 #include "config.h"
@@ -463,6 +466,68 @@ static void handleLangCommand(const TelegramUser& sender, const ParsedTelegramCo
   }
 }
 
+// Saved the way the dashboard saves an edit, which also starts or stops the
+// camera's task. Runs on loop()'s task, whose internal-RAM stack may write flash.
+static bool setCameraEnabled(const String& name, bool enabled, const String& senderName) {
+  for (CameraConfig& stored : loadCameras()) {
+    if (!stored.name.equalsIgnoreCase(name)) continue;
+    stored.enabled = enabled;
+    String banner, applyNote;
+    if (!saveCameraSubmission(stored, stored.name, banner, applyNote, &g_cameras, &g_cameraStates)) {
+      Serial.printf("[Telegram] Could not save %s: %s\n", name.c_str(), banner.c_str());
+      return false;
+    }
+    logEvent(name + (enabled ? ": enabled" : ": disabled") + " via Telegram (" + senderName + ")");
+    return true;
+  }
+  return false;
+}
+
+static void handleCameraToggle(const TelegramUser& sender, const ParsedTelegramCommand& parsed,
+                               const CameraConfig cameras[], size_t numCameras) {
+  bool enable = parsed.command == TelegramCommand::Enable;
+  CameraTogglePlan plan = planCameraToggle(cameras, numCameras, parsed.cameraName, enable);
+  switch (plan.outcome) {
+    case CameraToggleOutcome::NeedsName:
+      sendTelegramMessageTo(sender.chatId, trCameraToggleUsage(sender.language, commandDisplayName(parsed.command)));
+      return;
+    case CameraToggleOutcome::NotFound:
+      sendTelegramMessageTo(sender.chatId, trNoSuchCamera(sender.language, parsed.cameraName));
+      return;
+    case CameraToggleOutcome::Ambiguous: {
+      String list;
+      for (size_t idx : plan.targets) { if (list.length() > 0) list += ", "; list += cameras[idx].name; }
+      sendTelegramMessageTo(sender.chatId, trAmbiguousCamera(sender.language, parsed.cameraName, list));
+      return;
+    }
+    case CameraToggleOutcome::AlreadySet:
+      sendTelegramMessageTo(sender.chatId, trCameraAlreadySet(sender.language, cameras[plan.targets[0]].name, enable));
+      return;
+    case CameraToggleOutcome::NothingToDo:
+      sendTelegramMessageTo(sender.chatId, trAllCamerasAlreadySet(sender.language, enable));
+      return;
+    case CameraToggleOutcome::Apply:
+      break;
+  }
+
+  String allWord = parsed.cameraName;
+  allWord.toLowerCase();
+  if (allWord != "all") {
+    const String& name = cameras[plan.targets[0]].name;
+    sendTelegramMessageTo(sender.chatId, setCameraEnabled(name, enable, sender.name)
+                                             ? trCameraToggled(sender.language, name, enable)
+                                             : trCameraToggleFailed(sender.language, name));
+    return;
+  }
+  size_t changed = 0, failed = 0;
+  for (size_t idx : plan.targets) {
+    if (setCameraEnabled(cameras[idx].name, enable, sender.name)) changed++;
+    else failed++;
+    esp_task_wdt_reset(); // one file save per camera
+  }
+  sendTelegramMessageTo(sender.chatId, trAllCamerasToggled(sender.language, enable, changed, failed));
+}
+
 // /on, /off and /snap, once the command is known to name a camera (or none).
 static void handleCameraCommand(const TelegramUser& sender, const ParsedTelegramCommand& parsed, const CameraConfig cameras[], CameraState states[], size_t numCameras) {
   // Bare command: show the picker (an empty prefix would match every camera).
@@ -581,6 +646,11 @@ static void handleTelegramCommand(const TelegramUser& sender, const String& text
       g_pendingRestoreChatId = sender.chatId;
       g_pendingRestoreExpiresAtMs = millis() + RESTORE_PENDING_WINDOW_MS;
       sendTelegramMessageTo(sender.chatId, trRestorePrompt(sender.language));
+      return;
+
+    case TelegramCommand::Enable:
+    case TelegramCommand::Disable:
+      handleCameraToggle(sender, parsed, cameras, numCameras);
       return;
 
     case TelegramCommand::On:

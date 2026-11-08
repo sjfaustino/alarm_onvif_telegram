@@ -667,9 +667,9 @@ void cameraTaskFn(void* pvParameters) {
     if (stopNow) {
       cfg.enabled = false; // only this task may write its own cfg
       { CameraStateLock lock(st); st.subscriptionActive = false; st.taskRunning = false; }
-      Serial.printf("[%s] Stopped via dashboard (disabled/deleted) - task exiting, no reboot needed.\n",
+      Serial.printf("[%s] Stopped (disabled or deleted) - task exiting, no reboot needed.\n",
                     cfg.name.c_str());
-      logEvent(cfg.name + ": monitoring stopped live (disabled/deleted via dashboard)");
+      logEvent(cfg.name + ": monitoring stopped live (disabled or deleted)");
       vTaskSuspend(nullptr); // deleted by reapStoppedCameraTasks (camera_tasks.h); never resumes
       return;
     }

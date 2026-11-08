@@ -600,8 +600,130 @@ void test_commandDisplayName_every_command(void) {
   TEST_ASSERT_EQUAL_STRING("", commandDisplayName(TelegramCommand::Unknown).c_str());
 }
 
+// ---- /enable and /disable ----
+
+void test_enable_and_disable_parse_with_a_camera(void) {
+  ParsedTelegramCommand p = parseTelegramCommand("/enable D05");
+  TEST_ASSERT_TRUE(TelegramCommand::Enable == p.command);
+  TEST_ASSERT_EQUAL_STRING("D05", p.cameraName.c_str());
+  p = parseTelegramCommand("/DISABLE  all ");
+  TEST_ASSERT_TRUE(TelegramCommand::Disable == p.command);
+  TEST_ASSERT_EQUAL_STRING("all", p.cameraName.c_str());
+}
+
+void test_enable_and_disable_need_the_command_permission(void) {
+  TEST_ASSERT_TRUE(TelegramCommandPermission::Command == requiredPermissionForCommand(TelegramCommand::Enable));
+  TEST_ASSERT_TRUE(TelegramCommandPermission::Command == requiredPermissionForCommand(TelegramCommand::Disable));
+  TEST_ASSERT_TRUE(TelegramCommandPermission::Command == parseTelegramCommand("/disable D05").requiredPermission);
+}
+
+void test_enable_and_disable_alone_have_no_camera(void) {
+  ParsedTelegramCommand p = parseTelegramCommand("/enable");
+  TEST_ASSERT_TRUE(TelegramCommand::Enable == p.command);
+  TEST_ASSERT_EQUAL_STRING("", p.cameraName.c_str());
+  TEST_ASSERT_TRUE(TelegramCommand::Disable == parseTelegramCommand("/disable").command);
+}
+
+void test_lookalike_commands_are_not_enable_or_disable(void) {
+  TEST_ASSERT_TRUE(TelegramCommand::Unknown == parseTelegramCommand("/enabled D05").command);
+  TEST_ASSERT_TRUE(TelegramCommand::Unknown == parseTelegramCommand("/disablex").command);
+}
+
+void test_enable_and_disable_display_names(void) {
+  TEST_ASSERT_EQUAL_STRING("/enable", commandDisplayName(TelegramCommand::Enable).c_str());
+  TEST_ASSERT_EQUAL_STRING("/disable", commandDisplayName(TelegramCommand::Disable).c_str());
+}
+
+static std::vector<CameraConfig> toggleCameras() {
+  std::vector<CameraConfig> cams(4);
+  cams[0].name = "D05-Pavilhao"; cams[0].enabled = false;
+  cams[1].name = "D07-Portaria"; cams[1].enabled = true;
+  cams[2].name = "D1";           cams[2].enabled = true;
+  cams[3].name = "D12-Back";     cams[3].enabled = false;
+  return cams;
+}
+
+void test_toggle_empty_name_needs_one(void) {
+  auto cams = toggleCameras();
+  TEST_ASSERT_TRUE(CameraToggleOutcome::NeedsName == planCameraToggle(cams.data(), cams.size(), "  ", true).outcome);
+}
+
+void test_toggle_finds_a_disabled_camera_by_abbreviation(void) {
+  auto cams = toggleCameras();
+  CameraTogglePlan p = planCameraToggle(cams.data(), cams.size(), "d05", true);
+  TEST_ASSERT_TRUE(CameraToggleOutcome::Apply == p.outcome);
+  TEST_ASSERT_EQUAL(1, (int)p.targets.size());
+  TEST_ASSERT_EQUAL(0, (int)p.targets[0]);
+}
+
+void test_toggle_finds_by_full_name(void) {
+  auto cams = toggleCameras();
+  CameraTogglePlan p = planCameraToggle(cams.data(), cams.size(), "D07-PORTARIA", false);
+  TEST_ASSERT_TRUE(CameraToggleOutcome::Apply == p.outcome);
+  TEST_ASSERT_EQUAL(1, (int)p.targets[0]);
+}
+
+void test_toggle_camera_already_in_that_state(void) {
+  auto cams = toggleCameras();
+  CameraTogglePlan p = planCameraToggle(cams.data(), cams.size(), "D07", true);
+  TEST_ASSERT_TRUE(CameraToggleOutcome::AlreadySet == p.outcome);
+  TEST_ASSERT_EQUAL(1, (int)p.targets[0]);
+}
+
+void test_toggle_unknown_name(void) {
+  auto cams = toggleCameras();
+  TEST_ASSERT_TRUE(CameraToggleOutcome::NotFound == planCameraToggle(cams.data(), cams.size(), "X9", true).outcome);
+}
+
+void test_toggle_abbreviation_matching_two_is_ambiguous(void) {
+  auto cams = toggleCameras();
+  CameraTogglePlan p = planCameraToggle(cams.data(), cams.size(), "D0", true);
+  TEST_ASSERT_TRUE(CameraToggleOutcome::Ambiguous == p.outcome);
+  TEST_ASSERT_EQUAL(2, (int)p.targets.size());
+}
+
+void test_toggle_exact_name_beats_a_longer_name_starting_with_it(void) {
+  auto cams = toggleCameras();
+  CameraTogglePlan p = planCameraToggle(cams.data(), cams.size(), "d1", false);
+  TEST_ASSERT_TRUE(CameraToggleOutcome::Apply == p.outcome);
+  TEST_ASSERT_EQUAL(1, (int)p.targets.size());
+  TEST_ASSERT_EQUAL(2, (int)p.targets[0]);
+}
+
+void test_toggle_all_only_targets_cameras_that_would_change(void) {
+  auto cams = toggleCameras();
+  CameraTogglePlan on = planCameraToggle(cams.data(), cams.size(), "ALL", true);
+  TEST_ASSERT_TRUE(CameraToggleOutcome::Apply == on.outcome);
+  TEST_ASSERT_EQUAL(2, (int)on.targets.size());
+  TEST_ASSERT_EQUAL(0, (int)on.targets[0]);
+  TEST_ASSERT_EQUAL(3, (int)on.targets[1]);
+  CameraTogglePlan off = planCameraToggle(cams.data(), cams.size(), "all", false);
+  TEST_ASSERT_EQUAL(2, (int)off.targets.size());
+  TEST_ASSERT_EQUAL(1, (int)off.targets[0]);
+}
+
+void test_toggle_all_with_nothing_to_change(void) {
+  auto cams = toggleCameras();
+  for (auto& c : cams) c.enabled = true;
+  TEST_ASSERT_TRUE(CameraToggleOutcome::NothingToDo == planCameraToggle(cams.data(), cams.size(), "all", true).outcome);
+}
+
 int main(int argc, char** argv) {
   UNITY_BEGIN();
+  RUN_TEST(test_enable_and_disable_parse_with_a_camera);
+  RUN_TEST(test_enable_and_disable_need_the_command_permission);
+  RUN_TEST(test_enable_and_disable_alone_have_no_camera);
+  RUN_TEST(test_lookalike_commands_are_not_enable_or_disable);
+  RUN_TEST(test_enable_and_disable_display_names);
+  RUN_TEST(test_toggle_empty_name_needs_one);
+  RUN_TEST(test_toggle_finds_a_disabled_camera_by_abbreviation);
+  RUN_TEST(test_toggle_finds_by_full_name);
+  RUN_TEST(test_toggle_camera_already_in_that_state);
+  RUN_TEST(test_toggle_unknown_name);
+  RUN_TEST(test_toggle_abbreviation_matching_two_is_ambiguous);
+  RUN_TEST(test_toggle_exact_name_beats_a_longer_name_starting_with_it);
+  RUN_TEST(test_toggle_all_only_targets_cameras_that_would_change);
+  RUN_TEST(test_toggle_all_with_nothing_to_change);
   RUN_TEST(test_parseTelegramUpdates_single_update);
   RUN_TEST(test_parseTelegramUpdates_chat_id_beyond_32_bits);
   RUN_TEST(test_parseTelegramUpdates_multiple_updates_in_order);
