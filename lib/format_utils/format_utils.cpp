@@ -68,6 +68,12 @@ String extractHost(const String& url) {
   return url.substring(start, end);
 }
 
+bool isSameOriginRequest(const String& origin, const String& referer, const String& host) {
+  String source = origin.length() > 0 ? origin : referer;
+  if (source.length() == 0) return true;
+  return extractHost(source).equalsIgnoreCase(host);
+}
+
 String redactUrlSecrets(const String& url) {
   String out = url;
   int schemeEnd = out.indexOf("://");

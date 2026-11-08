@@ -1,5 +1,6 @@
 #include "camera_clamps.h"
 #include "camera.h"
+#include "format_utils.h" // redactUrlSecrets
 #include "ntp_policy.h" // clockIsSet
 #include "onvif_soap.h"
 #include "telegram.h"
@@ -291,7 +292,7 @@ bool cameraFetchProfileAndSnapshotUri(const CameraConfig& cfg, CameraState& st) 
     logUri.replace("{PASS}", "***");
     logUri.replace("{WIDTH}", String(safeSnapshotDimension(cfg.snapshotMaxWidth)));
     logUri.replace("{HEIGHT}", String(safeSnapshotDimension(cfg.snapshotMaxHeight)));
-    Serial.printf("[%s] Using configured snapshot override: %s\n", cfg.name.c_str(), logUri.c_str());
+    Serial.printf("[%s] Using configured snapshot override: %s\n", cfg.name.c_str(), redactUrlSecrets(logUri).c_str());
     return true;
   }
 
@@ -347,7 +348,7 @@ bool cameraFetchProfileAndSnapshotUri(const CameraConfig& cfg, CameraState& st) 
   }
   { CameraStateLock lock(st); st.snapshotUri = resolvedUri; }
 
-  Serial.printf("[%s] Snapshot URI: %s\n", cfg.name.c_str(), resolvedUri.c_str());
+  Serial.printf("[%s] Snapshot URI: %s\n", cfg.name.c_str(), redactUrlSecrets(resolvedUri).c_str());
   Serial.println("  ^ if this looks wrong (bad IP/port), that's the same GetSnapshotUri "
                   "quirk seen on the XM530 - you may need a snapshotUriOverride for this camera too.");
 
@@ -367,7 +368,7 @@ bool cameraFetchProfileAndSnapshotUri(const CameraConfig& cfg, CameraState& st) 
   if (resolvedStreamUri.length() > 0) {
     CameraStateLock lock(st);
     st.streamUri = resolvedStreamUri;
-    Serial.printf("[%s] Stream URI: %s\n", cfg.name.c_str(), resolvedStreamUri.c_str());
+    Serial.printf("[%s] Stream URI: %s\n", cfg.name.c_str(), redactUrlSecrets(resolvedStreamUri).c_str());
   }
 
   // Best-effort MJPEG URI, only if some profile is JPEG (rare).
@@ -390,7 +391,7 @@ bool cameraFetchProfileAndSnapshotUri(const CameraConfig& cfg, CameraState& st) 
         CameraStateLock lock(st);
         st.mjpegUri = resolvedMjpegUri;
         Serial.printf("[%s] MJPEG preview URI (profile '%s'): %s\n",
-                      cfg.name.c_str(), jpegProfile->name.c_str(), resolvedMjpegUri.c_str());
+                      cfg.name.c_str(), jpegProfile->name.c_str(), redactUrlSecrets(resolvedMjpegUri).c_str());
       }
     } else {
       Serial.printf("[%s] Camera has a JPEG-encoded profile ('%s') but doesn't support HTTP transport "

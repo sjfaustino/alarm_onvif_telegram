@@ -142,8 +142,40 @@ void test_redactUrlSecrets_masks_userinfo_and_leaves_plain_urls(void) {
   TEST_ASSERT_EQUAL_STRING("", redactUrlSecrets("").c_str());
 }
 
+void test_same_origin_accepts_this_device(void) {
+  TEST_ASSERT_TRUE(isSameOriginRequest("http://192.168.8.132", "", "192.168.8.132"));
+  TEST_ASSERT_TRUE(isSameOriginRequest("http://Camera.LOCAL", "", "camera.local"));
+  TEST_ASSERT_TRUE(isSameOriginRequest("http://192.168.8.132:8080", "", "192.168.8.132:8080"));
+  TEST_ASSERT_TRUE(isSameOriginRequest("", "http://192.168.8.132/cameras?x=1", "192.168.8.132"));
+}
+
+void test_same_origin_refuses_other_sites(void) {
+  TEST_ASSERT_FALSE(isSameOriginRequest("http://evil.example", "", "192.168.8.132"));
+  TEST_ASSERT_FALSE(isSameOriginRequest("", "http://evil.example/page", "192.168.8.132"));
+  TEST_ASSERT_FALSE(isSameOriginRequest("http://192.168.8.132.evil.example", "", "192.168.8.132"));
+  TEST_ASSERT_FALSE(isSameOriginRequest("http://192.168.8.132:9999", "", "192.168.8.132"));
+}
+
+void test_same_origin_refuses_a_null_origin(void) {
+  TEST_ASSERT_FALSE(isSameOriginRequest("null", "", "192.168.8.132"));
+}
+
+void test_same_origin_origin_takes_priority_over_referer(void) {
+  TEST_ASSERT_FALSE(isSameOriginRequest("http://evil.example", "http://192.168.8.132/", "192.168.8.132"));
+  TEST_ASSERT_TRUE(isSameOriginRequest("http://192.168.8.132", "http://evil.example/", "192.168.8.132"));
+}
+
+void test_same_origin_allows_non_browser_clients(void) {
+  TEST_ASSERT_TRUE(isSameOriginRequest("", "", "192.168.8.132"));
+}
+
 int main(int argc, char** argv) {
   UNITY_BEGIN();
+  RUN_TEST(test_same_origin_accepts_this_device);
+  RUN_TEST(test_same_origin_refuses_other_sites);
+  RUN_TEST(test_same_origin_refuses_a_null_origin);
+  RUN_TEST(test_same_origin_origin_takes_priority_over_referer);
+  RUN_TEST(test_same_origin_allows_non_browser_clients);
   RUN_TEST(test_redactUrlSecrets_masks_query_passwords);
   RUN_TEST(test_redactUrlSecrets_masks_userinfo_and_leaves_plain_urls);
   RUN_TEST(test_formatUptime_omits_days_when_zero);

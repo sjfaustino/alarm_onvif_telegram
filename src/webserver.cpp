@@ -123,6 +123,22 @@ class RateLimitMiddleware : public PsychicMiddleware {
 
 static RateLimitMiddleware g_rateLimitMiddleware;
 
+// Basic Auth credentials go with every request the browser makes, including
+// a form on another site aimed at this device.
+class SameOriginMiddleware : public PsychicMiddleware {
+ public:
+  esp_err_t run(PsychicRequest* request, PsychicResponse* response, PsychicMiddlewareNext next) override {
+    if (request->method() != HTTP_GET &&
+        !isSameOriginRequest(request->header("Origin"), request->header("Referer"), request->header("Host"))) {
+      Serial.printf("[WebServer] Refused a cross-site %s %s.\n", request->methodStr().c_str(), request->uri().c_str());
+      return response->send(403, "text/plain", "Refused: this request came from another site.");
+    }
+    return next();
+  }
+};
+
+static SameOriginMiddleware g_sameOriginMiddleware;
+
 // ============================================================
 // Dashboard shell: server-rendered pages, everything embedded in the firmware.
 // ============================================================
@@ -401,6 +417,7 @@ void startWebServer(std::vector<CameraConfig>* liveCameras, std::vector<CameraSt
   // route, including firmware upload.
   server.addMiddleware(&g_rateLimitMiddleware);
   server.addMiddleware(&g_authMiddleware);
+  server.addMiddleware(&g_sameOriginMiddleware);
 
   server.on("/", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
     String landing = "<h1>Camera Monitor v" + String(FIRMWARE_VERSION) +
