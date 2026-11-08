@@ -1,13 +1,20 @@
 #include <Arduino.h>
 #include "camera_tasks.h"
 #include "camera.h"
+#include "camera_profiles.h"
 #include "config.h"
 #include "event_log_store.h"
 #include "telegram.h"
 #include "telegram_i18n.h"
+#include <WiFi.h>
 
 std::vector<CameraConfig> g_cameras;
 std::vector<CameraState> g_cameraStates;
+
+SemaphoreHandle_t cameraSaveMutex() {
+  static SemaphoreHandle_t mutex = xSemaphoreCreateMutex();
+  return mutex;
+}
 
 // Camera task stacks are in PSRAM, which must be freed with vTaskDeleteWithCaps
 // and preferably not by the task itself. A stopping task suspends itself instead,
@@ -98,12 +105,68 @@ bool isPendingNewCamera(const String& name) {
   return pending;
 }
 
+// Longest loop() waits on a new camera's GetDeviceInformation.
+static const uint16_t MODEL_LOOKUP_TIMEOUT_MS = 4000;
+
+// Looks up a just-added camera's model and applies its known settings
+// (camera_profiles.h) to the stored record and to `cam`, which is about to
+// start. Runs once per add, on loop()'s task: its stack is in internal RAM, so
+// it may save, and nothing has started the camera yet.
+static void applyModelDefaults(CameraConfig& cam) {
+  if (!cam.enabled || cam.user.length() == 0 || cam.pass.length() == 0 || WiFi.status() != WL_CONNECTED) return;
+  String manufacturer, model;
+  if (!fetchCameraIdentity(cam, manufacturer, model, MODEL_LOOKUP_TIMEOUT_MS)) {
+    Serial.printf("[%s] Model lookup failed - no model defaults applied.\n", cam.name.c_str());
+    return;
+  }
+  const CameraModelProfile* profile = findCameraModelProfile(manufacturer, model);
+  if (!profile) {
+    logEvent(cam.name + ": " + manufacturer + " " + model + " - no model defaults known");
+    return;
+  }
+  // Applied to the stored record, under the save lock, so a dashboard edit made
+  // since the add isn't overwritten; only fields still at defaults change.
+  xSemaphoreTake(cameraSaveMutex(), portMAX_DELAY);
+  std::vector<String> changes;
+  for (CameraConfig& stored : loadCameras()) {
+    if (!stored.name.equalsIgnoreCase(cam.name)) continue;
+    changes = applyCameraModelProfile(stored, *profile);
+    if (!changes.empty() && updateCamera(stored.name, stored) == CameraSaveResult::Saved) {
+      cam = stored;
+    } else if (!changes.empty()) {
+      changes.clear(); // not saved, so not applied either - updateCamera logged why
+    }
+    break;
+  }
+  xSemaphoreGive(cameraSaveMutex());
+  String summary;
+  for (const String& c : changes) summary += (summary.length() ? ", " : "") + c;
+  logEvent(cam.name + ": " + manufacturer + " " + model + " - " +
+           (summary.length() ? "applied model defaults: " + summary : String("model defaults already set")));
+}
+
 void applyPendingNewCameraIfAny() {
+  // Peeked, not taken, while the camera is queried, so the dashboard keeps
+  // showing it as starting.
   CameraConfig* pending = nullptr;
+  xSemaphoreTake(g_pendingNewCameraMutex, portMAX_DELAY);
+  CameraConfig* peeked = g_pendingNewCamera ? new CameraConfig(*g_pendingNewCamera) : nullptr;
+  xSemaphoreGive(g_pendingNewCameraMutex);
+  if (!peeked) return;
+  applyModelDefaults(*peeked);
   xSemaphoreTake(g_pendingNewCameraMutex, portMAX_DELAY);
   pending = g_pendingNewCamera;
   g_pendingNewCamera = nullptr;
   xSemaphoreGive(g_pendingNewCameraMutex);
+  if (pending && pending->name.equalsIgnoreCase(peeked->name)) {
+    *pending = *peeked;
+  } else if (pending) {
+    // Replaced by a newer add during the lookup; that one gets its lookup next tick.
+    stagePendingNewCamera(*pending);
+    delete pending;
+    pending = nullptr;
+  }
+  delete peeked;
   if (!pending) return;
 
   if (g_cameras.size() >= MAX_CAMERAS) {

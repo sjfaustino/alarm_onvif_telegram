@@ -29,6 +29,12 @@ void reapStoppedCameraTasks();
 // write wins - PsychicHttp handles one save at a time.
 bool stagePendingNewCamera(const CameraConfig& cam);
 
+// Serializes read-modify-write saves of the camera list: the dashboard's
+// saves, and loop() applying a new camera's model defaults. Two quick saves of
+// a newly enabled camera could otherwise both see it not running (enabled
+// flips only when the task applies its config) and spawn two tasks.
+SemaphoreHandle_t cameraSaveMutex();
+
 // Whether a camera of this name is staged and not yet started by loop().
 bool isPendingNewCamera(const String& name);
 

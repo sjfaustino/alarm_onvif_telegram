@@ -79,6 +79,21 @@ static String cameraSoapCall(const CameraConfig& cfg, CameraState& st, const Str
   return response;
 }
 
+bool fetchCameraIdentity(const CameraConfig& cfg, String& manufacturer, String& model, uint16_t timeoutMs) {
+  String action = "http://www.onvif.org/ver10/device/wsdl/GetDeviceInformation";
+  String xml = soapEnvelope(action, "<tds:GetDeviceInformation/>", "", cfg.user.c_str(), cfg.pass.c_str(),
+                            cfg.includeReplyToAnonymous, cfg.useWSSecurity);
+  const char* basicUser = cfg.useWSSecurity ? nullptr : cfg.user.c_str();
+  const char* basicPass = cfg.useWSSecurity ? nullptr : cfg.pass.c_str();
+  String response = soapPost(cfg.name.c_str(), cfg.deviceServiceUrl, action, xml, basicUser, basicPass, timeoutMs);
+  if (response.length() == 0 || responseHasFault(response)) return false;
+  manufacturer = findElementByLocalName(response, "Manufacturer");
+  model = findElementByLocalName(response, "Model");
+  manufacturer.trim();
+  model.trim();
+  return manufacturer.length() > 0 && model.length() > 0;
+}
+
 bool cameraDiscoverServices(const CameraConfig& cfg, CameraState& st) {
   Serial.printf("\n[%s] GetCapabilities\n", cfg.name.c_str());
 

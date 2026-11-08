@@ -17,10 +17,6 @@
 #include <WiFiUdp.h>
 #include <cctype>
 
-// Serializes saves: two quick saves of a newly enabled camera could both see
-// it not running (enabled flips only when the task applies its config) and
-// spawn two tasks.
-static SemaphoreHandle_t g_saveMutex = xSemaphoreCreateMutex();
 
 // Live slot index by name, or -1 if the camera has no live slot.
 static int findLiveCameraIndex(std::vector<CameraConfig>* liveCameras, const String& name) {
@@ -519,7 +515,8 @@ bool saveCameraSubmission(CameraConfig cam, const String& originalName, String& 
     // (then a reboot is needed, and the note says so).
     if (stagePendingNewCamera(cam)) {
       applyNote = cam.enabled
-          ? ("\"" + cam.name + "\" added - starting monitoring now (no reboot needed).")
+          ? ("\"" + cam.name + "\" added - starting monitoring now (no reboot needed). Known settings for its "
+             "model are filled in where you left the default; the Activity log lists them.")
           : ("\"" + cam.name + "\" added (disabled) - no reboot needed; enable it whenever you're ready.");
     } else {
       applyNote = "\"" + cam.name + "\" added, but this board's reserved camera capacity is already used "
@@ -534,9 +531,9 @@ bool saveCameraSubmission(CameraConfig cam, const String& originalName, String& 
     }
   }
 
-  // The rest runs under g_saveMutex (see above). It also serializes the
+  // The rest runs under cameraSaveMutex() (see camera_tasks.h). It also serializes the
   // store's read-modify-write for saves of different cameras.
-  xSemaphoreTake(g_saveMutex, portMAX_DELAY);
+  xSemaphoreTake(cameraSaveMutex(), portMAX_DELAY);
 
   // By original name (a rename keeps the slot). A live task exists exactly
   // when the slot's in-memory enabled is true.
@@ -547,7 +544,7 @@ bool saveCameraSubmission(CameraConfig cam, const String& originalName, String& 
 
   CameraSaveResult updated = updateCamera(originalName, cam);
   if (updated != CameraSaveResult::Saved) {
-    xSemaphoreGive(g_saveMutex);
+    xSemaphoreGive(cameraSaveMutex());
     if (updated == CameraSaveResult::NameTaken) {
       banner = "Could not save \"" + htmlEscape(cam.name) + "\" - a different camera already uses that name.";
     } else if (updated == CameraSaveResult::NotFound) {
@@ -585,7 +582,7 @@ bool saveCameraSubmission(CameraConfig cam, const String& originalName, String& 
   }
   // idx < 0: no live slot (added while capacity was full) - needs a reboot.
 
-  xSemaphoreGive(g_saveMutex);
+  xSemaphoreGive(cameraSaveMutex());
   return true;
 }
 

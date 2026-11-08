@@ -138,6 +138,15 @@ Arduino-ESP32/IDF releases.
   board - a camera on a different VLAN/subnet, or one that doesn't support
   WS-Discovery at all, won't show up here even if it's reachable directly by
   URL; add those manually instead.
+- Known camera models get their settings filled in when added. Before a new
+  camera starts, the board asks it for its manufacturer and model (ONVIF
+  GetDeviceInformation) and applies the matching entry from
+  `lib/camera_profiles`: snapshot URL, poll interval, InitialTerminationTime,
+  plus a tip in the notes for anything only the camera's own web UI can change.
+  Only fields still at their defaults are filled, so values typed in the add
+  form win; it runs once per add and never touches later edits. The Activity
+  log lists what was applied. Add a model to the table once it's been verified
+  on real hardware.
 - Cameras and Telegram recipients are managed at runtime through a built-in
   sidebar dashboard ([hoeken/PsychicHttp](https://github.com/hoeken/PsychicHttp))
   and persisted in NVS - no more editing and reflashing `config.h`/`secrets.h` to

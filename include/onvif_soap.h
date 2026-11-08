@@ -1,5 +1,6 @@
 #pragma once
 #include <Arduino.h>
+#include "config.h" // HTTP_TIMEOUT_MS
 #include "xml_helpers.h" // xmlEscape/findElementByLocalName/findAttributeValue/responseHasFault -
                           // re-exported here so existing callers (camera.cpp, this file) don't change
 
@@ -21,5 +22,7 @@ String soapEnvelope(const String& action, const String& body, const String& to,
 // cameras' tasks are logging concurrently. basicAuthUser/basicAuthPass: set
 // both (non-null) to send HTTP Basic Auth instead of/alongside WS-Security -
 // needed for cameras with useWSSecurity=false.
+// timeoutMs: HTTP_TIMEOUT_MS unless the caller must not block that long.
 String soapPost(const char* cameraName, const String& url, const String& action, const String& xml,
-                 const char* basicAuthUser = nullptr, const char* basicAuthPass = nullptr);
+                 const char* basicAuthUser = nullptr, const char* basicAuthPass = nullptr,
+                 uint16_t timeoutMs = HTTP_TIMEOUT_MS);

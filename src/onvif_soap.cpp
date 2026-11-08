@@ -166,7 +166,7 @@ static String shortAction(const String& action) {
 }
 
 String soapPost(const char* cameraName, const String& url, const String& action, const String& xml,
-                const char* basicAuthUser, const char* basicAuthPass) {
+                const char* basicAuthUser, const char* basicAuthPass, uint16_t timeoutMs) {
   if (VERBOSE_SOAP_LOG) {
     Serial.println("\n---- SOAP POST ----");
     Serial.println(url);
@@ -175,7 +175,7 @@ String soapPost(const char* cameraName, const String& url, const String& action,
   }
 
   HTTPClient http;
-  http.setTimeout(HTTP_TIMEOUT_MS);
+  http.setTimeout(timeoutMs);
   if (!http.begin(url)) {
     Serial.println("ERROR: http.begin() failed for " + url);
     return "";

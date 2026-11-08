@@ -8,6 +8,15 @@ config exports - see [Releases](README.md#releases) for how to cut one.
 
 ## [Unreleased]
 
+### Added
+- Model defaults: a newly added camera is asked for its manufacturer and model,
+  and known settings for it are filled in where the add form was left at the
+  default. Entries so far:
+  - Vatilon: `/cgi-bin/snapshot.cgi` and 500 ms polls.
+  - REOLINK RLC-520A: InitialTerminationTime.
+  - Tips in the notes for the Vatilon H46, Tapo TC65 and Vstarcam
+    "IP Camera".
+
 ### Changed
 - Event polls now ask the camera to hold the request for up to 5 seconds
   instead of 1, so while the camera holds them they run back to back. An event used to

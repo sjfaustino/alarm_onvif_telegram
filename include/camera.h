@@ -208,6 +208,11 @@ bool resolveCameraCredentials(const CameraConfig& cfg, CameraState& st);
 // non-fatal; it's retried later (lastSnapshotUriRetryMs).
 bool cameraSetupSequence(const CameraConfig& cfg, CameraState& st);
 
+// The camera's Manufacturer and Model (ONVIF GetDeviceInformation), with
+// cfg's own credentials. Needs no task or CameraState; waits at most
+// timeoutMs for the reply. False if the camera didn't answer with both.
+bool fetchCameraIdentity(const CameraConfig& cfg, String& manufacturer, String& model, uint16_t timeoutMs);
+
 // Individual steps, so a task can resubscribe without redoing discovery.
 bool cameraDiscoverServices(const CameraConfig& cfg, CameraState& st);
 bool cameraGetEventServiceCapabilities(const CameraConfig& cfg, CameraState& st);
