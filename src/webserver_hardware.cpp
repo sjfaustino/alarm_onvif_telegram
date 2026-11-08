@@ -8,6 +8,7 @@
 #include "webserver_internal.h"
 #include "hardware_form.h"
 #include "request_params.h"
+#include "camera.h" // CameraState, CameraStateLock
 
 // Internet-connectivity watchdog (relay-based router power-cycle) -
 // optional, off by default, same "enable checkbox needs a reboot, status
@@ -204,7 +205,110 @@ String renderPowerMonitorPage() {
   return html;
 }
 
+static void addRow(String& html, const char* label, const String& value) {
+  if (value.length() == 0) return;
+  html += "<tr><th style=\"text-align:left;white-space:nowrap\">" + String(label) + "</th><td>" + value + "</td></tr>";
+}
+
+static String formatClockSkew(long skewS) {
+  long magnitude = skewS < 0 ? -skewS : skewS;
+  if (magnitude <= 2) return "in step with the board";
+  String amount = magnitude < 120 ? String(magnitude) + " s" : formatUptime((unsigned long)magnitude * 1000UL);
+  return amount + (skewS > 0 ? " ahead of" : " behind") + " the board";
+}
+
+String renderCameraHardwarePage(const std::vector<CameraConfig>* liveCameras, std::vector<CameraState>* liveStates) {
+  String html = "<h1>Hardware - Cameras</h1>";
+  html += "<p class=\"hint\">What each camera reports about itself over ONVIF, read when it connects and "
+          "after an edit. Fields a camera doesn't report are left out.</p>";
+  html += "<form method=\"POST\" action=\"/hardware/cameras/refresh\"><button type=\"submit\">Read again "
+          "from all cameras</button></form>";
+  if (!liveCameras || !liveStates) return html;
+
+  unsigned long nowMs = millis();
+  for (size_t i = 0; i < liveCameras->size() && i < liveStates->size(); i++) {
+    const CameraConfig& cfg = (*liveCameras)[i];
+    CameraState& st = (*liveStates)[i];
+    html += "<fieldset><legend>" + htmlEscape(cfg.name) + "</legend>";
+    if (!cfg.enabled || !st.stateMutex) {
+      html += "<p class=\"hint\">Not monitored (disabled), so not read.</p></fieldset>";
+      continue;
+    }
+    CameraHardwareInfo hw;
+    unsigned long readMs;
+    bool skewKnown;
+    long skewS;
+    String snapshotUri, streamUri, topics;
+    {
+      CameraStateLock lock(st);
+      hw = st.hardware;
+      readMs = st.hardwareReadMs;
+      skewKnown = st.hardwareClockSkewKnown;
+      skewS = st.hardwareClockSkewS;
+      snapshotUri = st.snapshotUri;
+      streamUri = st.streamUri;
+      topics = st.supportedEventTopics;
+    }
+    if (readMs == 0) {
+      html += "<p class=\"hint\">Not read yet - the camera hasn't answered. Reload once it's online.</p>"
+              "</fieldset>";
+      continue;
+    }
+    if (hw.model.length() == 0) {
+      html += "<p class=\"hint\">The camera didn't answer GetDeviceInformation; what it did report is below.</p>";
+    }
+    html += "<table>";
+    addRow(html, "Manufacturer", htmlEscape(hw.manufacturer));
+    addRow(html, "Model", htmlEscape(hw.model));
+    if (hw.hardwareId != hw.model) addRow(html, "Hardware ID", htmlEscape(hw.hardwareId));
+    addRow(html, "Firmware", htmlEscape(hw.firmwareVersion));
+    addRow(html, "Serial number", htmlEscape(hw.serialNumber));
+    addRow(html, "MAC address", htmlEscape(hw.macAddress));
+    addRow(html, "IP address",
+           htmlEscape(hw.ipv4) + (hw.ipMode.length() ? " (" + htmlEscape(hw.ipMode) + ")" : String()));
+    addRow(html, "Network link", htmlEscape(hw.link));
+    addRow(html, "ONVIF name", htmlEscape(hw.scopeName));
+    addRow(html, "ONVIF location", htmlEscape(hw.scopeLocation));
+    if (hw.scopeHardware != hw.model) addRow(html, "ONVIF hardware", htmlEscape(hw.scopeHardware));
+    String clock;
+    if (hw.timeSource.length()) clock += "set by " + htmlEscape(hw.timeSource);
+    if (hw.timeZone.length()) clock += (clock.length() ? ", time zone " : "time zone ") + htmlEscape(hw.timeZone);
+    if (skewKnown) clock += (clock.length() ? ", " : "") + formatClockSkew(skewS);
+    addRow(html, "Clock", clock);
+    String streams;
+    for (const String& s : hw.videoStreams) streams += (streams.length() ? "<br>" : "") + htmlEscape(s);
+    addRow(html, "Video streams", streams);
+    addRow(html, "Snapshot URL", htmlEscape(snapshotUri));
+    addRow(html, "Live stream URL", htmlEscape(streamUri));
+    addRow(html, "Event types", htmlEscape(topics));
+    addRow(html, "Read", formatElapsedSince(readMs, nowMs));
+    html += "</table></fieldset>";
+  }
+  return html;
+}
+
 void registerHardwareRoutes(PsychicHttpServer& server) {
+  server.on("/hardware/cameras", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
+    return response->send(200, "text/html",
+                           renderShell(Tab::HardwareCameras, "", renderCameraHardwarePage(g_liveCameras, g_liveStates))
+                               .c_str());
+  });
+
+  server.on("/hardware/cameras/refresh", HTTP_POST, [](PsychicRequest* request, PsychicResponse* response) {
+    if (g_liveStates) {
+      for (CameraState& st : *g_liveStates) {
+        if (!st.stateMutex) continue;
+        CameraStateLock lock(st);
+        st.hardwareRefreshRequested = true;
+      }
+    }
+    return response->send(200, "text/html",
+                           renderShell(Tab::HardwareCameras,
+                                       "Reading again from every monitored camera - reload in a few seconds.",
+                                       renderCameraHardwarePage(g_liveCameras, g_liveStates))
+                               .c_str());
+  });
+
   server.on("/hardware/internet", HTTP_GET, [](PsychicRequest* request, PsychicResponse* response) {
     return response->send(200, "text/html",
                            renderShell(Tab::HardwareInternet, "", renderInternetWatchdogPage()).c_str());

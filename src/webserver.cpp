@@ -275,7 +275,7 @@ String renderShell(Tab active, const String& banner, const String& contentHtml) 
   bool systemOpen = (active == Tab::Firmware || active == Tab::Maintenance || active == Tab::Storage ||
                       active == Tab::Capabilities);
   bool hardwareOpen = (active == Tab::HardwareInternet || active == Tab::HardwareBridge ||
-                        active == Tab::HardwarePower);
+                        active == Tab::HardwarePower || active == Tab::HardwareCameras);
 
   html += "<nav class=\"sidebar\"><div class=\"brand\">Camera Monitor v" + String(FIRMWARE_VERSION) + "</div>";
   html += "<a href=\"/network\" class=\"";
@@ -325,6 +325,9 @@ String renderShell(Tab active, const String& banner, const String& contentHtml) 
   html += "<a href=\"/hardware/power\" class=\"";
   html += (active == Tab::HardwarePower) ? "active" : "";
   html += "\">220V Power</a>";
+  html += "<a href=\"/hardware/cameras\" class=\"";
+  html += (active == Tab::HardwareCameras) ? "active" : "";
+  html += "\">Cameras</a>";
   html += "</div>";
   html += "<a href=\"/security\" class=\"";
   html += (active == Tab::Security) ? "active" : "";

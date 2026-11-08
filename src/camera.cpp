@@ -94,6 +94,37 @@ bool fetchCameraIdentity(const CameraConfig& cfg, String& manufacturer, String& 
   return manufacturer.length() > 0 && model.length() > 0;
 }
 
+bool cameraFetchHardwareInfo(const CameraConfig& cfg, CameraState& st) {
+  static const char* kDevice = "http://www.onvif.org/ver10/device/wsdl/";
+  CameraHardwareInfo info;
+  String response = cameraSoapCall(cfg, st, cfg.deviceServiceUrl, "", String(kDevice) + "GetDeviceInformation",
+                                   "<tds:GetDeviceInformation/>");
+  bool answered = response.length() > 0 && !responseHasFault(response);
+  if (answered) parseDeviceInformation(response, info);
+  parseNetworkInterfaces(cameraSoapCall(cfg, st, cfg.deviceServiceUrl, "", String(kDevice) + "GetNetworkInterfaces",
+                                        "<tds:GetNetworkInterfaces/>"),
+                         info);
+  parseScopes(cameraSoapCall(cfg, st, cfg.deviceServiceUrl, "", String(kDevice) + "GetScopes", "<tds:GetScopes/>"),
+              info);
+  parseSystemDateAndTime(cameraSoapCall(cfg, st, cfg.deviceServiceUrl, "",
+                                        String(kDevice) + "GetSystemDateAndTime", "<tds:GetSystemDateAndTime/>"),
+                         info);
+  time_t boardNow = time(nullptr);
+  if (st.mediaServiceUrl.length() > 0) {
+    parseVideoStreams(cameraSoapCall(cfg, st, st.mediaServiceUrl, "", "http://www.onvif.org/ver10/media/wsdl/GetProfiles",
+                                     "<trt:GetProfiles/>"),
+                      info);
+  }
+  // Skew only against a synced board clock (2020 or later).
+  bool skewKnown = info.clockUtcEpoch > 0 && boardNow > 1577836800;
+  CameraStateLock lock(st);
+  st.hardware = info;
+  st.hardwareReadMs = millis();
+  st.hardwareClockSkewKnown = skewKnown;
+  st.hardwareClockSkewS = skewKnown ? (long)(info.clockUtcEpoch - (long long)boardNow) : 0;
+  return answered;
+}
+
 bool cameraDiscoverServices(const CameraConfig& cfg, CameraState& st) {
   Serial.printf("\n[%s] GetCapabilities\n", cfg.name.c_str());
 
@@ -645,7 +676,8 @@ void cameraTaskFn(void* pvParameters) {
       // Any URL/token may be stale after an edit, so rediscover everything via
       // the normal resubscribe path. snapshotUri is locked because /snap reads
       // it from loop()'s task.
-      { CameraStateLock lock(st); st.subscriptionActive = false; st.snapshotUri = ""; st.snapshotDigestChallenge = ""; }
+      { CameraStateLock lock(st); st.subscriptionActive = false; st.snapshotUri = ""; st.snapshotDigestChallenge = "";
+        st.hardwareReadMs = 0; } // re-read the hardware page's details with the new settings
       st.eventServiceUrl = ""; st.mediaServiceUrl = ""; st.pullPointUrl = ""; st.profileToken = "";
       st.retryDelayMs = 0; st.retryStreak = 0; st.lastRetry = 0; // retry immediately, not after a stale backoff
 
@@ -730,6 +762,15 @@ void cameraTaskFn(void* pvParameters) {
                         cfg.name.c_str());
         }
       }
+    }
+
+    // Hardware > Cameras: read once the camera has answered discovery, and again
+    // on request. A failed read isn't retried until then.
+    if (!snapshotBusy && st.mediaServiceUrl.length() > 0) {
+      bool wantHardware;
+      { CameraStateLock lock(st); wantHardware = st.hardwareReadMs == 0 || st.hardwareRefreshRequested;
+        st.hardwareRefreshRequested = false; }
+      if (wantHardware) cameraFetchHardwareInfo(cfg, st);
     }
 
     checkCameraOnlineStatus(cfg, st);

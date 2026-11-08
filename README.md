@@ -416,6 +416,18 @@ are cross-checked against each other, pairwise, so no two of them can be
 pointed at the same pin. Without any of these enabled, the board behaves
 exactly as it always has.
 
+The Hardware > Cameras page lists what each monitored camera reports about
+itself over ONVIF:
+- **Device:** manufacturer, model, hardware ID, firmware and serial number.
+- **Network:** MAC address, IP address (DHCP or static) and link speed.
+- **ONVIF scopes:** name, location and hardware.
+- **Clock:** time source, time zone and offset from the board's clock.
+- **Video streams:** codec, resolution, frame rate and bitrate of each.
+- **From the board:** the snapshot and live-stream URLs and the event types.
+
+Each camera's task reads this when the camera first answers and again after
+an edit; a button reads it again from every camera.
+
 ## Setup
 
 1. **Clone and copy the templates:**

@@ -5,6 +5,7 @@
 #include "config.h"
 #include "camera_store.h" // CameraConfig
 #include "snapshot_source.h" // SnapshotSource
+#include "camera_hardware.h" // CameraHardwareInfo
 
 // Recent snapshots kept in RAM per camera for the dashboard preview.
 static const size_t SNAPSHOT_HISTORY_SIZE = 5;
@@ -153,6 +154,16 @@ struct CameraState {
   // H46 accepts its nonce again); a 401 refreshes it.
   String snapshotDigestChallenge;
 
+  // What the camera reports about itself (Hardware > Cameras), read once the
+  // camera answers and again after an edit or a refresh request. hardwareReadMs
+  // is 0 until read; hardwareClockSkewS is camera minus board, valid when
+  // hardwareClockSkewKnown.
+  CameraHardwareInfo hardware;
+  unsigned long hardwareReadMs = 0;
+  bool hardwareRefreshRequested = false;
+  bool hardwareClockSkewKnown = false;
+  long hardwareClockSkewS = 0;
+
   // Ring of recently sent snapshots (PSRAM buffers owned here).
   // snapshotHistoryNext is the next write slot; Count is how many are filled.
   SnapshotHistoryEntry snapshotHistory[SNAPSHOT_HISTORY_SIZE];
@@ -163,7 +174,8 @@ struct CameraState {
   // subscriptionActive, isOffline, alertsEnabled, hasAlerted, lastAlert,
   // snapshotUri, streamUri, mjpegUri, supportedEventTopics, unusedEventTopics,
   // the digest*Count fields, user, pass, scheduledRevert*, pendingConfig,
-  // stopRequested, snapshotInFlight, snapshotDigestChallenge, lastContactMs, totalReconnects,
+  // stopRequested, snapshotInFlight, snapshotDigestChallenge, the hardware* fields,
+  // lastContactMs, totalReconnects,
   // taskRunning, lastTaskBeatMs, taskStallAlerted, and the
   // snapshot/reconnect/offline/motionLatency rings. Everything else belongs to
   // the owning camera task alone.
@@ -221,6 +233,9 @@ bool cameraGetEventServiceCapabilities(const CameraConfig& cfg, CameraState& st)
 bool cameraGetEventProperties(const CameraConfig& cfg, CameraState& st, String* outTopics = nullptr,
                                String* outUnusedTopics = nullptr);
 bool cameraFetchProfileAndSnapshotUri(const CameraConfig& cfg, CameraState& st);
+// Fills st.hardware (see CameraState). True if the camera answered
+// GetDeviceInformation; the other calls are best-effort.
+bool cameraFetchHardwareInfo(const CameraConfig& cfg, CameraState& st);
 bool cameraCreatePullPoint(const CameraConfig& cfg, CameraState& st);
 bool cameraPullMessages(const CameraConfig& cfg, CameraState& st);
 bool cameraRenewSubscription(const CameraConfig& cfg, CameraState& st);
