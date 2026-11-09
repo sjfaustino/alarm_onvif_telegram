@@ -73,99 +73,54 @@ static void incrementDigestCounter(CameraState& st, bool isPetEvent, MotionDetec
   }
 }
 
-void triggerMotionAlert(const CameraConfig& cfg, CameraState& st, bool isPetEvent, MotionDetectionKind kind) {
-  // Written by loop() (/on /off), so read under the lock.
-  bool alertsEnabled;
-  { CameraStateLock lock(st); alertsEnabled = st.alertsEnabled; }
-  if (!alertsEnabled) return; // muted via Telegram - see pollTelegramCommands
-
-  // lastAlert/hasAlerted are written only on this task; only other tasks need
-  // the lock to read them.
-  uint32_t nowMs = millis();
-  if (st.hasAlerted && nowMs - st.lastAlert < safeAlertCooldownMs(cfg)) {
-    // Count motion during the cooldown only if a real photo started it (not
-    // quiet hours). Pet events aren't counted: the digest is about motion.
-    if (st.digestArmed && !isPetEvent) {
-      st.suppressedMotionCount++;
-      st.lastSuppressedMotionMs = nowMs; // when THIS event happened, not when the digest will flush
-    }
-    return; // cooling down
-  }
-
-  // Quiet hours suppress only the send; detection, logging and the snapshot
-  // still happen. Tamper/signal loss ignore quiet hours.
-  bool quiet = cfg.quietHoursEnabled && localClockSynced() &&
-               isWithinQuietHours(currentLocalMinuteOfDay(), cfg.quietStartMinute, cfg.quietEndMinute);
-  if (quiet) {
-    // Must disarm the digest here: lastAlert moves forward, and a stale
-    // lastSuppressedMotionMs would underflow the digest's elapsed time.
-    st.digestArmed = false;
-    st.suppressedMotionCount = 0;
-    { CameraStateLock lock(st); st.lastAlert = nowMs; st.hasAlerted = true;
-      incrementDigestCounter(st, isPetEvent, kind); }
-    logEvent(cfg.name + ": " + (isPetEvent ? "pet" : motionKindLogLabel(kind)) +
-             " detected (quiet hours - no Telegram alert)");
-    if (st.snapshotUri.length() > 0) {
-      size_t jpgLen = 0;
-      uint8_t* jpg = fetchOneSnapshot(cfg, st, jpgLen);
-      if (jpg) {
-        pushCameraSnapshot(cfg, st, jpg, jpgLen, snapshotSourceForMotion(isPetEvent, kind)); // takes ownership
-      }
-    }
-    return;
-  }
-
-  std::vector<AlertRecipient> recipients;
-  for (auto& u : loadTelegramUsers()) {
-    if (telegramUserWantsCamera(u, cfg.name)) recipients.push_back({u.chatId, u.language});
-  }
-  if (recipients.empty()) {
-    Serial.printf("[%s] No Telegram user is subscribed to this camera - skipping send.\n", cfg.name.c_str());
-    return;
-  }
-
-  // Text-only pet alert: the snapshot is still stored, just not sent.
-  if (isPetEvent && cfg.petAlertsTextOnly) {
-    { CameraStateLock lock(st); st.lastAlert = nowMs; st.hasAlerted = true;
-      incrementDigestCounter(st, isPetEvent, kind); }
-    st.digestArmed = true;
-    st.suppressedMotionCount = 0;
-    String timestamp = nowTimestampString();
-    for (auto& r : recipients) sendTelegramMessageTo(r.chatId, trPetAlertText(r.language, cfg.name, timestamp));
-    logEvent(cfg.name + ": pet alert (text) to " + String(recipients.size()) + " recipient(s)");
-    noteMultiCameraAlert(cfg.name);
-    if (st.snapshotUri.length() > 0) {
-      size_t jpgLen = 0;
-      uint8_t* jpg = fetchOneSnapshot(cfg, st, jpgLen);
-      if (jpg) pushCameraSnapshot(cfg, st, jpg, jpgLen, SnapshotSource::Pet); // takes ownership
-    }
-    return;
-  }
-
-  // Spend the cooldown only once a send is attempted, so no subscribers doesn't
-  // eat it. A failed send still spends it, to avoid retry storms.
+static void recordQuietHoursMotion(const CameraConfig& cfg, CameraState& st, bool isPetEvent, MotionDetectionKind kind, uint32_t nowMs) {
+  // Must disarm the digest here: lastAlert moves forward, and a stale
+  // lastSuppressedMotionMs would underflow the digest's elapsed time.
+  st.digestArmed = false;
+  st.suppressedMotionCount = 0;
   { CameraStateLock lock(st); st.lastAlert = nowMs; st.hasAlerted = true;
     incrementDigestCounter(st, isPetEvent, kind); }
-  // Fresh digest cycle, so nothing is counted twice.
+  logEvent(cfg.name + ": " + (isPetEvent ? "pet" : motionKindLogLabel(kind)) +
+           " detected (quiet hours - no Telegram alert)");
+  if (st.snapshotUri.length() > 0) {
+    size_t jpgLen = 0;
+    uint8_t* jpg = fetchOneSnapshot(cfg, st, jpgLen);
+    if (jpg) {
+      pushCameraSnapshot(cfg, st, jpg, jpgLen, snapshotSourceForMotion(isPetEvent, kind)); // takes ownership
+    }
+  }
+}
+
+static void sendPetTextAlert(const CameraConfig& cfg, CameraState& st, bool isPetEvent, MotionDetectionKind kind, uint32_t nowMs, const std::vector<AlertRecipient>& recipients) {
+  { CameraStateLock lock(st); st.lastAlert = nowMs; st.hasAlerted = true;
+    incrementDigestCounter(st, isPetEvent, kind); }
   st.digestArmed = true;
   st.suppressedMotionCount = 0;
-
-  // No snapshot address (some cameras, e.g. Tapo, don't offer one; for others it
-  // may not be resolved yet): send the same caption as text rather than nothing.
-  if (st.snapshotUri.length() == 0) {
-    String timestamp = nowTimestampString();
-    for (auto& r : recipients) {
-      String text = trMotionCaption(r.language, cfg.name, timestamp, isPetEvent, kind) + " " + trNoPhotoNote(r.language);
-      if (!sendTelegramMessageTo(r.chatId, text)) {
-        Serial.printf("[%s] Telegram send to chat %s failed.\n", cfg.name.c_str(), r.chatId.c_str());
-      }
-    }
-    logEvent(cfg.name + ": " + (isPetEvent ? "pet" : motionKindLogLabel(kind)) + " alert (text, no snapshot) to " +
-             String(recipients.size()) + " recipient(s)");
-    noteMultiCameraAlert(cfg.name);
-    return;
+  String timestamp = nowTimestampString();
+  for (auto& r : recipients) sendTelegramMessageTo(r.chatId, trPetAlertText(r.language, cfg.name, timestamp));
+  logEvent(cfg.name + ": pet alert (text) to " + String(recipients.size()) + " recipient(s)");
+  noteMultiCameraAlert(cfg.name);
+  if (st.snapshotUri.length() > 0) {
+    size_t jpgLen = 0;
+    uint8_t* jpg = fetchOneSnapshot(cfg, st, jpgLen);
+    if (jpg) pushCameraSnapshot(cfg, st, jpg, jpgLen, SnapshotSource::Pet); // takes ownership
   }
+}
 
+static void sendTextMotionAlert(const CameraConfig& cfg, CameraState& st, bool isPetEvent, MotionDetectionKind kind, const std::vector<AlertRecipient>& recipients) {
+  String timestamp = nowTimestampString();
+  for (auto& r : recipients) {
+    String text = trMotionCaption(r.language, cfg.name, timestamp, isPetEvent, kind) + " " + trNoPhotoNote(r.language);
+    if (!sendTelegramMessageTo(r.chatId, text)) {
+      Serial.printf("[%s] Telegram send to chat %s failed.\n", cfg.name.c_str(), r.chatId.c_str());
+    }
+  }
+  logEvent(cfg.name + ": " + (isPetEvent ? "pet" : motionKindLogLabel(kind)) + " alert (text, no snapshot) to " +
+           String(recipients.size()) + " recipient(s)");
+  noteMultiCameraAlert(cfg.name);
+}
+
+static void sendMotionPhotos(const CameraConfig& cfg, CameraState& st, bool isPetEvent, MotionDetectionKind kind, const std::vector<AlertRecipient>& recipients) {
   unsigned int shots = safeSnapshotBurstCount(cfg);
   logEvent(cfg.name + ": " + (isPetEvent ? "pet" : motionKindLogLabel(kind)) + " alert, " + String(shots) +
            " shot(s) to " + String(recipients.size()) + " recipient(s)");
@@ -204,6 +159,67 @@ void triggerMotionAlert(const CameraConfig& cfg, CameraState& st, bool isPetEven
     }
     pushCameraSnapshot(cfg, st, jpg, jpgLen, snapshotSourceForMotion(isPetEvent, kind)); // takes ownership
   }
+}
+
+void triggerMotionAlert(const CameraConfig& cfg, CameraState& st, bool isPetEvent, MotionDetectionKind kind) {
+  // Written by loop() (/on /off), so read under the lock.
+  bool alertsEnabled;
+  { CameraStateLock lock(st); alertsEnabled = st.alertsEnabled; }
+  if (!alertsEnabled) return; // muted via Telegram - see pollTelegramCommands
+
+  // lastAlert/hasAlerted are written only on this task; only other tasks need
+  // the lock to read them.
+  uint32_t nowMs = millis();
+  if (st.hasAlerted && nowMs - st.lastAlert < safeAlertCooldownMs(cfg)) {
+    // Count motion during the cooldown only if a real photo started it (not
+    // quiet hours). Pet events aren't counted: the digest is about motion.
+    if (st.digestArmed && !isPetEvent) {
+      st.suppressedMotionCount++;
+      st.lastSuppressedMotionMs = nowMs; // when THIS event happened, not when the digest will flush
+    }
+    return; // cooling down
+  }
+
+  // Quiet hours suppress only the send; detection, logging and the snapshot
+  // still happen. Tamper/signal loss ignore quiet hours.
+  bool quiet = cfg.quietHoursEnabled && localClockSynced() &&
+               isWithinQuietHours(currentLocalMinuteOfDay(), cfg.quietStartMinute, cfg.quietEndMinute);
+  if (quiet) {
+    recordQuietHoursMotion(cfg, st, isPetEvent, kind, nowMs);
+    return;
+  }
+
+  std::vector<AlertRecipient> recipients;
+  for (auto& u : loadTelegramUsers()) {
+    if (telegramUserWantsCamera(u, cfg.name)) recipients.push_back({u.chatId, u.language});
+  }
+  if (recipients.empty()) {
+    Serial.printf("[%s] No Telegram user is subscribed to this camera - skipping send.\n", cfg.name.c_str());
+    return;
+  }
+
+  // Text-only pet alert: the snapshot is still stored, just not sent.
+  if (isPetEvent && cfg.petAlertsTextOnly) {
+    sendPetTextAlert(cfg, st, isPetEvent, kind, nowMs, recipients);
+    return;
+  }
+
+  // Spend the cooldown only once a send is attempted, so no subscribers doesn't
+  // eat it. A failed send still spends it, to avoid retry storms.
+  { CameraStateLock lock(st); st.lastAlert = nowMs; st.hasAlerted = true;
+    incrementDigestCounter(st, isPetEvent, kind); }
+  // Fresh digest cycle, so nothing is counted twice.
+  st.digestArmed = true;
+  st.suppressedMotionCount = 0;
+
+  // No snapshot address (some cameras, e.g. Tapo, don't offer one; for others it
+  // may not be resolved yet): send the same caption as text rather than nothing.
+  if (st.snapshotUri.length() == 0) {
+    sendTextMotionAlert(cfg, st, isPetEvent, kind, recipients);
+    return;
+  }
+
+  sendMotionPhotos(cfg, st, isPetEvent, kind, recipients);
 }
 
 // Dashboard "Send test alert": one fresh snapshot to this camera's

@@ -27,7 +27,7 @@ String renderCapabilitiesPanel(std::vector<CameraConfig>* liveCameras, std::vect
     bool isLive = liveStates && i < liveStates->size() && c.enabled;
     if (!isLive) {
       html += "<td colspan=\"3\" class=\"hint\">" +
-              String(c.enabled ? "Not currently running (added since this board's last boot) - reboot to "
+              String(c.enabled ? "Not currently running - reboot to "
                                   "check its capabilities."
                                 : "Disabled.") +
               "</td></tr>";

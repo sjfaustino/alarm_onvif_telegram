@@ -134,23 +134,8 @@ ConfigImportApplyResult applyConfigImport(const String& text) {
   return result;
 }
 
-String buildConfigExport() {
+static void appendCamerasSection(String& out) {
   std::vector<CameraConfig> cams = loadCameras();
-  std::vector<TelegramUser> users = loadTelegramUsers();
-  WifiCredentials net = loadWifiCredentials();
-
-  String out;
-  out += "=== Camera Monitor v" + String(FIRMWARE_VERSION) + " Configuration Export ===\n";
-  out += "Firmware build: " + String(__DATE__) + " " + String(__TIME__) + "\n";
-  out += "Board uptime at export: " + formatUptime(millis()) + "\n\n";
-  out += "KEEP THIS FILE PRIVATE: the machine-readable CAMERAS block below contains every\n";
-  out += "camera's username and password, so an import restores them. WiFi passwords are\n";
-  out += "never exported - re-enter the WiFi password after importing a Network section.\n";
-  out += "\nEach section below is followed by a machine-readable block (marked '### ...') used\n";
-  out += "by the Security page's Import - its lines contain non-printable field separators, so\n";
-  out += "they'll look like run-together text in a plain text editor; that's expected, don't\n";
-  out += "edit them by hand.\n";
-
   out += "\n--- Cameras (" + String(cams.size()) + ") ---\n";
   for (size_t i = 0; i < cams.size(); i++) {
     const CameraConfig& c = cams[i];
@@ -174,7 +159,10 @@ String buildConfigExport() {
   }
   out += "### CAMERAS v" + String(CAMERA_SCHEMA_VERSION) + "\n";
   for (auto& c : cams) out += serializeCamera(c) + "\n";
+}
 
+static void appendTelegramUsersSection(String& out) {
+  std::vector<TelegramUser> users = loadTelegramUsers();
   out += "\n--- Telegram Users (" + String(users.size()) + ") ---\n";
   for (size_t i = 0; i < users.size(); i++) {
     const TelegramUser& u = users[i];
@@ -199,7 +187,10 @@ String buildConfigExport() {
   }
   out += "### TELEGRAM_USERS v" + String(TELEGRAM_USER_SCHEMA_VERSION) + "\n";
   for (auto& u : users) out += serializeUser(u) + "\n";
+}
 
+static void appendNetworkSection(String& out) {
+  WifiCredentials net = loadWifiCredentials();
   out += "\n--- Network ---\n";
   out += "Primary SSID: " + net.primary.ssid + "\n";
   out += "Primary password: (not exported - re-enter manually)\n";
@@ -218,7 +209,9 @@ String buildConfigExport() {
   out += "POSIX TZ (blank = UTC): " + (net.posixTz.length() > 0 ? net.posixTz : String("(blank/UTC)")) + "\n";
   out += "### NETWORK v" + String(NETWORK_SCHEMA_VERSION) + "\n";
   out += serializeNetworkConfig(net) + "\n";
+}
 
+static void appendStorageSection(String& out) {
   out += "\n--- Storage ---\n";
   SdSettings sdSettings = loadSdSettings();
   out += "SD card storage: " + String(sdSettings.enabled ? "enabled" : "disabled") + "\n";
@@ -231,7 +224,9 @@ String buildConfigExport() {
   out += "### SDSETTINGS v2\n";
   out += String(sdSettings.enabled ? "1" : "0") + "\x1F" + String(sdSettings.checkIntervalHours) +
          "\x1F" + String(sdSettings.retentionDays) + "\n";
+}
 
+static void appendInternetWatchdogSection(String& out) {
   out += "\n--- Internet Watchdog ---\n";
   NetWatchdogSettings netWd = loadNetWatchdogSettings();
   out += "Enabled: " + String(netWd.enabled ? "yes" : "no") + "\n";
@@ -243,7 +238,9 @@ String buildConfigExport() {
   out += String(netWd.enabled ? "1" : "0") + "\x1F" + String(netWd.pin) + "\x1F" +
          String(netWd.activeLow ? "1" : "0") + "\x1F" + String(netWd.outageThresholdMs) + "\x1F" +
          String(netWd.pulseDurationMs) + "\n";
+}
 
+static void appendBridgeWatchdogSection(String& out) {
   out += "\n--- Camera Bridge Watchdog ---\n";
   BridgeWatchdogSettings bridgeWd = loadBridgeWatchdogSettings();
   out += "Enabled: " + String(bridgeWd.enabled ? "yes" : "no") + "\n";
@@ -258,7 +255,9 @@ String buildConfigExport() {
          stripFieldSep(bridgeWd.cameraB) + "\x1F" + String(bridgeWd.pin) + "\x1F" +
          String(bridgeWd.activeLow ? "1" : "0") + "\x1F" + String(bridgeWd.outageThresholdMs) + "\x1F" +
          String(bridgeWd.pulseDurationMs) + "\n";
+}
 
+static void appendPowerMonitorSection(String& out) {
   out += "\n--- 220V Power Monitor ---\n";
   PowerMonitorSettings powerMon = loadPowerMonitorSettings();
   out += "Enabled: " + String(powerMon.enabled ? "yes" : "no") + "\n";
@@ -267,6 +266,29 @@ String buildConfigExport() {
   out += "### POWERMONITOR v1\n";
   out += String(powerMon.enabled ? "1" : "0") + "\x1F" + String(powerMon.pin) + "\x1F" +
          String(powerMon.activeHigh ? "1" : "0") + "\n";
+}
+
+String buildConfigExport() {
+
+  String out;
+  out += "=== Camera Monitor v" + String(FIRMWARE_VERSION) + " Configuration Export ===\n";
+  out += "Firmware build: " + String(__DATE__) + " " + String(__TIME__) + "\n";
+  out += "Board uptime at export: " + formatUptime(millis()) + "\n\n";
+  out += "KEEP THIS FILE PRIVATE: the machine-readable CAMERAS block below contains every\n";
+  out += "camera's username and password, so an import restores them. WiFi passwords are\n";
+  out += "never exported - re-enter the WiFi password after importing a Network section.\n";
+  out += "\nEach section below is followed by a machine-readable block (marked '### ...') used\n";
+  out += "by the Security page's Import - its lines contain non-printable field separators, so\n";
+  out += "they'll look like run-together text in a plain text editor; that's expected, don't\n";
+  out += "edit them by hand.\n";
+
+  appendCamerasSection(out);
+  appendTelegramUsersSection(out);
+  appendNetworkSection(out);
+  appendStorageSection(out);
+  appendInternetWatchdogSection(out);
+  appendBridgeWatchdogSection(out);
+  appendPowerMonitorSection(out);
 
   return out;
 }

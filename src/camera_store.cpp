@@ -124,7 +124,7 @@ std::vector<CameraConfig> loadCameras() {
       for (uint16_t i = 0; i < chunkCount; i++) chunks.push_back(prefs.getString(chunkKey(i).c_str(), ""));
       blob = joinChunks(chunks);
     } else if (hasLegacyList) {
-      blob = prefs.getString(NVS_KEY_LIST_LEGACY, ""); // pre-chunking format - see its declaration comment
+      blob = prefs.getString(NVS_KEY_LIST_LEGACY, ""); // pre-chunking format
     }
     storedVersion = prefs.getUShort(NVS_KEY_SCHEMA, 0);
     prefs.end();

@@ -51,6 +51,81 @@ static String formatDateForDisplay(const String& yyyymmdd) {
   return yyyymmdd.substring(0, 4) + "-" + yyyymmdd.substring(4, 6) + "-" + yyyymmdd.substring(6, 8);
 }
 
+static String renderSourceFilterLinks(const std::vector<SnapshotEntryInfo>& entries, const String& sourceFilter, const String& baseUrl,
+                                      const String& dateQueryParam) {
+  String html;
+  size_t countByKind[8] = {0};
+  for (auto& e : entries) countByKind[(size_t)e.source]++;
+  html += "<p>";
+  html += sourceFilter.length() == 0
+      ? ("<strong>All (" + String((unsigned)entries.size()) + ")</strong> ")
+      : ("<a href=\"" + baseUrl + dateQueryParam + "\">All (" + String((unsigned)entries.size()) + ")</a> ");
+  // Only kinds this camera actually has.
+  for (SnapshotSource s : kAllSnapshotSources) {
+    size_t n = countByKind[(size_t)s];
+    if (n == 0) continue;
+    String label = snapshotSourceLabel(s);
+    String linkUrl = baseUrl + "&source=" + urlEncode(label) + dateQueryParam;
+    html += sourceFilter == label
+        ? ("<strong>" + label + " (" + String((unsigned)n) + ")</strong> ")
+        : ("<a href=\"" + linkUrl + "\">" + label + " (" + String((unsigned)n) + ")</a> ");
+  }
+  html += "</p>";
+  return html;
+}
+
+static String renderDateFilterLinks(const std::vector<SnapshotEntryInfo>& entries, const String& dateFilter, const String& baseUrl,
+                                    const String& sourceQueryParam) {
+  String html;
+  // Distinct dates, newest first, with counts. "" (RAM ring or old filenames)
+  // never becomes an option.
+  std::vector<String> distinctDates;
+  std::vector<size_t> countByDate;
+  for (auto& e : entries) {
+    if (e.date.length() == 0) continue;
+    bool found = false;
+    for (size_t i = 0; i < distinctDates.size(); i++) {
+      if (distinctDates[i] == e.date) { countByDate[i]++; found = true; break; }
+    }
+    if (!found) { distinctDates.push_back(e.date); countByDate.push_back(1); }
+  }
+  // SD-backed history only.
+  if (!distinctDates.empty()) {
+    html += "<p>";
+    html += dateFilter.length() == 0 ? "<strong>All dates</strong> "
+                                      : ("<a href=\"" + baseUrl + sourceQueryParam + "\">All dates</a> ");
+    for (size_t i = 0; i < distinctDates.size(); i++) {
+      String linkUrl = baseUrl + "&date=" + urlEncode(distinctDates[i]) + sourceQueryParam;
+      String label = formatDateForDisplay(distinctDates[i]) + " (" + String((unsigned)countByDate[i]) + ")";
+      html += dateFilter == distinctDates[i] ? ("<strong>" + label + "</strong> ")
+                                              : ("<a href=\"" + linkUrl + "\">" + label + "</a> ");
+    }
+    html += "</p>";
+  }
+  return html;
+}
+
+static String renderThumbnails(const String& cameraName, const std::vector<SnapshotEntryInfo>& entries, const std::vector<size_t>& displayAges,
+                               size_t startAge, size_t endAge) {
+  String html;
+  unsigned long renderMs = millis(); // one shared cache-busting value for this page load
+  html += "<div>";
+  for (size_t i = startAge; i < endAge; i++) {
+    size_t age = displayAges[i];
+    String url = "/cameras/snapshot?name=" + urlEncode(cameraName) + "&age=" + String((unsigned)age) +
+                 "&t=" + String(renderMs);
+    // Visible caption here (the Preview strip uses a tooltip).
+    String sourceLabel = htmlEscape(snapshotSourceLabel(entries[age].source));
+    html += "<span style=\"display:inline-block;margin:4px;text-align:center;\">"
+            "<a href=\"" + url + "\" target=\"_blank\">"
+            "<img src=\"" + url + "\" style=\"display:block;max-width:160px;max-height:120px;\" "
+            "alt=\"snapshot\"></a>"
+            "<span class=\"hint\">" + sourceLabel + "</span></span>";
+  }
+  html += "</div>";
+  return html;
+}
+
 // One camera's thumbnails, optionally filtered by source and/or date (both
 // apply). Each thumbnail re-lists the SD directory via /cameras/snapshot - an
 // accepted cost, bounded by GALLERY_PAGE_SIZE. page 0 = newest; an
@@ -72,56 +147,13 @@ static String renderCameraGrid(const String& cameraName, size_t page, const Stri
   // One bulk fetch; the filter bars need every entry anyway.
   std::vector<SnapshotEntryInfo> entries = cameraSnapshotEntriesAll(cfg, st);
 
-  size_t countByKind[8] = {0};
-  for (auto& e : entries) countByKind[(size_t)e.source]++;
-
-  // Distinct dates, newest first, with counts. "" (RAM ring or old filenames)
-  // never becomes an option.
-  std::vector<String> distinctDates;
-  std::vector<size_t> countByDate;
-  for (auto& e : entries) {
-    if (e.date.length() == 0) continue;
-    bool found = false;
-    for (size_t i = 0; i < distinctDates.size(); i++) {
-      if (distinctDates[i] == e.date) { countByDate[i]++; found = true; break; }
-    }
-    if (!found) { distinctDates.push_back(e.date); countByDate.push_back(1); }
-  }
-
   String baseUrl = "/gallery?camera=" + urlEncode(cameraName);
   // Links keep the other filter, so the two combine.
   String dateQueryParam = dateFilter.length() > 0 ? ("&date=" + urlEncode(dateFilter)) : "";
   String sourceQueryParam = sourceFilter.length() > 0 ? ("&source=" + urlEncode(sourceFilter)) : "";
 
-  html += "<p>";
-  html += sourceFilter.length() == 0
-      ? ("<strong>All (" + String((unsigned)entries.size()) + ")</strong> ")
-      : ("<a href=\"" + baseUrl + dateQueryParam + "\">All (" + String((unsigned)entries.size()) + ")</a> ");
-  // Only kinds this camera actually has.
-  for (SnapshotSource s : kAllSnapshotSources) {
-    size_t n = countByKind[(size_t)s];
-    if (n == 0) continue;
-    String label = snapshotSourceLabel(s);
-    String linkUrl = baseUrl + "&source=" + urlEncode(label) + dateQueryParam;
-    html += sourceFilter == label
-        ? ("<strong>" + label + " (" + String((unsigned)n) + ")</strong> ")
-        : ("<a href=\"" + linkUrl + "\">" + label + " (" + String((unsigned)n) + ")</a> ");
-  }
-  html += "</p>";
-
-  // SD-backed history only.
-  if (!distinctDates.empty()) {
-    html += "<p>";
-    html += dateFilter.length() == 0 ? "<strong>All dates</strong> "
-                                      : ("<a href=\"" + baseUrl + sourceQueryParam + "\">All dates</a> ");
-    for (size_t i = 0; i < distinctDates.size(); i++) {
-      String linkUrl = baseUrl + "&date=" + urlEncode(distinctDates[i]) + sourceQueryParam;
-      String label = formatDateForDisplay(distinctDates[i]) + " (" + String((unsigned)countByDate[i]) + ")";
-      html += dateFilter == distinctDates[i] ? ("<strong>" + label + "</strong> ")
-                                              : ("<a href=\"" + linkUrl + "\">" + label + "</a> ");
-    }
-    html += "</p>";
-  }
+  html += renderSourceFilterLinks(entries, sourceFilter, baseUrl, dateQueryParam);
+  html += renderDateFilterLinks(entries, dateFilter, baseUrl, sourceQueryParam);
 
   // Real age values of matching entries, so thumbnails request the right item
   // from the unfiltered store.
@@ -155,21 +187,7 @@ static String renderCameraGrid(const String& cameraName, size_t page, const Stri
             " of " + String((unsigned)count) + " stored snapshots" + filterSuffix + ".</p>";
   }
 
-  unsigned long renderMs = millis(); // one shared cache-busting value for this page load
-  html += "<div>";
-  for (size_t i = startAge; i < endAge; i++) {
-    size_t age = displayAges[i];
-    String url = "/cameras/snapshot?name=" + urlEncode(cameraName) + "&age=" + String((unsigned)age) +
-                 "&t=" + String(renderMs);
-    // Visible caption here (the Preview strip uses a tooltip).
-    String sourceLabel = htmlEscape(snapshotSourceLabel(entries[age].source));
-    html += "<span style=\"display:inline-block;margin:4px;text-align:center;\">"
-            "<a href=\"" + url + "\" target=\"_blank\">"
-            "<img src=\"" + url + "\" style=\"display:block;max-width:160px;max-height:120px;\" "
-            "alt=\"snapshot\"></a>"
-            "<span class=\"hint\">" + sourceLabel + "</span></span>";
-  }
-  html += "</div>";
+  html += renderThumbnails(cameraName, entries, displayAges, startAge, endAge);
 
   if (hasNewer || hasOlder) {
     String base = baseUrl + sourceQueryParam + dateQueryParam + "&page=";

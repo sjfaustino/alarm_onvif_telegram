@@ -539,8 +539,8 @@ Prove the check with `board.py verify`, then flash a normal build.
      (GetCapabilities, event service, snapshot URI) without saving anything, so a
      wrong URL/credential shows up before you commit to a reboot. Editing an existing
      camera leaves its password unchanged if you leave that field blank, same as the
-     Network page's WiFi password. Adding, editing, or deleting writes to NVS
-     immediately but only takes effect after the next reboot.
+     Network page's WiFi password. Adding, editing, or deleting applies straight
+     away, without a reboot.
    - **Telegram Users** — add/edit/delete/view recipients. Each one picks specific
      cameras or "all cameras", and independently toggles heartbeat/boot messages,
      `/on`/`/off`/`/status` permission, and `/snap` permission (separately, since

@@ -268,54 +268,31 @@ bool cameraGetEventProperties(const CameraConfig& cfg, CameraState& st, String* 
   return true;
 }
 
-bool cameraFetchProfileAndSnapshotUri(const CameraConfig& cfg, CameraState& st) {
-  Serial.printf("\n[%s] Resolving snapshot URI\n", cfg.name.c_str());
-
-  if (cfg.snapshotUriOverride.length() > 0) {
-    // {USER}/{PASS} allow query-string auth (e.g. Vstarcam's
-    // loginuse/loginpas) without credentials in a file; {WIDTH}/{HEIGHT}
-    // request a size. No-op if the override doesn't use them.
-    String resolved = cfg.snapshotUriOverride;
-    String user;
-    {
-      CameraStateLock lock(st);
-      user = st.user;
-      resolved.replace("{USER}", st.user);
-      resolved.replace("{PASS}", st.pass);
-      resolved.replace("{WIDTH}", String(safeSnapshotDimension(cfg.snapshotMaxWidth)));
-      resolved.replace("{HEIGHT}", String(safeSnapshotDimension(cfg.snapshotMaxHeight)));
-      st.snapshotUri = resolved;
-    }
-    // Log with the password masked.
-    String logUri = cfg.snapshotUriOverride;
-    logUri.replace("{USER}", user);
-    logUri.replace("{PASS}", "***");
-    logUri.replace("{WIDTH}", String(safeSnapshotDimension(cfg.snapshotMaxWidth)));
-    logUri.replace("{HEIGHT}", String(safeSnapshotDimension(cfg.snapshotMaxHeight)));
-    Serial.printf("[%s] Using configured snapshot override: %s\n", cfg.name.c_str(), redactUrlSecrets(logUri).c_str());
-    return true;
+static void useSnapshotOverride(const CameraConfig& cfg, CameraState& st) {
+  // {USER}/{PASS} allow query-string auth (e.g. Vstarcam's
+  // loginuse/loginpas) without credentials in a file; {WIDTH}/{HEIGHT}
+  // request a size. No-op if the override doesn't use them.
+  String resolved = cfg.snapshotUriOverride;
+  String user;
+  {
+    CameraStateLock lock(st);
+    user = st.user;
+    resolved.replace("{USER}", st.user);
+    resolved.replace("{PASS}", st.pass);
+    resolved.replace("{WIDTH}", String(safeSnapshotDimension(cfg.snapshotMaxWidth)));
+    resolved.replace("{HEIGHT}", String(safeSnapshotDimension(cfg.snapshotMaxHeight)));
+    st.snapshotUri = resolved;
   }
+  // Log with the password masked.
+  String logUri = cfg.snapshotUriOverride;
+  logUri.replace("{USER}", user);
+  logUri.replace("{PASS}", "***");
+  logUri.replace("{WIDTH}", String(safeSnapshotDimension(cfg.snapshotMaxWidth)));
+  logUri.replace("{HEIGHT}", String(safeSnapshotDimension(cfg.snapshotMaxHeight)));
+  Serial.printf("[%s] Using configured snapshot override: %s\n", cfg.name.c_str(), redactUrlSecrets(logUri).c_str());
+}
 
-  if (st.mediaServiceUrl.length() == 0) {
-    Serial.printf("[%s] No media service discovered, can't resolve snapshot URI.\n", cfg.name.c_str());
-    return false;
-  }
-
-  String action = "http://www.onvif.org/ver10/media/wsdl/GetProfiles";
-  String body = "<trt:GetProfiles/>";
-  String response = cameraSoapCall(cfg, st, st.mediaServiceUrl, "", action, body);
-
-  if (response.length() == 0 || responseHasFault(response)) {
-    Serial.printf("[%s] GetProfiles FAILED\n", cfg.name.c_str());
-    return false;
-  }
-
-  std::vector<ProfileInfo> profiles = parseProfiles(response);
-  if (profiles.empty()) {
-    Serial.printf("[%s] No profiles found in GetProfiles response.\n", cfg.name.c_str());
-    return false;
-  }
-
+static ProfileInfo chooseProfile(const CameraConfig& cfg, std::vector<ProfileInfo>& profiles) {
   ProfileInfo chosen = profiles[0];
   if (cfg.preferredProfileKeyword.length() > 0) {
     String keyword = cfg.preferredProfileKeyword;
@@ -326,32 +303,11 @@ bool cameraFetchProfileAndSnapshotUri(const CameraConfig& cfg, CameraState& st) 
       if (lname.indexOf(keyword) >= 0) { chosen = p; break; }
     }
   }
-  st.profileToken = chosen.token;
-  Serial.printf("[%s] Using profile '%s' (token=%s) out of %u found\n",
-                cfg.name.c_str(), chosen.name.c_str(), chosen.token.c_str(), (unsigned)profiles.size());
+  return chosen;
+}
 
-  String snapAction = "http://www.onvif.org/ver10/media/wsdl/GetSnapshotUri";
-  String snapBody = "<trt:GetSnapshotUri><trt:ProfileToken>" + xmlEscape(st.profileToken) +
-                     "</trt:ProfileToken></trt:GetSnapshotUri>";
-  String snapResponse = cameraSoapCall(cfg, st, st.mediaServiceUrl, "", snapAction, snapBody);
-
-  if (snapResponse.length() == 0 || responseHasFault(snapResponse)) {
-    Serial.printf("[%s] GetSnapshotUri FAILED\n", cfg.name.c_str());
-    return false;
-  }
-
-  String resolvedUri = findElementByLocalName(snapResponse, "Uri");
-  resolvedUri.trim();
-  if (resolvedUri.length() == 0) {
-    Serial.printf("[%s] Could not find snapshot URI in response.\n", cfg.name.c_str());
-    return false;
-  }
-  { CameraStateLock lock(st); st.snapshotUri = resolvedUri; }
-
-  Serial.printf("[%s] Snapshot URI: %s\n", cfg.name.c_str(), redactUrlSecrets(resolvedUri).c_str());
-  Serial.println("  ^ if this looks wrong (bad IP/port), that's the same GetSnapshotUri "
-                  "quirk seen on the XM530 - you may need a snapshotUriOverride for this camera too.");
-
+// False if the camera refused, in which case no MJPEG lookup is worth trying.
+static bool fetchRtspUri(const CameraConfig& cfg, CameraState& st) {
   // Best-effort RTSP URI, reusing the chosen profile.
   String streamAction = "http://www.onvif.org/ver10/media/wsdl/GetStreamUri";
   String streamBody = "<trt:GetStreamUri><trt:StreamSetup><tt:Stream>RTP-Unicast</tt:Stream>"
@@ -361,7 +317,7 @@ bool cameraFetchProfileAndSnapshotUri(const CameraConfig& cfg, CameraState& st) 
   if (streamResponse.length() == 0 || responseHasFault(streamResponse)) {
     Serial.printf("[%s] GetStreamUri FAILED - no RTSP link will be shown on the dashboard for this "
                   "camera, motion detection/snapshot alerts are unaffected.\n", cfg.name.c_str());
-    return true;
+    return false;
   }
   String resolvedStreamUri = findElementByLocalName(streamResponse, "Uri");
   resolvedStreamUri.trim();
@@ -370,7 +326,10 @@ bool cameraFetchProfileAndSnapshotUri(const CameraConfig& cfg, CameraState& st) 
     st.streamUri = resolvedStreamUri;
     Serial.printf("[%s] Stream URI: %s\n", cfg.name.c_str(), redactUrlSecrets(resolvedStreamUri).c_str());
   }
+  return true;
+}
 
+static void fetchMjpegUri(const CameraConfig& cfg, CameraState& st, std::vector<ProfileInfo>& profiles) {
   // Best-effort MJPEG URI, only if some profile is JPEG (rare).
   ProfileInfo* jpegProfile = nullptr;
   for (auto& p : profiles) {
@@ -399,6 +358,64 @@ bool cameraFetchProfileAndSnapshotUri(const CameraConfig& cfg, CameraState& st) 
                     cfg.name.c_str(), jpegProfile->name.c_str());
     }
   }
+}
+
+bool cameraFetchProfileAndSnapshotUri(const CameraConfig& cfg, CameraState& st) {
+  Serial.printf("\n[%s] Resolving snapshot URI\n", cfg.name.c_str());
+
+  if (cfg.snapshotUriOverride.length() > 0) {
+    useSnapshotOverride(cfg, st);
+    return true;
+  }
+
+  if (st.mediaServiceUrl.length() == 0) {
+    Serial.printf("[%s] No media service discovered, can't resolve snapshot URI.\n", cfg.name.c_str());
+    return false;
+  }
+
+  String action = "http://www.onvif.org/ver10/media/wsdl/GetProfiles";
+  String body = "<trt:GetProfiles/>";
+  String response = cameraSoapCall(cfg, st, st.mediaServiceUrl, "", action, body);
+
+  if (response.length() == 0 || responseHasFault(response)) {
+    Serial.printf("[%s] GetProfiles FAILED\n", cfg.name.c_str());
+    return false;
+  }
+
+  std::vector<ProfileInfo> profiles = parseProfiles(response);
+  if (profiles.empty()) {
+    Serial.printf("[%s] No profiles found in GetProfiles response.\n", cfg.name.c_str());
+    return false;
+  }
+
+  ProfileInfo chosen = chooseProfile(cfg, profiles);
+  st.profileToken = chosen.token;
+  Serial.printf("[%s] Using profile '%s' (token=%s) out of %u found\n",
+                cfg.name.c_str(), chosen.name.c_str(), chosen.token.c_str(), (unsigned)profiles.size());
+
+  String snapAction = "http://www.onvif.org/ver10/media/wsdl/GetSnapshotUri";
+  String snapBody = "<trt:GetSnapshotUri><trt:ProfileToken>" + xmlEscape(st.profileToken) +
+                     "</trt:ProfileToken></trt:GetSnapshotUri>";
+  String snapResponse = cameraSoapCall(cfg, st, st.mediaServiceUrl, "", snapAction, snapBody);
+
+  if (snapResponse.length() == 0 || responseHasFault(snapResponse)) {
+    Serial.printf("[%s] GetSnapshotUri FAILED\n", cfg.name.c_str());
+    return false;
+  }
+
+  String resolvedUri = findElementByLocalName(snapResponse, "Uri");
+  resolvedUri.trim();
+  if (resolvedUri.length() == 0) {
+    Serial.printf("[%s] Could not find snapshot URI in response.\n", cfg.name.c_str());
+    return false;
+  }
+  { CameraStateLock lock(st); st.snapshotUri = resolvedUri; }
+
+  Serial.printf("[%s] Snapshot URI: %s\n", cfg.name.c_str(), redactUrlSecrets(resolvedUri).c_str());
+  Serial.println("  ^ if this looks wrong (bad IP/port), that's the same GetSnapshotUri "
+                  "quirk seen on the XM530 - you may need a snapshotUriOverride for this camera too.");
+
+  if (fetchRtspUri(cfg, st)) fetchMjpegUri(cfg, st, profiles);
   return true;
 }
 
@@ -613,6 +630,115 @@ bool cameraSetupSequence(const CameraConfig& cfg, CameraState& st) {
   return true;
 }
 
+// Takes any stop request and refreshes the heartbeat. True if the task must exit.
+static bool takeStopRequest(CameraConfig& cfg, CameraState& st) {
+  bool stopNow;
+  {
+    CameraStateLock lock(st);
+    stopNow = st.stopRequested;
+    st.stopRequested = false;
+    st.lastTaskBeatMs = millis();
+  }
+  if (!stopNow) return false;
+  cfg.enabled = false; // only this task may write its own cfg
+  { CameraStateLock lock(st); st.subscriptionActive = false; st.taskRunning = false; }
+  Serial.printf("[%s] Stopped (disabled or deleted) - task exiting, no reboot needed.\n",
+                cfg.name.c_str());
+  logEvent(cfg.name + ": monitoring stopped live (disabled or deleted)");
+  return true;
+}
+
+static void reconnectAfterLiveEdit(const CameraConfig& cfg, CameraState& st) {
+  Serial.printf("[%s] Configuration changed - reconnecting with the new settings.\n",
+                cfg.name.c_str());
+  logEvent(cfg.name + ": configuration updated live, reconnecting");
+  // Any URL/token may be stale after an edit, so rediscover everything via
+  // the normal resubscribe path. snapshotUri is locked because /snap reads
+  // it from loop()'s task.
+  { CameraStateLock lock(st); st.subscriptionActive = false; st.snapshotUri = ""; st.snapshotDigestChallenge = "";
+    st.hardwareReadMs = 0; } // re-read the hardware page's details with the new settings
+  st.eventServiceUrl = ""; st.mediaServiceUrl = ""; st.pullPointUrl = ""; st.profileToken = "";
+  st.retryDelayMs = 0; st.retryStreak = 0; st.lastRetry = 0; // retry immediately, not after a stale backoff
+
+  if (cfg.user.length() == 0 || cfg.pass.length() == 0) {
+    // Unlike at startup, don't exit over a bad edit; stay unsubscribed
+    // until fixed.
+    Serial.printf("[%s] ERROR: no username/password after this edit - camera will NOT be monitored "
+                  "until this is fixed via the web UI.\n", cfg.name.c_str());
+    String cameraName = cfg.name;
+    sendTelegramMessage([cameraName](TelegramLang lang) { return trMissingCredentials(lang, cameraName, true); });
+  }
+}
+
+static void retrySubscriptionIfDue(const CameraConfig& cfg, CameraState& st) {
+  unsigned long dueInterval = (st.retryDelayMs > 0) ? st.retryDelayMs : RETRY_INTERVAL_MS;
+  if (millis() - st.lastRetry >= dueInterval) {
+    // +/-2s jitter so cameras that failed together don't retry in
+    // lockstep.
+    st.lastRetry = millis() - (unsigned long)random(0, 2001);
+    Serial.printf("[%s] Retrying subscription...\n", cfg.name.c_str());
+    if (st.eventServiceUrl.length() == 0) {
+      cameraSetupSequence(cfg, st); // full rediscovery if we never got services
+    } else {
+      cameraGetEventServiceCapabilities(cfg, st) && cameraCreatePullPoint(cfg, st);
+    }
+
+    // Both paths set subscriptionActive on success.
+    if (st.subscriptionActive) {
+      Serial.printf("[%s] Subscription recovered.\n", cfg.name.c_str());
+      // Read by the dashboard, so locked.
+      {
+        CameraStateLock lock(st);
+        st.totalReconnects++;
+        st.reconnectHistory[st.reconnectHistoryNext] = millis();
+        st.reconnectHistoryNext = (st.reconnectHistoryNext + 1) % EVENT_HISTORY_RING_SIZE;
+        if (st.reconnectHistoryCount < EVENT_HISTORY_RING_SIZE) st.reconnectHistoryCount++;
+      }
+    } else {
+      st.retryDelayMs = nextRetryDelayMs(cfg, st.retryDelayMs);
+      st.retryStreak++;
+      Serial.printf("[%s] Still not subscribed after %u consecutive attempt(s) - next retry in %lus.\n",
+                    cfg.name.c_str(), (unsigned)st.retryStreak, st.retryDelayMs / 1000UL);
+    }
+  }
+}
+
+// Polling, renewal and the periodic jobs of a subscribed camera.
+static void serviceSubscribedCamera(const CameraConfig& cfg, CameraState& st) {
+  if (millis() - st.lastPull >= safePollIntervalMs(cfg)) {
+    st.lastPull = millis();
+    cameraPullMessages(cfg, st);
+  }
+  if (millis() - st.lastRenew >= (SUBSCRIPTION_LIFETIME_MS - RENEW_MARGIN_MS)) {
+    cameraRenewSubscription(cfg, st);
+  }
+  if (cfg.timelapseIntervalMin > 0 &&
+      millis() - st.lastTimelapseMs >= (unsigned long)cfg.timelapseIntervalMin * 60000UL) {
+    st.lastTimelapseMs = millis();
+    triggerTimelapseCapture(cfg, st);
+  }
+  // The first profile/snapshot URI fetch failed and nothing else retries
+  // it; without this, photos stay broken while motion keeps working.
+  if (st.snapshotUri.length() == 0 &&
+      millis() - st.lastSnapshotUriRetryMs >= SNAPSHOT_URI_RETRY_INTERVAL_MS) {
+    st.lastSnapshotUriRetryMs = millis();
+    if (cameraFetchProfileAndSnapshotUri(cfg, st)) {
+      Serial.printf("[%s] Snapshot URI resolved on retry - photo alerts/timelapse now available.\n",
+                    cfg.name.c_str());
+    }
+  }
+}
+
+// Hardware > Cameras: read once the camera has answered discovery, and again
+// on request. A failed read isn't retried until then.
+static void refreshHardwareInfoIfDue(const CameraConfig& cfg, CameraState& st) {
+  if (st.mediaServiceUrl.length() == 0) return;
+  bool wantHardware;
+  { CameraStateLock lock(st); wantHardware = st.hardwareReadMs == 0 || st.hardwareRefreshRequested;
+    st.hardwareRefreshRequested = false; }
+  if (wantHardware) cameraFetchHardwareInfo(cfg, st);
+}
+
 // ============================================================
 // Per-camera task, pinned to core 1 (away from WiFi and loopTask on core 0).
 // Never returns except on a stop request or missing credentials.
@@ -658,45 +784,13 @@ void cameraTaskFn(void* pvParameters) {
 
   for (;;) {
     // Checked before a pending edit, so a stop wins.
-    bool stopNow;
-    {
-      CameraStateLock lock(st);
-      stopNow = st.stopRequested;
-      st.stopRequested = false;
-      st.lastTaskBeatMs = millis();
-    }
-    if (stopNow) {
-      cfg.enabled = false; // only this task may write its own cfg
-      { CameraStateLock lock(st); st.subscriptionActive = false; st.taskRunning = false; }
-      Serial.printf("[%s] Stopped (disabled or deleted) - task exiting, no reboot needed.\n",
-                    cfg.name.c_str());
-      logEvent(cfg.name + ": monitoring stopped live (disabled or deleted)");
+    if (takeStopRequest(cfg, st)) {
       vTaskSuspend(nullptr); // deleted by reapStoppedCameraTasks (camera_tasks.h); never resumes
       return;
     }
 
     // Live edit: applied within one loop pass.
-    if (applyPendingConfigIfAny(cfg, st)) {
-      Serial.printf("[%s] Configuration changed via dashboard - reconnecting with the new settings.\n",
-                    cfg.name.c_str());
-      logEvent(cfg.name + ": configuration updated live, reconnecting");
-      // Any URL/token may be stale after an edit, so rediscover everything via
-      // the normal resubscribe path. snapshotUri is locked because /snap reads
-      // it from loop()'s task.
-      { CameraStateLock lock(st); st.subscriptionActive = false; st.snapshotUri = ""; st.snapshotDigestChallenge = "";
-        st.hardwareReadMs = 0; } // re-read the hardware page's details with the new settings
-      st.eventServiceUrl = ""; st.mediaServiceUrl = ""; st.pullPointUrl = ""; st.profileToken = "";
-      st.retryDelayMs = 0; st.retryStreak = 0; st.lastRetry = 0; // retry immediately, not after a stale backoff
-
-      if (cfg.user.length() == 0 || cfg.pass.length() == 0) {
-        // Unlike at startup, don't exit over a bad edit; stay unsubscribed
-        // until fixed.
-        Serial.printf("[%s] ERROR: no username/password after this edit - camera will NOT be monitored "
-                      "until this is fixed via the web UI.\n", cfg.name.c_str());
-        String cameraName = cfg.name;
-        sendTelegramMessage([cameraName](TelegramLang lang) { return trMissingCredentials(lang, cameraName, true); });
-      }
-    }
+    if (applyPendingConfigIfAny(cfg, st)) reconnectAfterLiveEdit(cfg, st);
 
     if (WiFi.status() != WL_CONNECTED) {
       // loop() reconnects WiFi; afterwards this task resubscribes (the old one
@@ -714,70 +808,10 @@ void cameraTaskFn(void* pvParameters) {
     bool snapshotBusy;
     { CameraStateLock lock(st); snapshotBusy = st.snapshotInFlight; }
 
-    if (snapshotBusy) {
-    } else if (!st.subscriptionActive) {
-      unsigned long dueInterval = (st.retryDelayMs > 0) ? st.retryDelayMs : RETRY_INTERVAL_MS;
-      if (millis() - st.lastRetry >= dueInterval) {
-        // +/-2s jitter so cameras that failed together don't retry in
-        // lockstep.
-        st.lastRetry = millis() - (unsigned long)random(0, 2001);
-        Serial.printf("[%s] Retrying subscription...\n", cfg.name.c_str());
-        if (st.eventServiceUrl.length() == 0) {
-          cameraSetupSequence(cfg, st); // full rediscovery if we never got services
-        } else {
-          cameraGetEventServiceCapabilities(cfg, st) && cameraCreatePullPoint(cfg, st);
-        }
-
-        // Both paths set subscriptionActive on success.
-        if (st.subscriptionActive) {
-          Serial.printf("[%s] Subscription recovered.\n", cfg.name.c_str());
-          // Read by the dashboard, so locked.
-          {
-            CameraStateLock lock(st);
-            st.totalReconnects++;
-            st.reconnectHistory[st.reconnectHistoryNext] = millis();
-            st.reconnectHistoryNext = (st.reconnectHistoryNext + 1) % EVENT_HISTORY_RING_SIZE;
-            if (st.reconnectHistoryCount < EVENT_HISTORY_RING_SIZE) st.reconnectHistoryCount++;
-          }
-        } else {
-          st.retryDelayMs = nextRetryDelayMs(cfg, st.retryDelayMs);
-          st.retryStreak++;
-          Serial.printf("[%s] Still not subscribed after %u consecutive attempt(s) - next retry in %lus.\n",
-                        cfg.name.c_str(), (unsigned)st.retryStreak, st.retryDelayMs / 1000UL);
-        }
-      }
-    } else {
-      if (millis() - st.lastPull >= safePollIntervalMs(cfg)) {
-        st.lastPull = millis();
-        cameraPullMessages(cfg, st);
-      }
-      if (millis() - st.lastRenew >= (SUBSCRIPTION_LIFETIME_MS - RENEW_MARGIN_MS)) {
-        cameraRenewSubscription(cfg, st);
-      }
-      if (cfg.timelapseIntervalMin > 0 &&
-          millis() - st.lastTimelapseMs >= (unsigned long)cfg.timelapseIntervalMin * 60000UL) {
-        st.lastTimelapseMs = millis();
-        triggerTimelapseCapture(cfg, st);
-      }
-      // The first profile/snapshot URI fetch failed and nothing else retries
-      // it; without this, photos stay broken while motion keeps working.
-      if (st.snapshotUri.length() == 0 &&
-          millis() - st.lastSnapshotUriRetryMs >= SNAPSHOT_URI_RETRY_INTERVAL_MS) {
-        st.lastSnapshotUriRetryMs = millis();
-        if (cameraFetchProfileAndSnapshotUri(cfg, st)) {
-          Serial.printf("[%s] Snapshot URI resolved on retry - photo alerts/timelapse now available.\n",
-                        cfg.name.c_str());
-        }
-      }
-    }
-
-    // Hardware > Cameras: read once the camera has answered discovery, and again
-    // on request. A failed read isn't retried until then.
-    if (!snapshotBusy && st.mediaServiceUrl.length() > 0) {
-      bool wantHardware;
-      { CameraStateLock lock(st); wantHardware = st.hardwareReadMs == 0 || st.hardwareRefreshRequested;
-        st.hardwareRefreshRequested = false; }
-      if (wantHardware) cameraFetchHardwareInfo(cfg, st);
+    if (!snapshotBusy) {
+      if (!st.subscriptionActive) retrySubscriptionIfDue(cfg, st);
+      else serviceSubscribedCamera(cfg, st);
+      refreshHardwareInfoIfDue(cfg, st);
     }
 
     checkCameraOnlineStatus(cfg, st);

@@ -152,6 +152,95 @@ static bool parsePowerMonitorLineV1(const String& line, PowerMonitorSettings& ou
   return true;
 }
 
+static void applyCamerasSection(const std::vector<String>& sectionLines, uint16_t currentVersion, ConfigImportResult& result) {
+  result.camerasFound = true;
+  for (auto& l : sectionLines) {
+    if (l.length() == 0) continue;
+    CameraConfig c = deserializeCamera(l, currentVersion);
+    if (c.name.length() > 0) result.cameras.push_back(c);
+  }
+  if (camerasHaveDuplicateName(result.cameras)) {
+    result.camerasDuplicateName = true;
+    result.cameras.clear();
+  }
+}
+
+static void applyTelegramUsersSection(const std::vector<String>& sectionLines, uint16_t currentVersion, ConfigImportResult& result) {
+  result.usersFound = true;
+  for (auto& l : sectionLines) {
+    if (l.length() == 0) continue;
+    TelegramUser u = deserializeUser(l, currentVersion);
+    if (u.name.length() > 0) result.users.push_back(u);
+  }
+  if (usersHaveDuplicateIdentity(result.users)) {
+    result.usersDuplicateIdentity = true;
+    result.users.clear();
+  }
+}
+
+static void applyNetworkSection(const std::vector<String>& sectionLines, uint16_t currentVersion, ConfigImportResult& result) {
+  for (auto& l : sectionLines) {
+    if (l.length() == 0) continue;
+    WifiCredentials creds = deserializeNetworkConfig(l, currentVersion);
+    if (creds.hostname.length() > 0) {
+      result.network = creds;
+      result.networkFound = true;
+    }
+    break; // exactly one data line expected
+  }
+}
+
+static void applySdSettingsSection(const std::vector<String>& sectionLines, uint16_t currentVersion, ConfigImportResult& result) {
+  for (auto& l : sectionLines) {
+    if (l.length() == 0) continue;
+    SdSettings s;
+    bool parsed = false;
+    if (currentVersion == 1) parsed = parseSdSettingsLineV1(l, s);
+    else if (currentVersion == SDSETTINGS_SCHEMA_VERSION_CURRENT) parsed = parseSdSettingsLineV2(l, s);
+    if (parsed) {
+      result.sdSettings = s;
+      result.sdSettingsFound = true;
+    }
+    break; // exactly one data line expected
+  }
+}
+
+static void applyNetWatchdogSection(const std::vector<String>& sectionLines, uint16_t currentVersion, ConfigImportResult& result) {
+  for (auto& l : sectionLines) {
+    if (l.length() == 0) continue;
+    NetWatchdogSettings s;
+    if (currentVersion == 1 && parseNetWatchdogLineV1(l, s)) {
+      result.netWatchdogSettings = s;
+      result.netWatchdogFound = true;
+    }
+    break; // exactly one data line expected
+  }
+}
+
+static void applyBridgeWatchdogSection(const std::vector<String>& sectionLines, uint16_t currentVersion, ConfigImportResult& result) {
+  for (auto& l : sectionLines) {
+    if (l.length() == 0) continue;
+    BridgeWatchdogSettings s;
+    if (currentVersion == 1 && parseBridgeWatchdogLineV1(l, s)) {
+      result.bridgeWatchdogSettings = s;
+      result.bridgeWatchdogFound = true;
+    }
+    break; // exactly one data line expected
+  }
+}
+
+static void applyPowerMonitorSection(const std::vector<String>& sectionLines, uint16_t currentVersion, ConfigImportResult& result) {
+  for (auto& l : sectionLines) {
+    if (l.length() == 0) continue;
+    PowerMonitorSettings s;
+    if (currentVersion == 1 && parsePowerMonitorLineV1(l, s)) {
+      result.powerMonitorSettings = s;
+      result.powerMonitorFound = true;
+    }
+    break; // exactly one data line expected
+  }
+}
+
 ConfigImportResult parseConfigImport(const String& text) {
   ConfigImportResult result;
   std::vector<String> lines = splitLines(text);
@@ -165,80 +254,19 @@ ConfigImportResult parseConfigImport(const String& text) {
     if (!inSection) return;
 
     if (currentSection == "CAMERAS") {
-      result.camerasFound = true;
-      for (auto& l : sectionLines) {
-        if (l.length() == 0) continue;
-        CameraConfig c = deserializeCamera(l, currentVersion);
-        if (c.name.length() > 0) result.cameras.push_back(c);
-      }
-      if (camerasHaveDuplicateName(result.cameras)) {
-        result.camerasDuplicateName = true;
-        result.cameras.clear();
-      }
+      applyCamerasSection(sectionLines, currentVersion, result);
     } else if (currentSection == "TELEGRAM_USERS") {
-      result.usersFound = true;
-      for (auto& l : sectionLines) {
-        if (l.length() == 0) continue;
-        TelegramUser u = deserializeUser(l, currentVersion);
-        if (u.name.length() > 0) result.users.push_back(u);
-      }
-      if (usersHaveDuplicateIdentity(result.users)) {
-        result.usersDuplicateIdentity = true;
-        result.users.clear();
-      }
+      applyTelegramUsersSection(sectionLines, currentVersion, result);
     } else if (currentSection == "NETWORK") {
-      for (auto& l : sectionLines) {
-        if (l.length() == 0) continue;
-        WifiCredentials creds = deserializeNetworkConfig(l, currentVersion);
-        if (creds.hostname.length() > 0) {
-          result.network = creds;
-          result.networkFound = true;
-        }
-        break; // exactly one data line expected
-      }
+      applyNetworkSection(sectionLines, currentVersion, result);
     } else if (currentSection == "SDSETTINGS") {
-      for (auto& l : sectionLines) {
-        if (l.length() == 0) continue;
-        SdSettings s;
-        bool parsed = false;
-        if (currentVersion == 1) parsed = parseSdSettingsLineV1(l, s);
-        else if (currentVersion == SDSETTINGS_SCHEMA_VERSION_CURRENT) parsed = parseSdSettingsLineV2(l, s);
-        if (parsed) {
-          result.sdSettings = s;
-          result.sdSettingsFound = true;
-        }
-        break; // exactly one data line expected
-      }
+      applySdSettingsSection(sectionLines, currentVersion, result);
     } else if (currentSection == "NETWATCHDOG") {
-      for (auto& l : sectionLines) {
-        if (l.length() == 0) continue;
-        NetWatchdogSettings s;
-        if (currentVersion == 1 && parseNetWatchdogLineV1(l, s)) {
-          result.netWatchdogSettings = s;
-          result.netWatchdogFound = true;
-        }
-        break; // exactly one data line expected
-      }
+      applyNetWatchdogSection(sectionLines, currentVersion, result);
     } else if (currentSection == "BRIDGEWATCHDOG") {
-      for (auto& l : sectionLines) {
-        if (l.length() == 0) continue;
-        BridgeWatchdogSettings s;
-        if (currentVersion == 1 && parseBridgeWatchdogLineV1(l, s)) {
-          result.bridgeWatchdogSettings = s;
-          result.bridgeWatchdogFound = true;
-        }
-        break; // exactly one data line expected
-      }
+      applyBridgeWatchdogSection(sectionLines, currentVersion, result);
     } else if (currentSection == "POWERMONITOR") {
-      for (auto& l : sectionLines) {
-        if (l.length() == 0) continue;
-        PowerMonitorSettings s;
-        if (currentVersion == 1 && parsePowerMonitorLineV1(l, s)) {
-          result.powerMonitorSettings = s;
-          result.powerMonitorFound = true;
-        }
-        break; // exactly one data line expected
-      }
+      applyPowerMonitorSection(sectionLines, currentVersion, result);
     }
     sectionLines.clear();
   };
